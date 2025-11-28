@@ -1,0 +1,128 @@
+'use client';
+
+import { useEffect, useState, useCallback } from 'react';
+import { createClient } from '@/lib/supabase/client';
+import { Input } from '@/components/ui/input';
+import { Search } from 'lucide-react';
+import { cn } from '@/lib/utils';
+
+interface Chat {
+    phone_number: string;
+    last_message: string;
+    last_message_at: string;
+    unread_count: number;
+}
+
+interface ChatListProps {
+    selectedPhone: string | null;
+    onSelect: (phone: string) => void;
+}
+
+export function ChatList({ selectedPhone, onSelect }: ChatListProps) {
+    const [chats, setChats] = useState<Chat[]>([]);
+    const [search, setSearch] = useState('');
+    const [loading, setLoading] = useState(true);
+    const supabase = createClient();
+
+    const fetchChats = useCallback(async () => {
+        const { data, error } = await supabase
+            .from('whatsapp_chats')
+            .select('*')
+            .order('last_message_at', { ascending: false });
+
+        if (error) {
+            console.error('Error fetching chats:', error);
+        } else {
+            setChats(data || []);
+        }
+        setLoading(false);
+    }, [supabase]);
+
+    useEffect(() => {
+        const loadChats = async () => {
+            await fetchChats();
+        };
+        loadChats();
+
+        const channel = supabase
+            .channel('whatsapp_chats_changes')
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'whatsapp_chats' }, () => {
+                fetchChats();
+            })
+            .subscribe();
+
+        return () => {
+            supabase.removeChannel(channel);
+        };
+    }, [fetchChats, supabase]);
+
+    const filteredChats = chats.filter(chat =>
+        chat.phone_number.includes(search) ||
+        chat.last_message?.toLowerCase().includes(search.toLowerCase())
+    );
+
+    function formatTime(dateString: string) {
+        const date = new Date(dateString);
+        const now = new Date();
+        const isToday = date.toDateString() === now.toDateString();
+
+        if (isToday) {
+            return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        }
+        return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+    }
+
+    return (
+        <div className="flex flex-col h-full bg-white">
+            <div className="p-3 border-b bg-[#f0f2f5] flex-shrink-0">
+                <div className="relative">
+                    <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+                    <Input
+                        placeholder="Search or start new chat"
+                        className="pl-10 bg-white border-none focus-visible:ring-1 rounded-lg text-black placeholder:text-gray-500"
+                        value={search}
+                        onChange={(e) => setSearch(e.target.value)}
+                    />
+                </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto">
+                {loading ? (
+                    <div className="p-4 text-center text-sm text-muted-foreground">Loading chats...</div>
+                ) : filteredChats.length === 0 ? (
+                    <div className="p-4 text-center text-sm text-muted-foreground">No chats found</div>
+                ) : (
+                    <div>
+                        {filteredChats.map((chat) => (
+                            <button
+                                key={chat.phone_number}
+                                onClick={() => onSelect(chat.phone_number)}
+                                className={cn(
+                                    "flex items-center gap-3 p-3 border-b border-border/40 text-left hover:bg-[#f5f6f6] transition-colors w-full",
+                                    selectedPhone === chat.phone_number && "bg-[#f0f2f5]"
+                                )}
+                            >
+                                <div className="h-12 w-12 rounded-full bg-[#dfe5e7] flex items-center justify-center shrink-0">
+                                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-7 h-7 text-[#8696a0]">
+                                        <path fillRule="evenodd" d="M7.5 6a4.5 4.5 0 119 0 4.5 4.5 0 01-9 0zM3.751 20.105a8.25 8.25 0 0116.498 0 .75.75 0 01-.437.695A18.683 18.683 0 0112 22.5c-2.786 0-5.433-.608-7.812-1.7a.75.75 0 01-.437-.695z" clipRule="evenodd" />
+                                    </svg>
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                    <div className="flex justify-between items-baseline mb-1">
+                                        <span className="font-medium text-[15px] text-[#111b21] truncate">{chat.phone_number}</span>
+                                        <span className="text-[12px] text-[#667781] shrink-0 ml-2">
+                                            {formatTime(chat.last_message_at)}
+                                        </span>
+                                    </div>
+                                    <p className="text-[13px] text-[#667781] truncate pr-2 leading-5">
+                                        {chat.last_message}
+                                    </p>
+                                </div>
+                            </button>
+                        ))}
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+}
