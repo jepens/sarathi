@@ -1,0 +1,25 @@
+
+> sahabat-umkm@0.1.0 lint
+> eslint
+
+
+D:\bedul\apk\AI\sahabat-umkm\lib\supabase\middleware.ts
+  18:48  warning  'options' is defined but never used  @typescript-eslint/no-unused-vars
+
+D:\bedul\apk\AI\sahabat-umkm\scripts\check-ngrok-traffic.mjs
+  34:34  warning  'e' is defined but never used  @typescript-eslint/no-unused-vars
+
+D:\bedul\apk\AI\sahabat-umkm\scripts\test-rag-products.ts
+  26:21  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+D:\bedul\apk\AI\sahabat-umkm\scripts\test-system-message.ts
+  262:26  error    Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  270:14  warning  'error' is defined but never used         @typescript-eslint/no-unused-vars
+  278:14  warning  'error' is defined but never used         @typescript-eslint/no-unused-vars
+  287:18  warning  'error' is defined but never used         @typescript-eslint/no-unused-vars
+  295:18  warning  'error' is defined but never used         @typescript-eslint/no-unused-vars
+  304:14  warning  'error' is defined but never used         @typescript-eslint/no-unused-vars
+  312:14  warning  'error' is defined but never used         @typescript-eslint/no-unused-vars
+
+✖ 10 problems (2 errors, 8 warnings)
+

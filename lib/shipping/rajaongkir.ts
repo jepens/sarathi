@@ -35,6 +35,29 @@ export interface ShippingCostResponse {
     data: ShippingCost[];
 }
 
+interface DestinationResponseItem {
+    id: number;
+    label: string;
+    province_id: number;
+    province_name: string;
+    city_id: number;
+    city_name: string;
+    district_id: number;
+    district_name: string;
+    subdistrict_id: number;
+    subdistrict_name: string;
+    postal_code: string;
+}
+
+interface DestinationSearchResponse {
+    meta: {
+        status: string;
+        message: string;
+        code: number;
+    };
+    data: DestinationResponseItem[];
+}
+
 /**
  * Search for shipping destinations by city name
  */
@@ -58,10 +81,10 @@ export async function searchDestination(query: string, limit: number = 10): Prom
             return [];
         }
 
-        const result = await response.json();
+        const result = (await response.json()) as DestinationSearchResponse;
 
         if (result.meta?.status === 'success' && result.data) {
-            return result.data.map((item: any) => ({
+            return result.data.map((item) => ({
                 id: item.id,
                 label: item.label,
                 province_id: item.province_id,
@@ -126,7 +149,7 @@ export async function calculateShippingCost(
             return [];
         }
 
-        const result: ShippingCostResponse = await response.json();
+        const result = (await response.json()) as ShippingCostResponse;
 
         if (result.meta?.status === 'success' && result.data) {
             return result.data;
