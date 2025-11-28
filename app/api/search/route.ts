@@ -4,6 +4,13 @@ import { NextResponse } from 'next/server';
 
 export async function POST(request: Request) {
     try {
+        const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+
+        if (!user) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
         const { query } = await request.json();
 
         if (!query) {
@@ -15,8 +22,6 @@ export async function POST(request: Request) {
 
         // Generate embedding for the search query
         const queryEmbedding = await generateEmbedding(query);
-
-        const supabase = await createClient();
 
         // Search for similar documents using the match_documents function
         const { data: results, error } = await supabase.rpc('match_documents', {

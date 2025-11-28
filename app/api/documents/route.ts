@@ -27,6 +27,11 @@ export async function GET() {
     try {
         const supabase = await createClient();
 
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
         // Fetch all documents with their metadata
         const { data: documents, error } = await supabase
             .from('documents')
@@ -97,6 +102,11 @@ export async function DELETE(request: Request) {
         }
 
         const supabase = await createClient();
+
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
 
         // Find document chunks that match the filename in metadata
         // We check both file_name and source fields for backward compatibility

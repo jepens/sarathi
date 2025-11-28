@@ -5,8 +5,14 @@ import { NextResponse } from 'next/server'
 
 export async function POST(request: Request) {
     try {
-        const { filePath, fileType } = await request.json()
         const supabase = await createClient()
+        const { data: { user } } = await supabase.auth.getUser()
+
+        if (!user) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+        }
+
+        const { filePath, fileType } = await request.json()
 
         // 1. Download file from Supabase Storage
         const { data: fileData, error: downloadError } = await supabase.storage

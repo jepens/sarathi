@@ -13,6 +13,11 @@ export async function GET(request: Request) {
         const name = searchParams.get('name');
         const supabase = await createClient();
 
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
         let query = supabase.from('system_message').select('*');
 
         if (name) {
@@ -93,6 +98,11 @@ export async function PUT(request: Request) {
         }
 
         const supabase = await createClient();
+
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
 
         const updateData: {
             content?: string;
@@ -185,6 +195,11 @@ export async function POST(request: Request) {
         }
 
         const supabase = await createClient();
+
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
 
         const { data, error } = await supabase
             .from('system_message')

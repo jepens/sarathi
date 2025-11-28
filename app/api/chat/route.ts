@@ -1,8 +1,16 @@
 import { NextResponse } from 'next/server';
 import { generateRAGResponse, ChatMessage } from '@/lib/ai/rag';
+import { createClient } from '@/lib/supabase/server';
 
 export async function POST(request: Request) {
     try {
+        const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+
+        if (!user) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
         const { message, history } = await request.json();
 
         if (!message) {

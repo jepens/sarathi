@@ -14,11 +14,12 @@ export async function POST(request: Request) {
         // Store in database
         const supabase = await createClient();
 
-        // Check authentication (Optional for MVP - uncomment to enforce strict auth)
-        // const { data: { user }, error: authError } = await supabase.auth.getUser();
-        // if (authError || !user) {
-        //     return new NextResponse('Unauthorized', { status: 401 });
-        // }
+        // Check authentication
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) {
+            return new NextResponse('Unauthorized', { status: 401 });
+        }
+
 
         // Send WhatsApp message
         await sendWhatsAppMessage(phone_number, message);
