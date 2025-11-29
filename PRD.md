@@ -64,10 +64,11 @@
 - ✅ **Contacts Management** (2025-11-29)
   - Automatic name extraction from conversations
   - Manual contact editing via dashboard
-- ✅ **Settings Management** (2025-11-29)
-  - Centralized configuration dashboard
-  - WhatsApp, AI, and Shipping settings
-  - Secure input with password masking
+- ✅ **Settings Management** (2025-11-29) - **SIMPLIFIED**
+  - Webhook URL and Verify Token managed in database
+  - System Message managed in database
+  - **Credentials (API keys, tokens) use `.env` files** for security/simplicity
+  - Clean, tabbed UI for configuration
 - ✅ **Order Management Flow** (2025-11-29)
   - AI-driven order creation from conversations
   - Admin dashboard for order management
@@ -91,6 +92,7 @@
   - Manual admin creation
   - Disabled public signups
   - Server-side validation
+  - **Service Role Key** for webhook/background jobs
 
 
 ## 4. Phase 1 Detailed Specifications

@@ -162,7 +162,7 @@
 
 **Documentation**: `docs/CONTACTS_MANAGEMENT.md`
 
-### Settings Management (Phase 5 - Latest - 2025-11-29)
+### Settings Management (Phase 5 - Latest - 2025-11-29) - **SIMPLIFIED**
 - ✅ **Centralized Configuration Dashboard**:
   - Tabs-based interface (WhatsApp, AI, Shipping, System)
   - Clean, organized UI with status badges
@@ -170,80 +170,70 @@
   - Cancel functionality to rollback changes
   
 - ✅ **WhatsApp Configuration Tab**:
-  - Webhook URL (read-only, auto-generated)
+  - Webhook URL (editable, auto-generated default)
   - Verify Token (with random generator)
-  - Access Token 🔐 (secure input with show/hide)
-  - Phone Number ID
-  - App Secret 🔐 (optional, for signature validation)
   - Copy buttons for URL and tokens
   - Status badge (Active/Inactive)
+  - **Note**: Access Token, Phone Number ID, and App Secret now use `.env` files
 
 - ✅ **AI Configuration Tab**:
-  - OpenAI API Key 🔐 (secure input with show/hide)
-  - Status badge (Active/Inactive)
-  - Link to OpenAI Platform
+  - Displays message: "AI configuration is managed via environment variables (.env)"
+  - **Note**: OpenAI API Key now uses `.env` files
   
 - ✅ **Shipping Configuration Tab**:
-  - Komerce API Key 🔐 (secure input with show/hide)
-  - Status badge (Optional)
-  - Marked as optional feature
+  - Displays message: "Shipping configuration is managed via environment variables (.env)"
+  - **Note**: Shipping API Keys now use `.env` files
 
-- ✅ **Security Features**:
-  - SecureInput component with password masking
-  - Show/Hide toggle with eye icon
-  - Edit mode protection
-  - Database storage with RLS
-  - No fallback to env vars (database-first approach)
+- ✅ **Security Approach** (Simplified):
+  - **Database**: Webhook URL, Verify Token, System Message
+  - **Environment Variables**: All credentials (API keys, access tokens)
+  - Edit mode protection for database settings
+  - RLS protection on `app_settings` table
+  - Service Role Key for webhook/background jobs
 
 - ✅ **Database Schema**:
-  - Extended `app_settings` table with new keys:
-    - `whatsapp_access_token`
-    - `whatsapp_phone_number_id`
-    - `whatsapp_app_secret`
-    - `openai_api_key`
-    - `shipping_api_key`
-  - Migration scripts created
+  - `app_settings` table with keys:
+    - `whatsapp_webhook_url` ✅ (DB)
+    - `whatsapp_verify_token` ✅ (DB)
+    - ~~`whatsapp_access_token`~~ (Reverted to `.env`)
+    - ~~`whatsapp_phone_number_id`~~ (Reverted to `.env`)
+    - ~~`whatsapp_app_secret`~~ (Reverted to `.env`)
+    - ~~`openai_api_key`~~ (Reverted to `.env`)
+    - ~~`shipping_api_key`~~ (Reverted to `.env`)
+  - Cleanup script: `database/revert_settings_to_env.sql`
 
 - ✅ **Backend Integration**:
-  - All files updated to use database settings:
-    - `lib/whatsapp/client.ts` - WhatsApp messaging
-    - `lib/whatsapp/security.ts` - Signature verification
-    - `lib/ai/embedding.ts` - OpenAI embeddings
-    - `lib/ai/rag.ts` - RAG responses
-    - `app/api/webhook/whatsapp/route.ts` - Webhook handling
+  - Webhook settings: Database-driven
+  - Credentials: Environment variable-driven
   - Helper functions in `lib/settings/app-settings.ts`
-  - Server actions for secure updates
+  - Server actions for webhook settings only
+  - Service Role Key injection for background jobs
 
-- ✅ **Components Created**:
+- ✅ **Components**:
   - `SettingsTabs.tsx` - Tabs navigation
-  - `SecureInput.tsx` - Reusable password input
-  - `AISettings.tsx` - AI configuration
-  - `ShippingSettings.tsx` - Shipping configuration
-  - `WebhookSettings.tsx` - Enhanced WhatsApp settings
-  - `components/ui/tabs.tsx` - Radix UI tabs
-
-- ✅ **Testing Complete**:
-  - All tabs load correctly ✅
-  - Edit mode works as expected ✅
-  - Show/hide password functional ✅
-  - Cancel button works ✅
-  - Status badges display correctly ✅
-  - UI/UX fully verified ✅
+  - `WebhookSettings.tsx` - Webhook URL & Verify Token only
+  - `SystemMessageEditor.tsx` - AI persona configuration
+  - ~~`SecureInput.tsx`~~ (Removed - not needed)
+  - ~~`AISettings.tsx`~~ (Removed - uses .env)
+  - ~~`ShippingSettings.tsx`~~ (Removed - uses .env)
 
 **Benefits**:
-- No redeploy needed for credential updates
-- User-friendly admin interface
-- Secure password masking
-- Organized by category
-- Simple implementation
-- Clear status indicators
-- Easy to extend
+- **Simplified**: Only webhook config in DB, credentials in `.env`
+- **Secure**: Credentials never exposed in UI
+- **Flexible**: Easy to change webhook URL without redeploy
+- **Standard**: Follows Next.js best practices for secrets
+- **Clean**: No complex password masking UI needed
+
+**Rationale for Reversion**:
+- Credentials are rarely changed (set once during deployment)
+- Environment variables are the standard way to manage secrets
+- Reduces complexity in UI and backend
+- Webhook URL/Token change frequently (dev/prod switching)
+- System Message changes frequently (AI behavior tuning)
 
 **Documentation**: 
-- `docs/SETTINGS_IMPLEMENTATION.md` - Complete implementation guide
-- `docs/SETTINGS_MIGRATION.md` - Migration guide
-- `database/add_app_settings.sql` - Database migration
-- `database/migrate_env_to_settings.sql` - Env migration script
+- `database/revert_settings_to_env.sql` - Cleanup script
+- `.env.example` - Updated with all required variables
 
 ---
 
