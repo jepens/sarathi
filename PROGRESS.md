@@ -80,20 +80,6 @@
 7. **Document Management**: Simple delete with browser confirm dialog (no soft delete)
 8. **Chat Logic**: RAG with conversation history (last 10 messages)
 9. **Scalability**: Supabase-based queue & rate limiting (no Redis needed)
-10. **Deployment**: VPS with Nixpacks (auto-detect Next.js, zero config)
-11. **Cron Jobs**: Linux crontab for queue processing (every minute)
-12. **System Message Configuration**: Database-driven AI persona (dynamic, no code deployment needed)
-13. **Authentication**: Supabase Auth with built-in `auth.users` table (no custom admin table needed)
-14. **API Security**: Server-side authentication checks on all admin endpoints
-15. **Landing Page**: Modern, animated design with Framer Motion and consistent container layout
-16. **Admin Access**: Manual user creation via Supabase Dashboard (public signups disabled)
-17. **Real-time Chat**: Dual strategy - Supabase Realtime subscriptions + Polling fallback (30s for chat list, 10s for messages) for guaranteed updates without configuration
-18. **RAG Improvements** (2025-11-29): Increased context retrieval (5 docs, 5 products), few-shot learning in System Messages, FAQ template for consistency
-
-
----
-
----
 
 ## 📝 New Features Implemented (2025-11-29)
 
@@ -331,6 +317,145 @@
 - Walkthrough artifact with detailed before/after comparison
 - Testing guide for validating improvements
 - FAQ template ready for customization
+
+### Product & Service Catalog (Phase 3 Enhancement - Latest - 2025-11-29)
+- ✅ **Hybrid Single-Table Approach**:
+  - Extended `products` table with `type` column ('product' or 'service')
+  - Default value 'product' for backward compatibility
+  - CHECK constraint for type validation
+  - Migration script: `database/add_product_type.sql`
+
+- ✅ **Conditional Stock Management**:
+  - Products: Stock field required and tracked
+  - Services: Auto-set to 999999 (unlimited availability)
+  - UI conditionally renders stock field based on type
+
+- ✅ **Admin Interface** (`/dashboard/products`):
+  - Page renamed to "Products & Services"
+  - Type selector using RadioGroup (Product | Service)
+  - Type badges in product list (Product=blue, Service=green)
+  - Conditional stock field visibility in dialog
+  - Search works across both types
+  - Button: "Add Item" (instead of "Add Product")
+
+- ✅ **Backend API Updates**:
+  - POST `/api/products` - Accepts type field, validates enum, auto-sets stock for services
+  - PATCH `/api/products/[id]` - Supports type conversion, re-generates embeddings
+  - Embedding text includes type information for better AI search
+
+- ✅ **New UI Component**:
+  - `components/ui/radio-group.tsx` - Radix UI RadioGroup primitive
+  - Package installed: `@radix-ui/react-radio-group`
+
+**Benefits:**
+- ✅ Supports both product-based and service-based UMKMs
+- ✅ Simple implementation (single table, single dashboard)
+- ✅ Backward compatible (existing products auto-tagged)
+- ✅ Clear visual distinction with type badges
+- ✅ AI can search and recommend both types
+
+**Technical:**
+- File Created:
+  - `database/add_product_type.sql`
+  - `components/ui/radio-group.tsx`
+- File Modified:
+  - `app/api/products/route.ts` - Type validation and stock logic
+  - `app/api/products/[id]/route.ts` - Type conversion support
+  - `components/dashboard/ProductDialog.tsx` - Type selector and conditional rendering
+  - `components/dashboard/ProductList.tsx` - Type badges display
+  - `app/dashboard/products/page.tsx` - Updated labels
+- Build successful with no errors
+- Browser testing verified all functionality
+
+### Inventory Management & Payment Integration (Phase 5 - Latest - 2025-11-29)
+- ✅ **Order Confirmation Flow**:
+  - AI must confirm order details before creating
+  - Shows summary: items, quantities, price, delivery address
+  - Waits for customer confirmation keywords (ya/oke/setuju/konfirmasi)
+  - Updated system message in `lib/ai/rag.ts`
+
+- ✅ **Stock Validation** (Before Order Creation):
+  - Validates stock availability before creating order
+  - Checks product inventory via `product_id`
+  - Rejects order if stock insufficient
+  - Skips validation for services (unlimited)
+  - Returns clear error message to AI/customer
+
+- ✅ **Stock Management Module** (`lib/inventory/stock.ts`):
+  - `validateStock()` - Pre-order stock checking
+  - `reduceStock()` - Automatic reduction on payment
+  - `returnStock()` - Automatic return on cancellation
+  - Type-aware: products only, skips services
+
+- ✅ **Order Status Integration**:
+  - Status 'pending' → 'paid': Auto reduce stock + send notification
+  - Status 'paid'/'shipped' → 'cancelled': Auto return stock
+  - Server action pattern for client→server stock operations
+  - File: `app/dashboard/orders/actions.ts`
+
+- ✅ **WhatsApp Notifications** (`lib/notifications/notifications.ts`):
+  - Payment confirmation message (order details, items, total)
+  - Cancellation notification
+  - Auto-sent on status changes
+  - Formatted in Indonesian
+
+- ✅ **Product ID Resolution**:
+  - AI includes `product_id` in order items
+  - More reliable than name-based matching
+  - Backward compatible (name still required)
+  - Updated `OrderItem` interface
+
+- ✅ **Payment Gateway Preparation**:
+  - Architecture ready for Xendit webhook integration
+  - Stock operations triggered by payment status
+  - Future: Webhook endpoint `/api/webhook/xendit`
+
+**Benefits:**
+- ✅ Prevents overselling dengan stock validation
+- ✅ Automated inventory management tanpa manual input
+- ✅ Customer confirmation reduces order errors
+- ✅ Professional: WhatsApp notifications setelah payment
+- ✅ Scalable: Ready untuk webhook automation
+
+**Technical:**
+- File Created:
+  - `lib/inventory/stock.ts` - Stock management functions
+  - `lib/notifications/notifications.ts` - WhatsApp payment notifications
+  - `app/dashboard/orders/actions.ts` - Server action for order updates
+- File Modified:
+  - `lib/ai/rag.ts` - Order confirmation + stock validation + product_id
+  - `app/dashboard/orders/components/OrderList.tsx` - Server action integration
+- Database Migration:
+  - `database/add_product_type.sql` - Already executed ✅
+- Build successful with no errors
+
+**Flow:**
+```
+1. Customer: "Pesan Kopi 2 pcs ke Jakarta"
+2. AI: Shows summary → "Apakah benar?"
+3. Customer: "Ya"
+4. System: Validate stock → Create order (pending)
+5. Admin: Set status → 'paid'
+6. System: Reduce stock + Send WhatsApp notification
+7. Customer: Receives confirmation message
+```
+
+**Future Phase - Xendit Webhook:**
+- Webhook receives payment notification from Xendit
+- Auto-update order status to 'paid'
+- Auto-trigger stock reduction
+- Auto-send WhatsApp notification
+- Fully automated end-to-end
+
+**Known Limitations (To Be Fixed):**
+- ⚠️ **AI Stock Inquiry**: Saat customer bertanya "Apakah ada produk lain?" atau query umum tentang ketersediaan produk, AI kadang tidak menampilkan daftar produk yang ada. Issue terkait dengan:
+  - Semantic matching threshold terlalu tinggi (0.5)
+  - Query umum tidak match dengan embedding produk spesifik
+  - System message perlu instruksi lebih eksplisit
+- **Temporary Workaround**: Customer harus tanya dengan nama produk spesifik atau admin update System Message dengan instruksi lebih detail
+- **Planned Fix**: Lower match_threshold atau implement fallback untuk query "list all products"
+
+
 
 
 ## 📝 New Features Implemented (2025-11-28)
@@ -766,20 +891,6 @@ const aiResponse = await generateRAGResponse(job.message_text, history, job.phon
 - ✅ AI now maintains context across multiple messages
 - ✅ No repeated questions
 - ✅ Conversation flows naturally
-
----
-
-## 📊 Updated Technical Decisions
-
-16. **Order Management**: AI-driven with `[CREATE_ORDER]` tag system, Service Role for database access
-17. **Chat Memory**: Last 10 messages from database, simple query-based approach (no caching)
-18. **Order Storage**: JSONB for flexible item structure, supports both products and services
-
----
-
-**Overall Phase 5 Progress: 70%** (7 out of 9 features complete) ✅
-
-**Next Priority Features**:
 - Payment Integration (Midtrans/Xendit)
 - Analytics Dashboard (Order stats, revenue tracking)
 

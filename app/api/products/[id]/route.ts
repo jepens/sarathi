@@ -40,27 +40,42 @@ export async function PATCH(
 
     const { id } = await params;
     const body = await request.json();
-    const { name, description, price, stock } = body;
+    const { name, description, price, stock, type } = body;
+
+    // Validate type if provided
+    if (type && type !== 'product' && type !== 'service') {
+        return NextResponse.json({ error: 'Invalid type. Must be "product" or "service"' }, { status: 400 });
+    }
 
     const updates: Record<string, unknown> = { ...body };
 
-    if (name || description || price) {
-        const { data: currentProduct, error: fetchError } = await supabase
-            .from('products')
-            .select('*')
-            .eq('id', id)
-            .single();
+    // Fetch current product data
+    const { data: currentProduct, error: fetchError } = await supabase
+        .from('products')
+        .select('*')
+        .eq('id', id)
+        .single();
 
-        if (fetchError) {
-            return NextResponse.json({ error: fetchError.message }, { status: 500 });
-        }
+    if (fetchError) {
+        return NextResponse.json({ error: fetchError.message }, { status: 500 });
+    }
 
-        const newName = name || currentProduct.name;
-        const newDesc = description || currentProduct.description;
-        const newPrice = price || currentProduct.price;
-        const newStock = stock !== undefined ? stock : currentProduct.stock;
+    // Determine final values
+    const newName = name || currentProduct.name;
+    const newDesc = description || currentProduct.description;
+    const newPrice = price !== undefined ? price : currentProduct.price;
+    const newType = type || currentProduct.type || 'product';
 
-        const textToEmbed = `Product: ${newName}\nDescription: ${newDesc}\nPrice: ${newPrice}\nStock: ${newStock}`;
+    // Auto-adjust stock when converting to service
+    let newStock = stock !== undefined ? stock : currentProduct.stock;
+    if (newType === 'service') {
+        newStock = 999999; // Unlimited availability for services
+    }
+    updates.stock = newStock;
+
+    // Regenerate embedding if key fields changed
+    if (name || description || price || type) {
+        const textToEmbed = `Type: ${newType}\nName: ${newName}\nDescription: ${newDesc}\nPrice: ${newPrice}${newType === 'product' ? `\nStock: ${newStock}` : ''}`;
 
         try {
             const embedding = await generateEmbedding(textToEmbed);
@@ -84,3 +99,4 @@ export async function PATCH(
 
     return NextResponse.json(data);
 }
+

@@ -31,14 +31,22 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json();
-    const { name, description, price, stock } = body;
+    const { name, description, price, stock, type = 'product' } = body;
 
     if (!name || !description || !price) {
         return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
     }
 
-    // Generate embedding for the product
-    const textToEmbed = `Product: ${name}\nDescription: ${description}\nPrice: ${price}\nStock: ${stock}`;
+    // Validate type
+    if (type !== 'product' && type !== 'service') {
+        return NextResponse.json({ error: 'Invalid type. Must be "product" or "service"' }, { status: 400 });
+    }
+
+    // Auto-set stock for services (unlimited availability)
+    const finalStock = type === 'service' ? 999999 : (stock || 0);
+
+    // Generate embedding for the product/service
+    const textToEmbed = `Type: ${type}\nName: ${name}\nDescription: ${description}\nPrice: ${price}${type === 'product' ? `\nStock: ${finalStock}` : ''}`;
     let embedding = null;
 
     try {
@@ -54,7 +62,8 @@ export async function POST(request: Request) {
             name,
             description,
             price,
-            stock: stock || 0,
+            stock: finalStock,
+            type,
             embedding
         })
         .select()
@@ -66,3 +75,4 @@ export async function POST(request: Request) {
 
     return NextResponse.json(data);
 }
+

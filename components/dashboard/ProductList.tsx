@@ -20,6 +20,7 @@ interface Product {
     description: string;
     price: number;
     stock: number;
+    type: 'product' | 'service';
     created_at: string;
 }
 
@@ -76,7 +77,7 @@ export function ProductList({ products, onProductDeleted, onEditProduct }: Produ
             <div className="rounded-lg border border-white/10 bg-black/20 p-8 text-center">
                 <Package className="mx-auto h-12 w-12 text-muted-foreground/50" />
                 <p className="mt-4 text-sm text-muted-foreground">
-                    No products found. Add your first product to get started.
+                    No items found. Add your first product or service to get started.
                 </p>
             </div>
         );
@@ -95,15 +96,27 @@ export function ProductList({ products, onProductDeleted, onEditProduct }: Produ
                                 <Package className="h-5 w-5 text-primary" />
                             </div>
                             <div>
-                                <p className="font-medium text-sm">{product.name}</p>
+                                <div className="flex items-center gap-2 mb-1">
+                                    <p className="font-medium text-sm">{product.name}</p>
+                                    <Badge
+                                        variant={product.type === 'product' ? 'default' : 'secondary'}
+                                        className="h-4 px-1.5 text-[10px]"
+                                    >
+                                        {product.type === 'product' ? 'Product' : 'Service'}
+                                    </Badge>
+                                </div>
                                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
                                     <span>{formatPrice(product.price)}</span>
-                                    <span>•</span>
-                                    <span className={product.stock < 10 ? "text-red-400 font-medium" : ""}>
-                                        Stock: {product.stock}
-                                    </span>
-                                    {product.stock === 0 && (
-                                        <Badge variant="destructive" className="h-4 px-1 text-[10px]">Out of Stock</Badge>
+                                    {product.type === 'product' && (
+                                        <>
+                                            <span>•</span>
+                                            <span className={product.stock < 10 ? "text-red-400 font-medium" : ""}>
+                                                Stock: {product.stock}
+                                            </span>
+                                            {product.stock === 0 && (
+                                                <Badge variant="destructive" className="h-4 px-1 text-[10px]">Out of Stock</Badge>
+                                            )}
+                                        </>
                                     )}
                                 </div>
                             </div>

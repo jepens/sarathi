@@ -31,10 +31,12 @@ interface Product {
     description: string;
     price: number;
     stock: number;
+    type?: 'product' | 'service';
     similarity: number;
 }
 
 export interface OrderItem {
+    product_id?: string; // For stock management - matches products.id
     name: string;
     qty: number;
     price: number;
@@ -131,9 +133,20 @@ async function calculateMultipleCouriers() {
 
 /**
  * Helper to create order in database
+ * Now includes stock validation before order creation
  */
 export async function createOrder(phoneNumber: string, orderData: OrderData) {
     try {
+        // STEP 1: Validate stock before creating order
+        const { validateStock } = await import('@/lib/inventory/stock');
+        const stockValidation = await validateStock(orderData.items);
+
+        if (!stockValidation.valid) {
+            console.error('Stock validation failed:', stockValidation.message);
+            throw new Error(stockValidation.message || 'Stok tidak mencukupi');
+        }
+
+        // STEP 2: Proceed with order creation if stock is valid
         // Use Service Role if available to bypass RLS
         let supabase;
         const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -197,6 +210,8 @@ export async function createOrder(phoneNumber: string, orderData: OrderData) {
         console.log(`Order created for ${phoneNumber}`);
     } catch (error) {
         console.error('Error creating order:', error);
+        // Re-throw error so AI can inform customer
+        throw error;
     }
 }
 
@@ -275,9 +290,12 @@ export async function generateRAGResponse(message: string, history: ChatMessage[
         if (typedProducts && typedProducts.length > 0) {
             contextText += "--- PRODUK YANG TERSEDIA ---\n";
             contextText += typedProducts.map(p =>
-                `Nama: ${p.name}\nDeskripsi: ${p.description}\nHarga: Rp ${p.price.toLocaleString('id-ID')}\nStok: ${p.stock}`
+                `ID: ${p.id}\nNama: ${p.name}\nDeskripsi: ${p.description}\nHarga: Rp ${p.price.toLocaleString('id-ID')}\nStok: ${p.stock}\nTipe: ${p.type || 'product'}`
             ).join('\n\n');
             contextText += "\n\n";
+
+            // Debug: Log product IDs being sent to AI
+            console.log('🔍 Products sent to AI:', typedProducts.map(p => ({ id: p.id, name: p.name })));
         }
 
         if (typedDocuments && typedDocuments.length > 0) {
@@ -303,13 +321,33 @@ export async function generateRAGResponse(message: string, history: ChatMessage[
         // Prepare the system prompt with context
         const orderInstruction = `
 CRITICAL INSTRUCTION FOR ORDER CREATION:
-If the user provides order details (product name/service type AND quantity AND address/location), you MUST generate a special tag at the beginning of your response.
-Format: [CREATE_ORDER: {"type": "product"|"service", "items": [{"name": "...", "qty": 1, "price": 0}], "total_amount": 0, "delivery_info": "..."}]
+
+ORDER CONFIRMATION PROCESS (IMPORTANT):
+1. When customer provides order details (product/service + quantity + address), DO NOT create order immediately.
+2. First, show a clear order summary in this format:
+
+   📦 Detail Pesanan:
+   • [Product/Service Name] - [qty] pcs/unit @ Rp [price]
+   • Pengiriman: [delivery address]
+   • Total: Rp [total_amount]
+
+3. Then ask: "Apakah detail pesanan sudah benar? Ketik 'Ya' atau 'Konfirmasi' untuk melanjutkan."
+
+4. ONLY create order (using [CREATE_ORDER] tag) AFTER customer explicitly confirms.
+   Confirmation keywords: ya, oke, setuju, konfirmasi, lanjutkan, benar, betul
+
+5. If customer says: tidak, batal, salah, ubah → ask what needs to be changed and start over.
+
+6. Be patient. Wait for explicit confirmation. Do NOT create order prematurely.
+
+ORDER TAG FORMAT (use only AFTER confirmation):
+[CREATE_ORDER: {"type": "product"|"service", "items": [{"product_id": "uuid", "name": "...", "qty": 1, "price": 0}], "total_amount": 0, "delivery_info": "..."}]
 
 Rules:
 1. "items" MUST be an array.
-2. Estimate price if unknown (e.g. 0).
-3. Do NOT ask for confirmation if details are clear. JUST CREATE THE ORDER.
+2. Include "product_id" if you can match the product from available products list.
+3. Always include "name" even if you have product_id.
+4. Estimate price if unknown (can be 0).
 `;
 
         const systemPrompt = `${baseSystemMessage}
@@ -379,13 +417,29 @@ ${contextText}
 
                     // Validate order data
                     if (orderData && Array.isArray(orderData.items) && orderData.items.length > 0) {
-                        if (phoneNumber) {
-                            await createOrder(phoneNumber, orderData);
-                        }
+                        // Debug: Log order data from AI
+                        console.log('📦 Order data from AI:', JSON.stringify(orderData, null, 2));
 
-                        // Remove the tag from the response shown to user
-                        // We remove everything from tagStart to tagEnd + 1
-                        responseMessage = responseMessage.substring(0, tagStart) + responseMessage.substring(tagEnd + 1);
+                        if (phoneNumber) {
+                            try {
+                                await createOrder(phoneNumber, orderData);
+                                // Success - remove the tag from response
+                                responseMessage = responseMessage.substring(0, tagStart) + responseMessage.substring(tagEnd + 1);
+                            } catch (orderError) {
+                                // Order creation failed (e.g., insufficient stock)
+                                console.error('Order creation failed:', orderError);
+
+                                // Remove the CREATE_ORDER tag
+                                responseMessage = responseMessage.substring(0, tagStart) + responseMessage.substring(tagEnd + 1);
+
+                                // Append error message to response
+                                const errorMsg = orderError instanceof Error ? orderError.message : 'Gagal membuat pesanan';
+                                responseMessage += `\n\n❌ Maaf, pesanan tidak dapat diproses. ${errorMsg}`;
+                            }
+                        } else {
+                            // No phone number - just remove tag
+                            responseMessage = responseMessage.substring(0, tagStart) + responseMessage.substring(tagEnd + 1);
+                        }
                     } else {
                         console.error('Invalid order data structure:', orderData);
                     }

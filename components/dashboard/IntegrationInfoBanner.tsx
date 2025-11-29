@@ -9,11 +9,11 @@ export function IntegrationInfoBanner({ type }: IntegrationInfoBannerProps) {
     const content = {
         knowledge: {
             title: 'AI Integration',
-            description: 'Dokumen yang Anda upload akan digunakan oleh AI untuk menjawab pertanyaan pelanggan via WhatsApp. AI akan menggabungkan informasi dari dokumen ini dengan data Products.',
+            description: 'Dokumen yang Anda upload akan digunakan oleh AI untuk menjawab pertanyaan pelanggan via WhatsApp. AI akan menggabungkan informasi dari dokumen ini dengan data Products & Services.',
         },
         products: {
             title: 'AI Integration',
-            description: 'Produk yang Anda tambahkan akan otomatis tersedia untuk AI. Pelanggan dapat bertanya tentang produk, harga, dan stok via WhatsApp.',
+            description: 'Produk dan layanan yang Anda tambahkan akan otomatis tersedia untuk AI. Pelanggan dapat bertanya tentang produk, harga, stok, dan layanan via WhatsApp.',
         },
     };
 

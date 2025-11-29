@@ -93,17 +93,30 @@ export function OrderList() {
     }, [fetchOrders, supabase]);
 
     const updateStatus = async (id: string, newStatus: string) => {
-        const { error } = await supabase
-            .from('orders')
-            .update({ status: newStatus })
-            .eq('id', id);
+        try {
+            // Find the order to get current data
+            const currentOrder = orders.find(o => o.id === id);
+            if (!currentOrder) {
+                toast.error('Order tidak ditemukan');
+                return;
+            }
 
-        if (error) {
-            toast.error('Gagal mengupdate status');
-        } else {
-            toast.success(`Status diubah menjadi ${newStatus}`);
+            // Call server action to handle status update + stock operations
+            const { updateOrderStatus } = await import('../actions');
+            const result = await updateOrderStatus(id, newStatus, currentOrder);
+
+            if (result.success) {
+                toast.success(result.message);
+            } else {
+                toast.error(result.message);
+            }
+
+            // Refresh orders list
             const data = await fetchOrders();
             setOrders(data);
+        } catch (error) {
+            console.error('Error updating status:', error);
+            toast.error('Terjadi kesalahan saat mengupdate status');
         }
     };
 

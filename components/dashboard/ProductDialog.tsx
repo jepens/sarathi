@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { toast } from 'sonner';
 import { Loader2 } from 'lucide-react';
 
@@ -15,7 +16,9 @@ interface Product {
     description: string;
     price: number;
     stock: number;
+    type: 'product' | 'service';
 }
+
 
 interface ProductDialogProps {
     open: boolean;
@@ -31,6 +34,7 @@ export function ProductDialog({ open, onOpenChange, productToEdit, onSuccess }: 
         description: '',
         price: 0,
         stock: 0,
+        type: 'product',
     });
 
     useEffect(() => {
@@ -42,6 +46,7 @@ export function ProductDialog({ open, onOpenChange, productToEdit, onSuccess }: 
                 description: '',
                 price: 0,
                 stock: 0,
+                type: 'product',
             });
         }
     }, [productToEdit, open]);
@@ -85,6 +90,30 @@ export function ProductDialog({ open, onOpenChange, productToEdit, onSuccess }: 
                 </DialogHeader>
                 <form onSubmit={handleSubmit} className="space-y-4">
                     <div className="space-y-2">
+                        <Label>Type</Label>
+                        <RadioGroup
+                            value={formData.type}
+                            onValueChange={(value: 'product' | 'service') => {
+                                setFormData({
+                                    ...formData,
+                                    type: value,
+                                    // Auto-set stock for services
+                                    stock: value === 'service' ? 999999 : formData.stock
+                                });
+                            }}
+                            className="flex gap-4"
+                        >
+                            <div className="flex items-center space-x-2">
+                                <RadioGroupItem value="product" id="type-product" />
+                                <Label htmlFor="type-product" className="font-normal cursor-pointer">Product</Label>
+                            </div>
+                            <div className="flex items-center space-x-2">
+                                <RadioGroupItem value="service" id="type-service" />
+                                <Label htmlFor="type-service" className="font-normal cursor-pointer">Service</Label>
+                            </div>
+                        </RadioGroup>
+                    </div>
+                    <div className="space-y-2">
                         <Label htmlFor="name">Name</Label>
                         <Input
                             id="name"
@@ -113,16 +142,18 @@ export function ProductDialog({ open, onOpenChange, productToEdit, onSuccess }: 
                                 required
                             />
                         </div>
-                        <div className="space-y-2">
-                            <Label htmlFor="stock">Stock</Label>
-                            <Input
-                                id="stock"
-                                type="number"
-                                value={formData.stock}
-                                onChange={(e) => setFormData({ ...formData, stock: Number(e.target.value) })}
-                                required
-                            />
-                        </div>
+                        {formData.type === 'product' && (
+                            <div className="space-y-2">
+                                <Label htmlFor="stock">Stock</Label>
+                                <Input
+                                    id="stock"
+                                    type="number"
+                                    value={formData.stock}
+                                    onChange={(e) => setFormData({ ...formData, stock: Number(e.target.value) })}
+                                    required
+                                />
+                            </div>
+                        )}
                     </div>
                     <DialogFooter>
                         <Button type="submit" disabled={loading}>

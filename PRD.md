@@ -38,10 +38,13 @@
 - Real-time AI responses
 - Shipping cost integration
 
-### Phase 3: Product Management ✅
-- Product CRUD operations
-- Inventory tracking
-- Product embeddings
+### Phase 3: Product & Service Management ✅
+- **Products & Services Catalog** (Hybrid approach)
+- Product/Service CRUD operations
+- Type selector (Product vs Service)
+- Inventory tracking for products
+- Unlimited availability for services
+- Product & service embeddings
 
 ### Phase 4: WhatsApp Integration ✅
 - WhatsApp Business API integration
@@ -82,6 +85,17 @@
   - Few-shot learning with conversation examples
   - Increased context retrieval (5 docs, 5 products)
   - FAQ template for Knowledge Base
+- ✅ **Inventory Management & Payment Integration** (2025-11-29)
+  - Order confirmation flow (AI must confirm before creating)
+  - Stock validation before order creation
+  - Automatic stock reduction on payment (status → 'paid')
+  - Automatic stock return on cancellation
+  - WhatsApp payment notifications
+  - Product ID tracking for accurate inventory
+  - Type-aware: products tracked, services unlimited
+  - Error handling with user-friendly messages
+  - Preparation for Xendit webhook integration
+
 - ✅ **Authentication System**
   - Admin login with Supabase Auth
   - Route protection via middleware
@@ -552,6 +566,250 @@ const aiResponse = await generateRAGResponse(
 * **Inputs:** Minimal borders, focus rings should be subtle glows, not harsh outlines.
 * **Cards:** Use "Bento Grid" style layout—cards with thin borders and distinct content hierarchy.
 * **Feedback:** Use `sonner` for toast notifications (fits Linear style perfectly).
+
+## 5.11. Phase 3 - Product & Service Catalog (2025-11-29)
+
+### Overview
+Extends the product management system to support both physical products and services, allowing UMKMs to manage their entire catalog regardless of business type.
+
+### Key Features
+
+#### 5.11.1. Hybrid Approach
+- **Single Table**: Uses existing `products` table with added `type` column
+- **Type Options**: 'product' (physical goods) or 'service' (intangible offerings)
+- **Backward Compatible**: Existing products automatically tagged as type='product'
+- **Simple Implementation**: No code duplication, single dashboard interface
+
+#### 5.11.2. Database Schema
+- **Table**: `products` (extended)
+- **New Column**: 
+  - `type` (TEXT): Enum constraint ('product' or 'service'), default='product'
+- **Migration**: `database/add_product_type.sql`
+
+#### 5.11.3. Stock Handling
+- **Products**: Stock field required, tracks inventory
+- **Services**: Stock auto-set to 999999 (represents unlimited availability)
+- **UI**: Stock field visible only for products, hidden for services
+
+#### 5.11.4. Admin Interface
+- **Location**: `/dashboard/products` (renamed "Products & Services")
+- **Features**:
+  - Type selector using radio buttons (Product/Service)
+  - Conditional stock field rendering
+  - Type badges in product list (Product=blue, Service=green)
+  - Search across both products and services
+  - "Add Item" button (instead of "Add Product")
+
+#### 5.11.5. AI Integration
+- **Embeddings**: Include type information in embedding text
+- **Search**: AI can search and recommend both products and services
+- **Orders**: Order creation supports both types (via existing order_type field)
+
+### Technical Implementation
+
+**Database Migration**:
+```sql
+ALTER TABLE products 
+ADD COLUMN type TEXT DEFAULT 'product' 
+CHECK (type IN ('product', 'service'));
+```
+
+**API Endpoints** (Updated):
+- `POST /api/products` - Accepts `type` field, validates enum, auto-sets stock
+- `PATCH /api/products/{id}` - Supports type conversion, adjusts stock automatically
+
+**Components** (Updated):
+- `ProductDialog.tsx` - RadioGroup for type selection, conditional stock field
+- `ProductList.tsx` - Type badges, conditional stock display
+- `page.tsx` - Updated labels: "Products & Services"
+
+**New Component**:
+- `components/ui/radio-group.tsx` - Radix UI RadioGroup primitive
+
+### Benefits
+1. ✅ **Flexibility**: Supports product-based AND service-based UMKMs
+2. ✅ **Backward Compatible**: No breaking changes to existing data
+3. ✅ **User-Friendly**: Clear visual distinction with type badges
+4. ✅ **AI-Ready**: Embeddings differentiate types for better search
+
+-----
+
+## 5.12. Inventory Management & Payment Integration (2025-11-29)
+
+### Overview
+Automated inventory management system that validates stock before orders, reduces stock on payment, returns stock on cancellation, and sends WhatsApp notifications. Designed for simplicity while maintaining accuracy and preventing overselling.
+
+### Key Features
+
+#### 5.12.1. Order Confirmation Flow
+**Purpose**: Prevent order errors by requiring explicit customer confirmation
+
+**Implementation**:
+- AI shows order summary before creating
+- Displays: items, quantities, prices, delivery address, total
+- Waits for confirmation keywords: "ya", "oke", "setuju", "konfirmasi"
+- Only creates order after customer confirms
+- Allows customer to cancel or modify before creation
+
+**Location**: `lib/ai/rag.ts` - System message prompt
+
+#### 5.12.2. Stock Validation
+**Purpose**: Prevent overselling by checking stock before order creation
+
+**Implementation**:
+- Validates stock availability for all products in order
+- Uses `product_id` for accurate matching
+- Skips validation for services (unlimited availability)
+- Rejects order if any product has insufficient stock
+- Returns clear error message to customer
+
+**Module**: `lib/inventory/stock.ts` - `validateStock()` function
+
+**Flow**:
+```
+1. Customer confirms order
+2. System validates stock for each item
+3. If sufficient → Create order (status='pending')
+4. If insufficient → Reject with error message
+```
+
+#### 5.12.3. Stock Reduction (On Payment)
+**Purpose**: Automatically update inventory when payment is confirmed
+
+**Implementation**:
+- Triggers when order status changes to 'paid'
+- Reduces stock for products only (skips services)
+- Uses atomic database operations
+- Logs all stock changes
+
+**Module**: `lib/inventory/stock.ts` - `reduceStock()` function
+
+**Trigger**: `app/dashboard/orders/actions.ts` - `updateOrderStatus()`
+
+#### 5.12.4. Stock Return (On Cancellation)
+**Purpose**: Return stock to inventory when orders are cancelled
+
+**Implementation**:
+- Triggers when order status changes to 'cancelled'
+- Only returns stock if order was previously 'paid' or 'shipped'
+- No action for unpaid orders (stock never reduced)
+- Uses product_id for accurate tracking
+
+**Module**: `lib/inventory/stock.ts` - `returnStock()` function
+
+#### 5.12.5. WhatsApp Notifications
+**Purpose**: Keep customers informed of order status changes
+
+**Implementation**:
+- Payment confirmation: Sent when status → 'paid'
+- Cancellation notice: Sent when status → 'cancelled'
+- Formatted messages include order details, items, total
+- Uses Indonesian language
+
+**Module**: `lib/notifications/notifications.ts`
+
+**Functions**:
+- `sendPaymentNotification()`
+- `sendCancellationNotification()`
+
+#### 5.12.6. Product ID Tracking
+**Purpose**: Ensure accurate inventory management with proper product matching
+
+**Implementation**:
+- AI includes `product_id` (UUID) in order items
+- Product context includes ID for AI reference
+- More reliable than name-based matching
+- Backward compatible (name still required)
+
+**Updated Interface**:
+```typescript
+interface OrderItem {
+  product_id?: string;  // UUID from products table
+  name: string;         // Product name
+  qty: number;
+  price: number;
+  note?: string;
+}
+```
+
+### Technical Implementation
+
+**Database Schema**: No changes needed (existing schema sufficient)
+
+**New Modules**:
+1. `lib/inventory/stock.ts` - Stock management functions
+2. `lib/notifications/notifications.ts` - WhatsApp notifications
+3. `app/dashboard/orders/actions.ts` - Server action for order updates
+
+**Updated Files**:
+1. `lib/ai/rag.ts` - Order confirmation + stock validation + product_id
+2. `app/dashboard/orders/components/OrderList.tsx` - Server action integration
+
+**Flow Diagram**:
+```
+Customer Order Request
+        ↓
+AI Shows Summary & Asks Confirmation
+        ↓
+Customer: "Ya" → System Validates Stock
+        ↓
+  Sufficient?
+   ↓         ↓
+  YES       NO
+   ↓         ↓
+Create     Reject
+Order      + Error
+(pending)  Message
+   ↓
+Admin Sets Status → 'paid'
+   ↓
+Reduce Stock + Send WhatsApp Notification
+   ↓
+Customer Receives Confirmation
+```
+
+### Error Handling
+
+**Stock Validation Errors**:
+- Clear message: "Stok tidak mencukupi untuk: [product] (diminta: X, tersedia: Y)"
+- Order not created
+- Customer can adjust quantity or choose different product
+
+**Order Creation Errors**:
+- Caught and displayed to customer
+- Tag removed from AI response
+- Error appended to message
+
+### Future Enhancements
+
+**Xendit Webhook Integration** (Planned):
+- Endpoint: `/api/webhook/xendit`
+- Receives payment notifications from Xendit
+- Auto-updates order status to 'paid'
+- Triggers stock reduction automatically
+- Sends WhatsApp notification
+- Fully automated payment flow
+
+### Known Limitations
+
+⚠️ **AI Stock Inquiry**: General queries about product availability may not display all products due to semantic matching threshold (0.5). 
+
+**Workaround**: 
+- Customers should ask for specific product names
+- Admin can update System Message with explicit instructions
+
+**Planned Fix**: 
+- Lower match_threshold to 0.3
+- Implement fallback for "list all products" queries
+
+### Benefits
+1. ✅ **Prevents Overselling**: Stock validation ensures accurate inventory
+2. ✅ **Automated**: No manual stock updates needed
+3. ✅ **Customer Confidence**: Order confirmation reduces errors
+4. ✅ **Professional**: WhatsApp notifications improve UX
+5. ✅ **Scalable**: Ready for payment gateway automation
+6. ✅ **Type-Aware**: Products tracked, services unlimited
+7. ✅ **Error Resilient**: Clear error messages and proper handling
 
 -----
 

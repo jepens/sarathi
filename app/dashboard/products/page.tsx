@@ -15,6 +15,7 @@ interface Product {
     description: string;
     price: number;
     stock: number;
+    type: 'product' | 'service';
     created_at: string;
 }
 
@@ -65,14 +66,14 @@ export default function ProductsPage() {
         <div className="space-y-8">
             <div className="flex items-center justify-between">
                 <div className="space-y-1">
-                    <h1 className="text-3xl font-bold tracking-tight">Products</h1>
+                    <h1 className="text-3xl font-bold tracking-tight">Products & Services</h1>
                     <p className="text-muted-foreground">
-                        Manage your product inventory and pricing.
+                        Manage your product inventory and service offerings.
                     </p>
                 </div>
                 <Button onClick={handleAddProduct}>
                     <Plus className="mr-2 h-4 w-4" />
-                    Add Product
+                    Add Item
                 </Button>
             </div>
 
@@ -82,7 +83,7 @@ export default function ProductsPage() {
             <div className="grid gap-4 md:grid-cols-3">
                 <Card>
                     <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                        <CardTitle className="text-sm font-medium">Total Products</CardTitle>
+                        <CardTitle className="text-sm font-medium">Total Items</CardTitle>
                         <Package className="h-4 w-4 text-muted-foreground" />
                     </CardHeader>
                     <CardContent>
@@ -99,7 +100,7 @@ export default function ProductsPage() {
                 <div className="relative">
                     <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
                     <Input
-                        placeholder="Search products..."
+                        placeholder="Search catalog..."
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
                         className="pl-8 max-w-sm bg-black/20 border-white/10"
