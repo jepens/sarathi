@@ -110,11 +110,10 @@ export async function DELETE(request: Request) {
 
         // Find document chunks that match the filename in metadata
         // We check both file_name and source fields for backward compatibility
-        // We wrap fileName in double quotes to handle special characters like commas
         const { data: matchingDocs, error: fetchError } = await supabase
             .from('documents')
             .select('id')
-            .or(`metadata->>file_name.eq."${fileName}",metadata->>source.eq."${fileName}"`);
+            .or(`metadata->>file_name.eq.${fileName},metadata->>source.eq.${fileName}`);
 
         if (fetchError) {
             console.error('Error fetching documents:', fetchError);
