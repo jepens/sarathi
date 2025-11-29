@@ -2,7 +2,7 @@
 
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
-import { BookOpen, Home, MessageSquare, Settings, ShoppingBag, MessageCircle, LogOut, Users, ClipboardList } from "lucide-react"
+import { BookOpen, Home, MessageSquare, Settings, ShoppingBag, MessageCircle, LogOut, Users, ClipboardList, Bug } from "lucide-react"
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
 import { createClient } from "@/lib/supabase/client"
@@ -76,6 +76,14 @@ export function Sidebar({ className }: SidebarProps) {
                                 Settings
                             </Button>
                         </Link>
+                        {process.env.NODE_ENV === 'development' && (
+                            <Link href="/dashboard/debug-chats">
+                                <Button variant={pathname === "/dashboard/debug-chats" ? "secondary" : "ghost"} className="w-full justify-start text-orange-600 dark:text-orange-400">
+                                    <Bug className="mr-2 h-4 w-4" />
+                                    Debug Chats
+                                </Button>
+                            </Link>
+                        )}
                     </div>
                 </div>
             </div>

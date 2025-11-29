@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '@/lib/supabase/server';
 import { verifyWhatsAppSignature } from '@/lib/whatsapp/security';
 import { checkRateLimit } from '@/lib/whatsapp/rate-limiter-db';
 import { enqueueMessage, processQueue } from '@/lib/whatsapp/queue-db';
@@ -44,12 +43,17 @@ export async function POST(request: Request) {
 
         const body = JSON.parse(rawBody);
 
+        // Enhanced logging for debugging
+        whatsappLogger.info('Webhook received:', JSON.stringify(body, null, 2));
+
         // Check if this is an event from a WhatsApp Business Account
         if (body.object === 'whatsapp_business_account') {
             if (body.entry && body.entry[0].changes && body.entry[0].changes[0].value.messages && body.entry[0].changes[0].value.messages[0]) {
                 const message = body.entry[0].changes[0].value.messages[0];
                 const from = message.from; // Sender's phone number
                 const messageType = message.type;
+
+                whatsappLogger.info(`Message details - From: ${from}, Type: ${messageType}`);
 
                 if (messageType === 'text') {
                     const messageBody = message.text.body;
@@ -72,9 +76,14 @@ export async function POST(request: Request) {
                     processQueue().catch(err => whatsappLogger.error('Error processing queue immediately', err));
 
                     // Store in chat history (Async - don't await to speed up webhook response)
+                    // Use direct Supabase client (not server client) because webhook has no cookies
                     (async () => {
                         try {
-                            const supabase = await createClient();
+                            const { createClient: createSupabaseClient } = await import('@supabase/supabase-js');
+                            const supabase = createSupabaseClient(
+                                process.env.NEXT_PUBLIC_SUPABASE_URL!,
+                                process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+                            );
 
                             // Update chat summary
                             const { error: chatError } = await supabase
@@ -86,7 +95,11 @@ export async function POST(request: Request) {
                                     updated_at: new Date().toISOString()
                                 }, { onConflict: 'phone_number' });
 
-                            if (chatError) whatsappLogger.error('Error updating chat summary', chatError);
+                            if (chatError) {
+                                whatsappLogger.error('Error updating chat summary', chatError);
+                            } else {
+                                whatsappLogger.info(`Chat summary updated for ${from}`);
+                            }
 
                             // Insert message
                             const { error: msgError } = await supabase
@@ -97,7 +110,11 @@ export async function POST(request: Request) {
                                     content: messageBody
                                 });
 
-                            if (msgError) whatsappLogger.error('Error inserting message', msgError);
+                            if (msgError) {
+                                whatsappLogger.error('Error inserting message', msgError);
+                            } else {
+                                whatsappLogger.info(`User message inserted for ${from}`);
+                            }
 
                         } catch (err) {
                             whatsappLogger.error('Error storing chat history', err);
