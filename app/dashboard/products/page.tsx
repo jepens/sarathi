@@ -6,6 +6,7 @@ import { ProductDialog } from '@/components/dashboard/ProductDialog';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { IntegrationInfoBanner } from '@/components/dashboard/IntegrationInfoBanner';
 import { Package, Plus, Loader2, Search } from 'lucide-react';
 
 interface Product {
@@ -74,6 +75,9 @@ export default function ProductsPage() {
                     Add Product
                 </Button>
             </div>
+
+            {/* AI Integration Info */}
+            <IntegrationInfoBanner type="products" />
 
             <div className="grid gap-4 md:grid-cols-3">
                 <Card>

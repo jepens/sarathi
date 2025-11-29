@@ -6,6 +6,8 @@ import {
     isWhatsAppConfigured,
 } from "@/lib/settings/app-settings";
 import { SystemMessageEditor } from "./components/SystemMessageEditor";
+import { TestChatPreview } from "./components/TestChatPreview";
+import { KnowledgeCoverageSummary } from "./components/KnowledgeCoverageSummary";
 
 export default async function SettingsPage() {
     // Fetch all settings
@@ -21,6 +23,9 @@ export default async function SettingsPage() {
                 <h2 className="text-3xl font-bold tracking-tight">Settings</h2>
                 <p className="text-muted-foreground">Manage your application settings.</p>
             </div>
+
+            {/* Knowledge Coverage Summary */}
+            <KnowledgeCoverageSummary />
 
             <SettingsTabs
                 whatsappTab={
@@ -42,6 +47,9 @@ export default async function SettingsPage() {
                 }
                 systemMessageTab={<SystemMessageEditor />}
             />
+
+            {/* Test Chat Preview */}
+            <TestChatPreview />
         </div>
     );
 }

@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { UploadZone } from '@/components/knowledge/upload-zone';
 import { DocumentList } from '@/components/dashboard/DocumentList';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { IntegrationInfoBanner } from '@/components/dashboard/IntegrationInfoBanner';
 import { FileText, Database, Zap, Loader2 } from 'lucide-react';
 
 interface DocumentStats {
@@ -62,6 +63,9 @@ export default function KnowledgePage() {
                     </p>
                 </div>
             </div>
+
+            {/* AI Integration Info */}
+            <IntegrationInfoBanner type="knowledge" />
 
             <div className="grid gap-4 md:grid-cols-3">
                 <Card>

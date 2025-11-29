@@ -77,6 +77,11 @@
   - Conversation history retrieval
   - Context-aware AI responses
   - No repeated questions
+- ✅ **RAG System Improvements** (2025-11-29)
+  - Improved chunking strategy (1500 chars, 300 overlap)
+  - Few-shot learning with conversation examples
+  - Increased context retrieval (5 docs, 5 products)
+  - FAQ template for Knowledge Base
 - ✅ **Authentication System**
   - Admin login with Supabase Auth
   - Route protection via middleware
@@ -524,17 +529,6 @@ const aiResponse = await generateRAGResponse(
 5. **Reliable**: All history permanently stored in database
 
 ### Performance
-- Query time: < 50ms (indexed)
-- Memory usage: Minimal (10 messages × ~200 chars avg)
-- No caching required: Direct database query
-
-
------
-
-## 6. UI/UX Guidelines: The "Linear" Aesthetic
-
-
-The application must follow a high-quality, product-focused design language similar to Linear.app.
 
 ### 6.1. Visual Style Principles
 

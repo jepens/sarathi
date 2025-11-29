@@ -244,22 +244,22 @@ export async function generateRAGResponse(message: string, history: ChatMessage[
 
         const supabase = await createClient();
 
-        // 2a. Retrieve relevant documents
+        // 2a. Retrieve relevant documents (increased from 3 to 5 for better context)
         const { data: documents, error: docError } = await supabase.rpc('match_documents', {
             query_embedding: queryEmbedding,
             match_threshold: 0.5,
-            match_count: 3,
+            match_count: 5,
         });
 
         if (docError) {
             console.error('Error searching documents:', docError);
         }
 
-        // 2b. Retrieve relevant products
+        // 2b. Retrieve relevant products (increased from 3 to 5 for better coverage)
         const { data: products, error: prodError } = await supabase.rpc('match_products', {
             query_embedding: queryEmbedding,
             match_threshold: 0.5,
-            match_count: 3,
+            match_count: 5,
         });
 
         if (prodError) {
