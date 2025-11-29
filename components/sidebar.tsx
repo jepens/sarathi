@@ -2,7 +2,7 @@
 
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
-import { BookOpen, Home, MessageSquare, Settings, ShoppingBag, MessageCircle, LogOut, Users } from "lucide-react"
+import { BookOpen, Home, MessageSquare, Settings, ShoppingBag, MessageCircle, LogOut, Users, ClipboardList } from "lucide-react"
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
 import { createClient } from "@/lib/supabase/client"
@@ -44,6 +44,12 @@ export function Sidebar({ className }: SidebarProps) {
                             <Button variant={pathname === "/dashboard/products" ? "secondary" : "ghost"} className="w-full justify-start">
                                 <ShoppingBag className="mr-2 h-4 w-4" />
                                 Products
+                            </Button>
+                        </Link>
+                        <Link href="/dashboard/orders">
+                            <Button variant={pathname === "/dashboard/orders" ? "secondary" : "ghost"} className="w-full justify-start">
+                                <ClipboardList className="mr-2 h-4 w-4" />
+                                Orders
                             </Button>
                         </Link>
                         <Link href="/dashboard/chat">

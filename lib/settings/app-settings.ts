@@ -136,7 +136,7 @@ export async function getWhatsAppAppSecret(): Promise<string | null> {
  * Get OpenAI API Key from settings
  */
 export async function getOpenAIApiKey(): Promise<string> {
-    const apiKey = await getAppSetting('openai_api_key');
+    const apiKey = await getAppSetting('openai_api_key') || process.env.OPENAI_API_KEY;
     if (!apiKey) {
         throw new Error('OpenAI API Key not configured. Please set it in /dashboard/settings');
     }
@@ -168,3 +168,5 @@ export async function isAIConfigured(): Promise<boolean> {
     const apiKey = await getAppSetting('openai_api_key');
     return !!apiKey;
 }
+
+

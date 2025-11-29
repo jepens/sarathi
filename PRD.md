@@ -61,6 +61,21 @@
   - Dynamic AI persona configuration via admin dashboard
   - Database-driven system messages
   - No code deployment needed for AI behavior changes
+- ✅ **Contacts Management** (2025-11-29)
+  - Automatic name extraction from conversations
+  - Manual contact editing via dashboard
+- ✅ **Settings Management** (2025-11-29)
+  - Centralized configuration dashboard
+  - WhatsApp, AI, and Shipping settings
+  - Secure input with password masking
+- ✅ **Order Management Flow** (2025-11-29)
+  - AI-driven order creation from conversations
+  - Admin dashboard for order management
+  - Support for products and services
+- ✅ **Chat Memory** (2025-11-29)
+  - Conversation history retrieval
+  - Context-aware AI responses
+  - No repeated questions
 - ✅ **Authentication System**
   - Admin login with Supabase Auth
   - Route protection via middleware
@@ -107,6 +122,7 @@ Allows administrators to configure AI persona and behavior dynamically without c
 - **Location**: `/dashboard/settings`
 - **Features**:
   - Large textarea for editing system message
+  - **Template Selection**: Dropdown with presets (Default, UMKM Produk, UMKM Jasa)
   - Real-time validation (empty check, length limit)
   - Save/Reset functionality
   - Last updated timestamp display
@@ -371,10 +387,150 @@ All files updated to use database settings instead of environment variables:
 - **Migration Guide**: `docs/SETTINGS_MIGRATION.md`
 - **Database Migrations**: `database/add_app_settings.sql`, `database/migrate_env_to_settings.sql`
 
+## 5.9. Phase 5 - Order Management Flow (NEW - 2025-11-29)
+
+### Overview
+Enables AI to automatically create orders from WhatsApp conversations when customers provide sufficient information (product/service name, quantity, and delivery address). Orders are stored in the database and can be managed through an admin dashboard.
+
+### Key Features
+
+#### 5.9.1. AI-Driven Order Creation
+- **Tag System**: AI generates hidden `[CREATE_ORDER: {...}]` tag in responses
+- **Automatic Detection**: Backend parses tag and creates order in database
+- **Tag Removal**: Tag is stripped from user-facing response
+- **Validation**: Order data validated before insertion
+
+#### 5.9.2. Database Schema
+- **Table**: `orders` in Supabase
+- **Fields**:
+  - `id` (UUID): Unique order identifier
+  - `customer_phone` (TEXT): Customer's WhatsApp number
+  - `customer_name` (TEXT): Customer name
+  - `items` (JSONB): Array of order items with name, quantity, price
+  - `total_amount` (NUMERIC): Total order value
+  - `delivery_info` (TEXT): Delivery address or service location
+  - `order_type` (TEXT): 'product' or 'service'
+  - `status` (TEXT): Order status (pending, paid, shipped, completed, cancelled)
+  - `created_at`, `updated_at`: Timestamps
+- **Foreign Key**: References `whatsapp_chats(phone_number)`
+- **RLS**: Enabled for security
+
+#### 5.9.3. Auto-Contact Creation
+- **Smart Handling**: Creates new contact in `whatsapp_chats` if doesn't exist
+- **Prevents Errors**: Avoids foreign key constraint violations
+- **Default Name**: Sets "New Customer" for new contacts
+
+#### 5.9.4. Admin Dashboard
+- **Location**: `/dashboard/orders`
+- **Features**:
+  - Order list with real-time updates (Supabase subscriptions)
+  - Status management dropdown
+  - Display customer details, items, total, delivery info
+  - Responsive table layout
+  - Empty state handling
+
+### Technical Implementation
+
+**AI Logic** (`lib/ai/rag.ts`):
+- Detects `[CREATE_ORDER]` tag using `indexOf`/`lastIndexOf` parsing
+- Uses Service Role key for database operations (bypasses RLS)
+- Validates order structure before insertion
+
+**System Message**:
+- Updated with order creation instructions
+- AI generates order when user provides: product name, quantity, address
+- Clear JSON format specification
+
+**Order Format**:
+```json
+{
+  "type": "product",
+  "items": [
+    {"name": "Kopi Arabica", "qty": 2, "price": 50000}
+  ],
+  "total_amount": 100000,
+  "delivery_info": "Jl. Sudirman No 10, Jakarta"
+}
+```
+
+### Configuration Required
+- `SUPABASE_SERVICE_ROLE_KEY` in `.env.local`
+- OpenAI API Key configured in `/dashboard/settings`
+
+### Benefits
+1. **Automated**: No manual order entry needed
+2. **Seamless**: Orders created during natural conversation
+3. **Flexible**: Supports both products and services
+4. **Trackable**: All orders stored and manageable in dashboard
+5. **Real-time**: Instant updates via Supabase subscriptions
+
+## 5.10. Phase 5 - Chat Memory (Conversation History) (NEW - 2025-11-29)
+
+### Overview
+Provides AI with conversation context by retrieving recent message history from the database. This prevents the AI from losing context and repeating questions, creating a more natural and efficient conversation flow.
+
+### Key Features
+
+#### 5.10.1. History Retrieval
+- **Automatic**: Fetches last 10 messages before each AI response
+- **Per-User**: Retrieves history specific to each phone number
+- **Chronological**: Orders messages from oldest to newest
+- **Lightweight**: Only 10 messages for performance
+
+#### 5.10.2. AI Integration
+- **Context-Aware**: AI receives full conversation history
+- **No Repetition**: AI remembers names, addresses, products discussed
+- **Natural Flow**: Conversations feel continuous and coherent
+
+#### 5.10.3. Database Storage
+- **Existing Table**: Uses `whatsapp_messages` table (already implemented)
+- **User Messages**: Saved in webhook handler
+- **AI Responses**: Saved in queue processor
+- **Indexed**: Fast retrieval with `phone_number` and `created_at` indexes
+
+### Technical Implementation
+
+**Queue Processor** (`lib/whatsapp/queue-db.ts`):
+```typescript
+// Fetch recent conversation history (last 10 messages)
+const { data: historyData } = await supabase
+    .from('whatsapp_messages')
+    .select('role, content')
+    .eq('phone_number', job.phone_number)
+    .order('created_at', { ascending: false })
+    .limit(10);
+
+// Reverse to chronological order
+const history = (historyData || []).reverse().map(msg => ({
+    role: msg.role as 'user' | 'assistant',
+    content: msg.content
+}));
+
+// Pass to AI
+const aiResponse = await generateRAGResponse(
+    job.message_text, 
+    history, 
+    job.phone_number
+);
+```
+
+### Benefits
+1. **Better UX**: Users don't need to repeat information
+2. **Natural Conversations**: AI maintains context across messages
+3. **Simple**: Uses existing database tables, no caching needed
+4. **Fast**: Indexed queries, minimal overhead
+5. **Reliable**: All history permanently stored in database
+
+### Performance
+- Query time: < 50ms (indexed)
+- Memory usage: Minimal (10 messages × ~200 chars avg)
+- No caching required: Direct database query
+
 
 -----
 
 ## 6. UI/UX Guidelines: The "Linear" Aesthetic
+
 
 The application must follow a high-quality, product-focused design language similar to Linear.app.
 

@@ -93,8 +93,22 @@ async function processJob(job: QueueJob): Promise<void> {
 
         whatsappLogger.info(`Processing job ${job.id} from ${job.phone_number}`);
 
-        // Generate AI response
-        const aiResponse = await generateRAGResponse(job.message_text, [], job.phone_number);
+        // Fetch recent conversation history (last 10 messages)
+        const { data: historyData } = await supabase
+            .from('whatsapp_messages')
+            .select('role, content')
+            .eq('phone_number', job.phone_number)
+            .order('created_at', { ascending: false })
+            .limit(10);
+
+        // Reverse to get chronological order (oldest first)
+        const history = (historyData || []).reverse().map(msg => ({
+            role: msg.role as 'user' | 'assistant',
+            content: msg.content
+        }));
+
+        // Generate AI response with conversation history
+        const aiResponse = await generateRAGResponse(job.message_text, history, job.phone_number);
 
         // Send WhatsApp message
         await sendWhatsAppMessage(job.phone_number, aiResponse.message);

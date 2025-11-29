@@ -47,6 +47,7 @@ Table: `system_message`
 
 4. **UI Layer** (`app/dashboard/settings/components/SystemMessageEditor.tsx`)
    - Admin interface for editing system messages
+   - **Template Selection**: Dropdown with presets (Default, UMKM Produk, UMKM Jasa)
    - Real-time preview of changes
    - Save/Reset functionality
 
@@ -143,7 +144,20 @@ The default system message for Sahabat UMKM includes:
 5. **Keep Context Separate**: System message defines behavior, context provides data
 6. **Version History**: Keep backup of working system messages before major changes
 
-## Example System Messages
+## Template Presets
+ 
+ The editor includes 3 built-in templates to quickly configure the AI for different business types:
+ 
+ 1. **Default**: General purpose assistant. Handles products, documents, and shipping.
+ 2. **UMKM Produk**: Specialized for selling physical goods.
+    - Focuses on product details, stock, and shipping.
+    - Sales flow: Greeting → Needs → Product Info → Shipping → Closing.
+ 3. **UMKM Jasa**: Specialized for service-based businesses.
+    - Focuses on service details, packages, and consultation.
+    - Sales flow: Greeting → Needs → Service Info → Packages → Closing.
+    - Removes shipping logic.
+ 
+ ## Example System Messages
 
 ### Sales-Focused
 

@@ -23,9 +23,10 @@
 3. ✅ **System Message Configuration** (Dynamic AI Persona) - **COMPLETE**
 4. ✅ **Contacts Management** (Automatic name extraction + Manual editing) - **COMPLETE**
 5. ✅ **Settings Management** (Centralized config dashboard with tabs) - **COMPLETE**
-6. **Order Management** flow (Basic conversational flow added)
-7. **Payment Integration**
-8. **Analytics Dashboard**
+6. ✅ **Order Management** (AI-driven order creation with dashboard) - **COMPLETE** (2025-11-29)
+7. ✅ **Chat Memory** (Conversation history for context-aware AI) - **COMPLETE** (2025-11-29)
+8. **Payment Integration** (Planned)
+9. **Analytics Dashboard** (Planned)
 
 ---
 
@@ -331,16 +332,6 @@
     - Simple intent detection for shipping queries
     - Automatic city name extraction
     - Real-time shipping cost display in chat responses
-- ✅ **System Message Configuration** (2025-11-29)
-  - ✅ Database schema (`database/system_message_schema.sql`)
-  - ✅ API endpoints (`/api/system-message`)
-  - ✅ Helper function (`lib/ai/system-message.ts`)
-  - ✅ Admin UI (`app/dashboard/settings`)
-  - ✅ Integration with RAG engine (dynamic system messages)
-  - ✅ Default system message for Sahabat UMKM
-  - ✅ Documentation (`docs/SYSTEM_MESSAGE.md`)
-
-- ✅ **Webhook Settings Configuration** (2025-11-29)
   - ✅ Database schema (`database/app_settings_schema.sql`)
   - ✅ Helper functions (`lib/settings/app-settings.ts`)
   - ✅ Admin UI (`app/dashboard/settings/components/WebhookSettings.tsx`)
@@ -563,3 +554,159 @@ AI: "Ongkir ke Bandung:
 - ✅ **RLS Protection**: Only authenticated admins can read/write settings.
 
 **Next Steps**: Deploy to VPS and configure real domain. 🚀
+
+---
+
+### ✅ Phase 5 - ORDER MANAGEMENT FLOW COMPLETE
+
+**Status**: AI-driven order creation fully implemented
+**Implementation Date**: 2025-11-29
+
+**Features Implemented**:
+
+1. **Database Schema**
+   - ✅ `orders` table created with flexible JSONB structure
+   - ✅ Support for both product sales and service bookings
+   - ✅ Fields: `customer_phone`, `customer_name`, `items`, `total_amount`, `delivery_info`, `order_type`, `status`
+   - ✅ Foreign key to `whatsapp_chats` for customer reference
+   - ✅ RLS enabled for security
+
+2. **AI Logic** (`lib/ai/rag.ts`)
+   - ✅ Detects `[CREATE_ORDER]` tag in AI responses
+   - ✅ Robust JSON parsing using `indexOf`/`lastIndexOf` method
+   - ✅ Auto-creates new contacts if phone number doesn't exist
+   - ✅ Service Role integration for database operations (bypasses RLS)
+   - ✅ Validates order data structure before insertion
+   - ✅ Removes tag from user-facing response
+
+3. **System Message Integration**
+   - ✅ Updated default system message with order creation instructions
+   - ✅ AI automatically generates order when user provides: product/service name, quantity, and address
+   - ✅ Clear format specification for AI to follow
+
+4. **Admin Dashboard** (`/dashboard/orders`)
+   - ✅ Order list with real-time updates (Supabase subscriptions)
+   - ✅ Status management dropdown (Pending, Paid, Shipped, Completed, Cancelled)
+   - ✅ Display order details: customer, items, total, delivery info
+   - ✅ Responsive table layout with proper styling
+   - ✅ Empty state handling
+
+5. **Auto-Contact Creation**
+   - ✅ Creates new entry in `whatsapp_chats` if customer doesn't exist
+   - ✅ Prevents foreign key constraint violations
+   - ✅ Sets default name as "New Customer"
+
+**Configuration Required**:
+- ⚠️ `SUPABASE_SERVICE_ROLE_KEY` must be set in `.env.local`
+- ⚠️ OpenAI API Key must be configured in `/dashboard/settings`
+
+**How It Works**:
+1. User sends message: "Saya mau pesan Kopi 2 pcs ke Jakarta"
+2. AI detects order intent and generates: `[CREATE_ORDER: {...}]`
+3. Backend parses tag and creates order in database
+4. Tag is removed from response shown to user
+5. Order appears in `/dashboard/orders` dashboard
+
+**Example AI Response**:
+```
+[CREATE_ORDER: {"type": "product", "items": [{"name": "Kopi", "qty": 2, "price": 0}], "total_amount": 0, "delivery_info": "Jakarta"}]
+
+Baik kak! Pesanan 2 pcs Kopi sudah saya catat. Untuk melanjutkan, saya butuh informasi lengkap...
+```
+
+**Code Quality**:
+- ✅ No TypeScript errors
+- ✅ No lint warnings
+- ✅ Clean separation of concerns
+- ✅ Proper error handling
+
+---
+
+### ✅ Phase 5 - CHAT MEMORY (CONVERSATION HISTORY) COMPLETE
+
+**Status**: Context-aware AI with conversation memory
+**Implementation Date**: 2025-11-29
+
+**Problem Solved**:
+AI was losing context and repeating questions because it didn't have access to previous messages in the conversation.
+
+**Solution Implemented**:
+
+1. **History Retrieval** (`lib/whatsapp/queue-db.ts`)
+   - ✅ Fetches last 10 messages from `whatsapp_messages` table
+   - ✅ Retrieves messages for specific phone number
+   - ✅ Orders chronologically (oldest first)
+   - ✅ Maps to correct format: `{role: 'user'|'assistant', content: string}`
+
+2. **AI Integration**
+   - ✅ History passed to `generateRAGResponse()` function
+   - ✅ OpenAI receives full conversation context
+   - ✅ AI can reference previous messages
+   - ✅ No repeated questions about name, address, etc.
+
+3. **Database Storage** (Already Existed)
+   - ✅ `whatsapp_messages` table stores all messages
+   - ✅ User messages saved in webhook handler
+   - ✅ AI responses saved in queue processor
+   - ✅ Indexed for fast retrieval
+
+**Implementation Details**:
+```typescript
+// Fetch recent conversation history (last 10 messages)
+const { data: historyData } = await supabase
+    .from('whatsapp_messages')
+    .select('role, content')
+    .eq('phone_number', job.phone_number)
+    .order('created_at', { ascending: false })
+    .limit(10);
+
+// Reverse to get chronological order (oldest first)
+const history = (historyData || []).reverse().map(msg => ({
+    role: msg.role as 'user' | 'assistant',
+    content: msg.content
+}));
+
+// Generate AI response with conversation history
+const aiResponse = await generateRAGResponse(job.message_text, history, job.phone_number);
+```
+
+**Benefits**:
+- ✅ AI remembers customer name
+- ✅ AI remembers delivery address
+- ✅ AI remembers products discussed
+- ✅ Natural, flowing conversations
+- ✅ No need to repeat information
+- ✅ Better user experience
+
+**Performance**:
+- Query is fast (indexed on `phone_number` and `created_at`)
+- Only fetches 10 most recent messages (lightweight)
+- No caching needed - direct database query
+
+**Code Quality**:
+- ✅ Simple implementation (< 15 lines of code)
+- ✅ No complex state management
+- ✅ Uses existing database tables
+- ✅ No additional dependencies
+
+**Testing**:
+- ✅ AI now maintains context across multiple messages
+- ✅ No repeated questions
+- ✅ Conversation flows naturally
+
+---
+
+## 📊 Updated Technical Decisions
+
+16. **Order Management**: AI-driven with `[CREATE_ORDER]` tag system, Service Role for database access
+17. **Chat Memory**: Last 10 messages from database, simple query-based approach (no caching)
+18. **Order Storage**: JSONB for flexible item structure, supports both products and services
+
+---
+
+**Overall Phase 5 Progress: 70%** (7 out of 9 features complete) ✅
+
+**Next Priority Features**:
+- Payment Integration (Midtrans/Xendit)
+- Analytics Dashboard (Order stats, revenue tracking)
+
