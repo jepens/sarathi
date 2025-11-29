@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { getWhatsAppAppSecret } from '@/lib/settings/app-settings';
 
 /**
  * Verify WhatsApp webhook signature
@@ -6,15 +7,15 @@ import crypto from 'crypto';
  * @param signature - X-Hub-Signature-256 header value
  * @returns boolean - true if signature is valid
  */
-export function verifyWhatsAppSignature(payload: string, signature: string | null): boolean {
+export async function verifyWhatsAppSignature(payload: string, signature: string | null): Promise<boolean> {
     if (!signature) {
         console.warn('No signature provided');
         return false;
     }
 
-    const appSecret = process.env.WHATSAPP_APP_SECRET;
+    const appSecret = await getWhatsAppAppSecret();
     if (!appSecret) {
-        console.warn('WHATSAPP_APP_SECRET not configured');
+        console.warn('WHATSAPP_APP_SECRET not configured in settings');
         return false; // In development, you might want to return true
     }
 

@@ -94,7 +94,7 @@ async function processJob(job: QueueJob): Promise<void> {
         whatsappLogger.info(`Processing job ${job.id} from ${job.phone_number}`);
 
         // Generate AI response
-        const aiResponse = await generateRAGResponse(job.message_text);
+        const aiResponse = await generateRAGResponse(job.message_text, [], job.phone_number);
 
         // Send WhatsApp message
         await sendWhatsAppMessage(job.phone_number, aiResponse.message);

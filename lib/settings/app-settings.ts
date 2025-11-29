@@ -102,3 +102,69 @@ export async function checkVerifyToken(inputToken: string): Promise<boolean> {
     const storedToken = await getVerifyToken();
     return storedToken === inputToken;
 }
+
+/**
+ * Get WhatsApp Access Token from settings
+ */
+export async function getWhatsAppAccessToken(): Promise<string> {
+    const token = await getAppSetting('whatsapp_access_token');
+    if (!token) {
+        throw new Error('WhatsApp Access Token not configured. Please set it in /dashboard/settings');
+    }
+    return token;
+}
+
+/**
+ * Get WhatsApp Phone Number ID from settings
+ */
+export async function getWhatsAppPhoneNumberId(): Promise<string> {
+    const phoneId = await getAppSetting('whatsapp_phone_number_id');
+    if (!phoneId) {
+        throw new Error('WhatsApp Phone Number ID not configured. Please set it in /dashboard/settings');
+    }
+    return phoneId;
+}
+
+/**
+ * Get WhatsApp App Secret from settings
+ */
+export async function getWhatsAppAppSecret(): Promise<string | null> {
+    return await getAppSetting('whatsapp_app_secret');
+}
+
+/**
+ * Get OpenAI API Key from settings
+ */
+export async function getOpenAIApiKey(): Promise<string> {
+    const apiKey = await getAppSetting('openai_api_key');
+    if (!apiKey) {
+        throw new Error('OpenAI API Key not configured. Please set it in /dashboard/settings');
+    }
+    return apiKey;
+}
+
+/**
+ * Get Shipping API Key from settings
+ */
+export async function getShippingApiKey(): Promise<string | null> {
+    return await getAppSetting('shipping_api_key');
+}
+
+/**
+ * Check if WhatsApp is fully configured
+ */
+export async function isWhatsAppConfigured(): Promise<boolean> {
+    const accessToken = await getAppSetting('whatsapp_access_token');
+    const phoneNumberId = await getAppSetting('whatsapp_phone_number_id');
+    const verifyToken = await getAppSetting('whatsapp_verify_token');
+
+    return !!(accessToken && phoneNumberId && verifyToken);
+}
+
+/**
+ * Check if AI is configured
+ */
+export async function isAIConfigured(): Promise<boolean> {
+    const apiKey = await getAppSetting('openai_api_key');
+    return !!apiKey;
+}

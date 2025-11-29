@@ -23,10 +23,22 @@ export function ChatWindow({ phoneNumber }: ChatWindowProps) {
     const [messages, setMessages] = useState<Message[]>([]);
     const [newMessage, setNewMessage] = useState('');
     const [sending, setSending] = useState(false);
+    const [contactName, setContactName] = useState<string | null>(null);
     const scrollRef = useRef<HTMLDivElement>(null);
     const supabase = createClient();
 
     const fetchMessages = useCallback(async () => {
+        // Fetch contact info
+        const { data: contactData } = await supabase
+            .from('whatsapp_chats')
+            .select('contact_name')
+            .eq('phone_number', phoneNumber)
+            .single();
+
+        if (contactData) {
+            setContactName(contactData.contact_name);
+        }
+
         const { data, error } = await supabase
             .from('whatsapp_messages')
             .select('*')
@@ -44,6 +56,7 @@ export function ChatWindow({ phoneNumber }: ChatWindowProps) {
     useEffect(() => {
         fetchMessages();
 
+        // Subscribe to real-time changes
         const channel = supabase
             .channel(`whatsapp_messages:${phoneNumber}`)
             .on('postgres_changes', {
@@ -56,8 +69,14 @@ export function ChatWindow({ phoneNumber }: ChatWindowProps) {
             })
             .subscribe();
 
+        // Polling fallback - refresh every 10 seconds
+        const pollInterval = setInterval(() => {
+            fetchMessages();
+        }, 10000);
+
         return () => {
             supabase.removeChannel(channel);
+            clearInterval(pollInterval);
         };
     }, [phoneNumber, fetchMessages, supabase]);
 
@@ -110,7 +129,7 @@ export function ChatWindow({ phoneNumber }: ChatWindowProps) {
                         </svg>
                     </div>
                     <div>
-                        <h2 className="font-semibold text-sm text-[#111b21]">{phoneNumber}</h2>
+                        <h2 className="font-semibold text-sm text-[#111b21]">{contactName || phoneNumber}</h2>
                         <p className="text-xs text-[#667781]">Online</p>
                     </div>
                 </div>

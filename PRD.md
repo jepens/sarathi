@@ -47,10 +47,12 @@
 - WhatsApp Business API integration
 - Message queue and rate limiting
 - **WhatsApp Chat Monitoring Dashboard**
-  - Real-time conversation monitoring
+  - Real-time conversation monitoring (Supabase Realtime + Polling fallback)
   - Admin manual reply capability
   - Chat history storage
   - WhatsApp Web-like interface
+  - Auto-refresh: Chat list (30s), Messages (10s)
+  - No manual refresh required
 
 ### Phase 5: Advanced Features & AI Configuration ✅ (Partial)
 - ✅ **Product Search Integration** (RAG-based)
@@ -59,22 +61,6 @@
   - Dynamic AI persona configuration via admin dashboard
   - Database-driven system messages
   - No code deployment needed for AI behavior changes
-  - Multiple persona profiles support
-  - A/B testing ready
-- ✅ **Webhook Settings Configuration** (2025-11-29)
-  - Configure WhatsApp Webhook URL and Verify Token via UI
-  - Secure database storage
-  - No environment variable changes needed
-- **Order Management** flow (Planned)
-- **Payment Integration** (Planned)
-- **Analytics Dashboard** (Planned)
-
-### Phase 6: Transaction Engine (Planned)
-- Order processing
-- Payment integration
-- Order tracking
-
-### Phase 7: Production Readiness & Security ✅ (2025-11-29)
 - ✅ **Authentication System**
   - Admin login with Supabase Auth
   - Route protection via middleware
@@ -226,6 +212,164 @@ Simplifies the management of WhatsApp Webhook configuration by allowing administ
 1.  **Ease of Use**: No need to access server console or env files.
 2.  **Flexibility**: Quickly switch webhook URLs (e.g., from ngrok to domain).
 3.  **Security**: Token verification happens securely in the database.
+
+## 5.7. Phase 5 - Contacts Management (NEW - 2025-11-29)
+
+### Overview
+Provides a centralized contact management system that automatically captures and displays WhatsApp user names. The AI assistant can automatically extract names from conversations, and administrators can manually edit contact names as needed.
+
+### Key Features
+
+#### 5.7.1. Automatic Name Extraction
+- **AI-Driven**: The AI automatically asks for the user's name during conversations
+- **Tag-Based System**: Uses hidden `[UPDATE_NAME: Name]` tag in AI responses
+- **Backend Processing**: Tag detected in `lib/ai/rag.ts`, name saved to database, tag removed from response
+- **System Message Integration**: Default system message includes name extraction instructions
+
+#### 5.7.2. Admin Interface
+- **Location**: `/dashboard/contacts`
+- **Features**:
+  - Contact list with search (by name or phone number)
+  - Display: Name, Phone Number, Last Active timestamp
+  - Manual edit via Dialog modal
+  - Remove name functionality (preserves chat history)
+  - Responsive table layout with user avatars
+
+#### 5.7.3. Chat Integration
+- **Chat List**: Displays contact name instead of phone number when available
+- **Chat Window**: Shows contact name in header
+- **Real-time Updates**: Contact name changes reflect immediately
+
+### Technical Implementation
+
+**Database**:
+- Extended `whatsapp_chats` table with `contact_name` column
+- Migration script: `database/add_contact_name.sql`
+
+**Components**:
+- `ContactList.tsx`: Contact management interface with Dialog modals
+- `ChatList.tsx`: Updated to display contact names
+- `ChatWindow.tsx`: Updated header with contact name
+
+**Benefits**:
+1. **Personalized Conversations**: Named contacts improve user experience
+2. **Automatic Extraction**: No manual data entry required
+3. **Fallback**: Manual edit available if AI extraction fails
+4. **Non-Destructive**: Removing name preserves chat history
+5. **Seamless Integration**: Works with existing chat monitoring
+
+**Documentation**: `docs/CONTACTS_MANAGEMENT.md`
+
+## 5.8. Phase 5 - Settings Management (NEW - 2025-11-29)
+
+### Overview
+Provides a centralized, user-friendly interface for managing all application credentials and configurations without requiring code deployment or environment variable changes. Administrators can configure WhatsApp, AI, and Shipping integrations directly from the dashboard.
+
+### Key Features
+
+#### 5.8.1. Tabs-Based Organization
+- **Location**: `/dashboard/settings`
+- **4 Main Tabs**:
+  1. **WhatsApp** - WhatsApp Business API credentials
+  2. **AI** - OpenAI API configuration
+  3. **Shipping** - Shipping cost API (optional)
+  4. **System** - AI System Message configuration
+
+#### 5.8.2. WhatsApp Configuration Tab
+- **Fields**:
+  - Webhook URL (read-only, auto-generated)
+  - Verify Token (with random generator)
+  - Access Token 🔐 (secure input)
+  - Phone Number ID
+  - App Secret 🔐 (optional, for signature validation)
+- **Features**:
+  - Copy buttons for URL and tokens
+  - Random token generator
+  - Status badge (Active/Inactive)
+  - Edit mode protection
+
+#### 5.8.3. AI Configuration Tab
+- **Fields**:
+  - OpenAI API Key 🔐 (secure input)
+- **Features**:
+  - Status badge (Active/Inactive)
+  - Link to OpenAI Platform
+  - Show/hide password toggle
+
+#### 5.8.4. Shipping Configuration Tab
+- **Fields**:
+  - Komerce API Key 🔐 (secure input)
+- **Features**:
+  - Status badge (Optional)
+  - Marked as optional feature
+  - Show/hide password toggle
+
+#### 5.8.5. Security Features
+- **Secure Input Component**: Password-style masking with show/hide toggle (eye icon)
+- **Edit Mode Protection**: Must click "Edit Configuration" before changes
+- **Cancel Functionality**: Rollback changes without saving
+- **Database Storage**: All settings stored in `app_settings` table with RLS
+- **No Fallback**: Settings must be configured via dashboard (database-first approach)
+
+### Technical Implementation
+
+**Database Schema**:
+- Extended `app_settings` table with new keys:
+  - `whatsapp_access_token`
+  - `whatsapp_phone_number_id`
+  - `whatsapp_app_secret`
+  - `openai_api_key`
+  - `shipping_api_key`
+
+**Components**:
+- `SettingsTabs.tsx`: Tabs navigation component
+- `SecureInput.tsx`: Reusable password input with show/hide
+- `WebhookSettings.tsx`: Enhanced WhatsApp configuration (expanded)
+- `AISettings.tsx`: OpenAI API key management
+- `ShippingSettings.tsx`: Shipping API configuration
+- `components/ui/tabs.tsx`: Radix UI tabs component
+
+**Helper Functions** (`lib/settings/app-settings.ts`):
+- `getWhatsAppAccessToken()` - Throws error if not configured
+- `getWhatsAppPhoneNumberId()` - Throws error if not configured
+- `getWhatsAppAppSecret()` - Returns null if not configured (optional)
+- `getOpenAIApiKey()` - Throws error if not configured
+- `getShippingApiKey()` - Returns null (optional)
+- `isWhatsAppConfigured()` - Check all required WhatsApp fields
+- `isAIConfigured()` - Check OpenAI key
+
+**Server Actions** (`app/dashboard/settings/actions.ts`):
+- `updateWebhookSettings()` - Save WhatsApp credentials
+- `updateAISettings()` - Save OpenAI API key
+- `updateShippingSettings()` - Save Shipping API key
+
+**Backend Integration**:
+All files updated to use database settings instead of environment variables:
+- `lib/whatsapp/client.ts` - WhatsApp message sending
+- `lib/whatsapp/security.ts` - Webhook signature verification
+- `lib/ai/embedding.ts` - OpenAI embeddings
+- `lib/ai/rag.ts` - RAG responses
+- `app/api/webhook/whatsapp/route.ts` - Webhook handling
+
+### Benefits
+1. **No Redeploy**: Update credentials instantly without redeployment
+2. **User Friendly**: Admin can manage settings via clean UI
+3. **Secure**: Password masking, edit mode, RLS policies
+4. **Organized**: Tabs group settings by category
+5. **Simple**: Straightforward implementation, not overly complex
+6. **Clear Status**: Visual badges for configuration status
+7. **Flexible**: Easy to add more settings in the future
+
+### Migration Process
+1. Run `database/add_app_settings.sql` to create new settings
+2. Run `database/migrate_env_to_settings.sql` to migrate existing env vars
+3. Configure settings via `/dashboard/settings`
+4. Optionally remove migrated env vars from `.env.local`
+
+### Documentation
+- **Implementation Guide**: `docs/SETTINGS_IMPLEMENTATION.md`
+- **Migration Guide**: `docs/SETTINGS_MIGRATION.md`
+- **Database Migrations**: `database/add_app_settings.sql`, `database/migrate_env_to_settings.sql`
 
 
 -----

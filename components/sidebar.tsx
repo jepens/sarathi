@@ -2,7 +2,7 @@
 
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
-import { BookOpen, Home, MessageSquare, Settings, ShoppingBag, MessageCircle, LogOut } from "lucide-react"
+import { BookOpen, Home, MessageSquare, Settings, ShoppingBag, MessageCircle, LogOut, Users } from "lucide-react"
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
 import { createClient } from "@/lib/supabase/client"
@@ -56,6 +56,12 @@ export function Sidebar({ className }: SidebarProps) {
                             <Button variant={pathname.startsWith("/dashboard/chats") ? "secondary" : "ghost"} className="w-full justify-start">
                                 <MessageCircle className="mr-2 h-4 w-4" />
                                 WhatsApp Monitor
+                            </Button>
+                        </Link>
+                        <Link href="/dashboard/contacts">
+                            <Button variant={pathname.startsWith("/dashboard/contacts") ? "secondary" : "ghost"} className="w-full justify-start">
+                                <Users className="mr-2 h-4 w-4" />
+                                Contacts
                             </Button>
                         </Link>
                         <Link href="/dashboard/settings">

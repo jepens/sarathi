@@ -1,8 +1,11 @@
 import OpenAI from 'openai'
+import { getOpenAIApiKey } from '@/lib/settings/app-settings'
 
 export async function generateEmbedding(text: string) {
+    const apiKey = await getOpenAIApiKey();
+
     const openai = new OpenAI({
-        apiKey: process.env.OPENAI_API_KEY,
+        apiKey: apiKey,
     })
 
     const response = await openai.embeddings.create({

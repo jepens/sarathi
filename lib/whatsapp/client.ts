@@ -1,13 +1,13 @@
+import { getWhatsAppAccessToken, getWhatsAppPhoneNumberId } from '@/lib/settings/app-settings';
 
 const WHATSAPP_API_URL = 'https://graph.facebook.com/v21.0';
 
 export async function sendWhatsAppMessage(to: string, text: string) {
-    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
-    const accessToken = process.env.WHATSAPP_ACCESS_TOKEN;
+    const phoneNumberId = await getWhatsAppPhoneNumberId();
+    const accessToken = await getWhatsAppAccessToken();
 
     if (!phoneNumberId || !accessToken) {
-        console.error('WhatsApp environment variables missing');
-        return;
+        throw new Error('WhatsApp not configured. Please configure in /dashboard/settings');
     }
 
     try {

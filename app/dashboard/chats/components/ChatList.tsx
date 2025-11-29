@@ -8,6 +8,7 @@ import { cn } from '@/lib/utils';
 
 interface Chat {
     phone_number: string;
+    contact_name: string | null;
     last_message: string;
     last_message_at: string;
     unread_count: number;
@@ -44,6 +45,7 @@ export function ChatList({ selectedPhone, onSelect }: ChatListProps) {
         };
         loadChats();
 
+        // Subscribe to real-time changes
         const channel = supabase
             .channel('whatsapp_chats_changes')
             .on('postgres_changes', { event: '*', schema: 'public', table: 'whatsapp_chats' }, () => {
@@ -51,13 +53,20 @@ export function ChatList({ selectedPhone, onSelect }: ChatListProps) {
             })
             .subscribe();
 
+        // Polling fallback - refresh every 30 seconds
+        const pollInterval = setInterval(() => {
+            fetchChats();
+        }, 30000);
+
         return () => {
             supabase.removeChannel(channel);
+            clearInterval(pollInterval);
         };
     }, [fetchChats, supabase]);
 
     const filteredChats = chats.filter(chat =>
         chat.phone_number.includes(search) ||
+        (chat.contact_name && chat.contact_name.toLowerCase().includes(search.toLowerCase())) ||
         chat.last_message?.toLowerCase().includes(search.toLowerCase())
     );
 
@@ -109,7 +118,9 @@ export function ChatList({ selectedPhone, onSelect }: ChatListProps) {
                                 </div>
                                 <div className="flex-1 min-w-0">
                                     <div className="flex justify-between items-baseline mb-1">
-                                        <span className="font-medium text-[15px] text-[#111b21] truncate">{chat.phone_number}</span>
+                                        <span className="font-medium text-[15px] text-[#111b21] truncate">
+                                            {chat.contact_name || chat.phone_number}
+                                        </span>
                                         <span className="text-[12px] text-[#667781] shrink-0 ml-2">
                                             {formatTime(chat.last_message_at)}
                                         </span>

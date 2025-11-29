@@ -1,5 +1,6 @@
 import { createClient } from '@/lib/supabase/server';
 import { NextResponse } from 'next/server';
+import { getDefaultSystemMessage } from '@/lib/ai/system-message';
 
 export const dynamic = 'force-dynamic';
 
@@ -32,10 +33,15 @@ export async function GET(request: Request) {
         if (error) {
             // If no active message found, return default
             if (error.code === 'PGRST116') {
-                return NextResponse.json(
-                    { error: 'No system message found' },
-                    { status: 404 }
-                );
+                return NextResponse.json({
+                    id: 'default',
+                    name: 'Default System Message',
+                    content: getDefaultSystemMessage(),
+                    is_active: true,
+                    description: 'Default system message (not saved in DB)',
+                    created_at: new Date().toISOString(),
+                    updated_at: new Date().toISOString(),
+                });
             }
             throw error;
         }

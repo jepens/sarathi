@@ -65,7 +65,23 @@ function extractCityName(message: string): string | null {
     return null;
 }
 
-export async function generateRAGResponse(message: string, history: ChatMessage[] = []): Promise<RAGResponse> {
+/**
+ * Helper to update contact name in database
+ */
+async function updateContactName(phoneNumber: string, name: string) {
+    try {
+        const supabase = await createClient();
+        await supabase
+            .from('whatsapp_chats')
+            .update({ contact_name: name })
+            .eq('phone_number', phoneNumber);
+        console.log(`Updated contact name for ${phoneNumber} to ${name}`);
+    } catch (error) {
+        console.error('Error updating contact name:', error);
+    }
+}
+
+export async function generateRAGResponse(message: string, history: ChatMessage[] = [], phoneNumber?: string): Promise<RAGResponse> {
     try {
         // Check if user is asking about shipping cost
         const isShippingQuery = detectShippingIntent(message);
@@ -172,9 +188,12 @@ Konteks:
 ${contextText}
 `;
 
-        // 5. Initialize OpenAI client
+        // 5. Initialize OpenAI client with API key from database
+        const { getOpenAIApiKey } = await import('@/lib/settings/app-settings');
+        const apiKey = await getOpenAIApiKey();
+
         const openai = new OpenAI({
-            apiKey: process.env.OPENAI_API_KEY,
+            apiKey: apiKey,
         });
 
 
@@ -197,7 +216,23 @@ ${contextText}
             temperature: 0.3,
         });
 
-        const responseMessage = completion.choices[0].message.content || 'Maaf, saya tidak dapat memproses permintaan Anda saat ini.';
+        let responseMessage = completion.choices[0].message.content || 'Maaf, saya tidak dapat memproses permintaan Anda saat ini.';
+
+        // Check for [UPDATE_NAME: ...] tag
+        const nameTagRegex = /\[UPDATE_NAME:\s*(.*?)\]/;
+        const match = responseMessage.match(nameTagRegex);
+
+        if (match && match[1]) {
+            const extractedName = match[1].trim();
+
+            // Update name in database if phoneNumber is provided
+            if (phoneNumber) {
+                await updateContactName(phoneNumber, extractedName);
+            }
+
+            // Remove the tag from the response
+            responseMessage = responseMessage.replace(match[0], '').trim();
+        }
 
         // Extract unique sources
         const docSources = typedDocuments?.map((doc) => doc.metadata?.filename || doc.metadata?.source).filter(Boolean) as string[] || [];
@@ -218,3 +253,4 @@ ${contextText}
         throw error;
     }
 }
+

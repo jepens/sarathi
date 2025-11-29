@@ -20,7 +20,7 @@ export async function POST(request: Request) {
             );
         }
 
-        const response = await generateRAGResponse(message, history as ChatMessage[]);
+        const response = await generateRAGResponse(message, history as ChatMessage[], undefined);
 
         return NextResponse.json(response);
 

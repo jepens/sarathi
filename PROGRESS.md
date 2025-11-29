@@ -21,9 +21,11 @@
 1. ✅ **Product Search** via WhatsApp (RAG Integration implemented)
 2. ✅ **Shipping Cost** calculation (RajaOngkir API) - **COMPLETE**
 3. ✅ **System Message Configuration** (Dynamic AI Persona) - **COMPLETE**
-4. **Order Management** flow (Basic conversational flow added)
-5. **Payment Integration**
-6. **Analytics Dashboard**
+4. ✅ **Contacts Management** (Automatic name extraction + Manual editing) - **COMPLETE**
+5. ✅ **Settings Management** (Centralized config dashboard with tabs) - **COMPLETE**
+6. **Order Management** flow (Basic conversational flow added)
+7. **Payment Integration**
+8. **Analytics Dashboard**
 
 ---
 
@@ -97,9 +99,163 @@
 14. **API Security**: Server-side authentication checks on all admin endpoints
 15. **Landing Page**: Modern, animated design with Framer Motion and consistent container layout
 16. **Admin Access**: Manual user creation via Supabase Dashboard (public signups disabled)
+17. **Real-time Chat**: Dual strategy - Supabase Realtime subscriptions + Polling fallback (30s for chat list, 10s for messages) for guaranteed updates without configuration
 
 
 ---
+
+---
+
+## 📝 New Features Implemented (2025-11-29)
+
+### Real-time Chat Enhancement (Phase 4)
+- ✅ **Dual Update Strategy**: 
+  - Supabase Realtime subscriptions (instant when enabled)
+  - Automatic polling fallback (works without configuration)
+- ✅ **Chat List Auto-refresh**: Every 30 seconds
+- ✅ **Messages Auto-refresh**: Every 10 seconds
+- ✅ **Zero Configuration**: Works immediately without Supabase Realtime setup
+- ✅ **Optional Optimization**: Can enable Supabase Realtime for instant updates
+- ✅ **Documentation**: `docs/REALTIME_CHAT.md` - Complete setup guide
+- ✅ **SQL Script**: `database/enable_realtime.sql` - Easy Realtime activation
+- ✅ **No Manual Refresh**: Chat updates automatically in both modes
+- ✅ **Production Ready**: Tested and verified working
+
+**Problem Solved**: Users no longer need to refresh the page to see new messages in `/dashboard/chats`
+
+**Implementation**: 
+- Updated `ChatList.tsx` with 30s polling interval
+- Updated `ChatWindow.tsx` with 10s polling interval
+- Both components retain Supabase Realtime subscriptions for instant updates when available
+- Clean interval cleanup on component unmount
+
+### Contacts Management (Phase 5)
+- ✅ **Database Schema**: 
+  - Extended `whatsapp_chats` table with `contact_name` column
+  - Migration script: `database/add_contact_name.sql`
+  - Foreign key relationship with `whatsapp_messages` table
+
+- ✅ **Automatic Name Extraction**:
+  - AI-driven name capture during conversations
+  - Tag-based system using `[UPDATE_NAME: Name]` in AI responses
+  - Backend processing in `lib/ai/rag.ts`
+  - Tag detection, database update, and removal from user-facing response
+  - System message integration with default instructions
+
+- ✅ **Admin Interface** (`/dashboard/contacts`):
+  - Contact list with search functionality (name or phone number)
+  - Display: Name, Phone Number, Last Active timestamp
+  - Manual edit via Dialog modal
+  - Remove name functionality (preserves chat history)
+  - Responsive table layout with user avatars
+  - Real-time updates
+
+- ✅ **Chat Integration**:
+  - `ChatList.tsx`: Displays contact name instead of phone number
+  - `ChatWindow.tsx`: Shows contact name in header
+  - Search enhanced to work with both name and number
+  - Immediate reflection of contact name changes
+
+- ✅ **Components Created**:
+  - `app/dashboard/contacts/page.tsx`: Main contacts page
+  - `app/dashboard/contacts/components/ContactList.tsx`: Contact management interface
+  - Updated `ChatList.tsx` and `ChatWindow.tsx` for name display
+
+- ✅ **Navigation**:
+  - Added "Contacts" menu item to sidebar
+  - Proper routing and active state handling
+
+**Benefits**:
+- Personalized conversations with named contacts
+- Automatic extraction reduces manual data entry
+- Manual edit fallback for reliability
+- Non-destructive operations (removing name preserves chat history)
+- Seamless integration with existing chat monitoring
+
+**Documentation**: `docs/CONTACTS_MANAGEMENT.md`
+
+### Settings Management (Phase 5 - Latest - 2025-11-29)
+- ✅ **Centralized Configuration Dashboard**:
+  - Tabs-based interface (WhatsApp, AI, Shipping, System)
+  - Clean, organized UI with status badges
+  - Edit mode protection (must click "Edit Configuration")
+  - Cancel functionality to rollback changes
+  
+- ✅ **WhatsApp Configuration Tab**:
+  - Webhook URL (read-only, auto-generated)
+  - Verify Token (with random generator)
+  - Access Token 🔐 (secure input with show/hide)
+  - Phone Number ID
+  - App Secret 🔐 (optional, for signature validation)
+  - Copy buttons for URL and tokens
+  - Status badge (Active/Inactive)
+
+- ✅ **AI Configuration Tab**:
+  - OpenAI API Key 🔐 (secure input with show/hide)
+  - Status badge (Active/Inactive)
+  - Link to OpenAI Platform
+  
+- ✅ **Shipping Configuration Tab**:
+  - Komerce API Key 🔐 (secure input with show/hide)
+  - Status badge (Optional)
+  - Marked as optional feature
+
+- ✅ **Security Features**:
+  - SecureInput component with password masking
+  - Show/Hide toggle with eye icon
+  - Edit mode protection
+  - Database storage with RLS
+  - No fallback to env vars (database-first approach)
+
+- ✅ **Database Schema**:
+  - Extended `app_settings` table with new keys:
+    - `whatsapp_access_token`
+    - `whatsapp_phone_number_id`
+    - `whatsapp_app_secret`
+    - `openai_api_key`
+    - `shipping_api_key`
+  - Migration scripts created
+
+- ✅ **Backend Integration**:
+  - All files updated to use database settings:
+    - `lib/whatsapp/client.ts` - WhatsApp messaging
+    - `lib/whatsapp/security.ts` - Signature verification
+    - `lib/ai/embedding.ts` - OpenAI embeddings
+    - `lib/ai/rag.ts` - RAG responses
+    - `app/api/webhook/whatsapp/route.ts` - Webhook handling
+  - Helper functions in `lib/settings/app-settings.ts`
+  - Server actions for secure updates
+
+- ✅ **Components Created**:
+  - `SettingsTabs.tsx` - Tabs navigation
+  - `SecureInput.tsx` - Reusable password input
+  - `AISettings.tsx` - AI configuration
+  - `ShippingSettings.tsx` - Shipping configuration
+  - `WebhookSettings.tsx` - Enhanced WhatsApp settings
+  - `components/ui/tabs.tsx` - Radix UI tabs
+
+- ✅ **Testing Complete**:
+  - All tabs load correctly ✅
+  - Edit mode works as expected ✅
+  - Show/hide password functional ✅
+  - Cancel button works ✅
+  - Status badges display correctly ✅
+  - UI/UX fully verified ✅
+
+**Benefits**:
+- No redeploy needed for credential updates
+- User-friendly admin interface
+- Secure password masking
+- Organized by category
+- Simple implementation
+- Clear status indicators
+- Easy to extend
+
+**Documentation**: 
+- `docs/SETTINGS_IMPLEMENTATION.md` - Complete implementation guide
+- `docs/SETTINGS_MIGRATION.md` - Migration guide
+- `database/add_app_settings.sql` - Database migration
+- `database/migrate_env_to_settings.sql` - Env migration script
 
 ---
 
@@ -132,10 +288,17 @@
 - ✅ **Chat Window Component**: WhatsApp Web-like interface for viewing messages
 - ✅ **Admin Reply**: Manual message sending from dashboard to WhatsApp users
 - ✅ **Message History**: All messages (user, assistant, system) stored and displayed
-- ✅ **Real-time Updates**: Supabase subscriptions for live message updates
+- ✅ **Real-time Updates**: 
+  - **Supabase Realtime subscriptions** for instant updates (when enabled)
+  - **Polling fallback** for guaranteed updates without configuration
+  - Chat list auto-refresh: every 30 seconds
+  - Messages auto-refresh: every 10 seconds
+  - No manual page refresh required
 - ✅ **System Messages**: Error and rate limit notifications visible in chat
 - ✅ **UI/UX**: WhatsApp Web-inspired design with proper scrolling and colors
 - ✅ **Horizontal Scaling**: Unlimited instances supported
+- ✅ **Documentation**: `docs/REALTIME_CHAT.md` with setup guide
+- ✅ **Optional Realtime**: SQL script provided (`database/enable_realtime.sql`)
 
 ### Document Management System
 - ✅ **GET /api/documents**: Fetch all documents with grouping by filename
@@ -275,7 +438,7 @@ NODE_ENV=production
 
 ---
 
-**Last Updated:** 2025-11-29 02:24 WIB
+**Last Updated:** 2025-11-29 07:31 WIB
 
 ---
 

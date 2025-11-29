@@ -36,7 +36,7 @@ export async function POST(request: Request) {
 
         // Verify signature (optional in development)
         if (process.env.NODE_ENV === 'production') {
-            if (!verifyWhatsAppSignature(rawBody, signature)) {
+            if (!(await verifyWhatsAppSignature(rawBody, signature))) {
                 whatsappLogger.warn('Invalid webhook signature');
                 return new NextResponse('Forbidden', { status: 403 });
             }
