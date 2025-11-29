@@ -124,7 +124,7 @@ async function processJob(job: QueueJob, supabase: SupabaseClient): Promise<void
 
         // Send WhatsApp message
         // Pass the supabase client (which might have Service Role) to access settings
-        await sendWhatsAppMessage(job.phone_number, aiResponse.message, supabase);
+        await sendWhatsAppMessage(job.phone_number, aiResponse.message);
 
         // Store in chat history
         await supabase.from('whatsapp_chats').upsert({
@@ -176,7 +176,7 @@ async function processJob(job: QueueJob, supabase: SupabaseClient): Promise<void
 
             // Send fallback message
             try {
-                await sendWhatsAppMessage(job.phone_number, 'Maaf, terjadi kesalahan saat memproses pesan Anda.', supabase);
+                await sendWhatsAppMessage(job.phone_number, 'Maaf, terjadi kesalahan saat memproses pesan Anda.');
             } catch (fallbackError) {
                 whatsappLogger.error('Failed to send fallback message', fallbackError);
             }

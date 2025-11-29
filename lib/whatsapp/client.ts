@@ -1,11 +1,10 @@
 import { getWhatsAppAccessToken, getWhatsAppPhoneNumberId } from '@/lib/settings/app-settings';
-import { SupabaseClient } from '@supabase/supabase-js';
 
 const WHATSAPP_API_URL = 'https://graph.facebook.com/v21.0';
 
-export async function sendWhatsAppMessage(to: string, text: string, client?: SupabaseClient) {
-    const phoneNumberId = await getWhatsAppPhoneNumberId(client);
-    const accessToken = await getWhatsAppAccessToken(client);
+export async function sendWhatsAppMessage(to: string, text: string) {
+    const phoneNumberId = await getWhatsAppPhoneNumberId();
+    const accessToken = await getWhatsAppAccessToken();
 
     if (!phoneNumberId || !accessToken) {
         throw new Error('WhatsApp not configured. Please configure in /dashboard/settings');
