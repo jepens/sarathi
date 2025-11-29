@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { createClient } from '@supabase/supabase-js';
 import { processQueue } from '@/lib/whatsapp/queue-db';
 import { whatsappLogger } from '@/lib/utils/logger';
 
@@ -23,7 +24,14 @@ export async function GET(request: Request) {
 
         whatsappLogger.info('Queue processing started');
 
-        await processQueue();
+        // Initialize Supabase client with Service Role Key
+        // This ensures the queue processor can access settings (which are RLS protected)
+        const supabase = createClient(
+            process.env.NEXT_PUBLIC_SUPABASE_URL!,
+            process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+        );
+
+        await processQueue(supabase);
 
         whatsappLogger.info('Queue processing completed');
 

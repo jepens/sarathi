@@ -1,4 +1,5 @@
 import { createClient } from '@/lib/supabase/server';
+import { SupabaseClient } from '@supabase/supabase-js';
 
 export interface AppSetting {
     id: string;
@@ -12,8 +13,8 @@ export interface AppSetting {
 /**
  * Get a specific setting by key
  */
-export async function getAppSetting(key: string): Promise<string | null> {
-    const supabase = await createClient();
+export async function getAppSetting(key: string, client?: SupabaseClient): Promise<string | null> {
+    const supabase = client || await createClient();
 
     const { data, error } = await supabase
         .from('app_settings')
@@ -32,8 +33,8 @@ export async function getAppSetting(key: string): Promise<string | null> {
 /**
  * Get all settings
  */
-export async function getAllSettings(): Promise<AppSetting[]> {
-    const supabase = await createClient();
+export async function getAllSettings(client?: SupabaseClient): Promise<AppSetting[]> {
+    const supabase = client || await createClient();
 
     const { data, error } = await supabase
         .from('app_settings')
@@ -51,8 +52,8 @@ export async function getAllSettings(): Promise<AppSetting[]> {
 /**
  * Update a setting
  */
-export async function updateAppSetting(key: string, value: string): Promise<boolean> {
-    const supabase = await createClient();
+export async function updateAppSetting(key: string, value: string, client?: SupabaseClient): Promise<boolean> {
+    const supabase = client || await createClient();
 
     const { error } = await supabase
         .from('app_settings')
@@ -70,16 +71,16 @@ export async function updateAppSetting(key: string, value: string): Promise<bool
 /**
  * Get webhook URL from settings (with fallback to localhost)
  */
-export async function getWebhookUrl(): Promise<string> {
-    const url = await getAppSetting('whatsapp_webhook_url');
+export async function getWebhookUrl(client?: SupabaseClient): Promise<string> {
+    const url = await getAppSetting('whatsapp_webhook_url', client);
     return url || 'http://localhost:3000/api/webhook/whatsapp';
 }
 
 /**
  * Get verify token from settings (with fallback to env)
  */
-export async function getVerifyToken(): Promise<string> {
-    const token = await getAppSetting('whatsapp_verify_token');
+export async function getVerifyToken(client?: SupabaseClient): Promise<string> {
+    const token = await getAppSetting('whatsapp_verify_token', client);
     return token || process.env.WHATSAPP_VERIFY_TOKEN || '123456';
 }
 
@@ -87,8 +88,8 @@ export async function getVerifyToken(): Promise<string> {
  * Securely check if a token matches the stored verify token
  * Uses Database RPC to avoid exposing the token to the client/anon users
  */
-export async function checkVerifyToken(inputToken: string): Promise<boolean> {
-    const supabase = await createClient();
+export async function checkVerifyToken(inputToken: string, client?: SupabaseClient): Promise<boolean> {
+    const supabase = client || await createClient();
 
     // Try RPC first (secure way)
     const { data, error } = await supabase.rpc('verify_webhook_token', { input_token: inputToken });
@@ -99,15 +100,15 @@ export async function checkVerifyToken(inputToken: string): Promise<boolean> {
 
     // Fallback for development/if RPC fails (e.g. function not created yet)
     // This might fail if RLS blocks access, but it's a backup.
-    const storedToken = await getVerifyToken();
+    const storedToken = await getVerifyToken(client);
     return storedToken === inputToken;
 }
 
 /**
  * Get WhatsApp Access Token from settings
  */
-export async function getWhatsAppAccessToken(): Promise<string> {
-    const token = await getAppSetting('whatsapp_access_token');
+export async function getWhatsAppAccessToken(client?: SupabaseClient): Promise<string> {
+    const token = await getAppSetting('whatsapp_access_token', client);
     if (!token) {
         throw new Error('WhatsApp Access Token not configured. Please set it in /dashboard/settings');
     }
@@ -117,8 +118,8 @@ export async function getWhatsAppAccessToken(): Promise<string> {
 /**
  * Get WhatsApp Phone Number ID from settings
  */
-export async function getWhatsAppPhoneNumberId(): Promise<string> {
-    const phoneId = await getAppSetting('whatsapp_phone_number_id');
+export async function getWhatsAppPhoneNumberId(client?: SupabaseClient): Promise<string> {
+    const phoneId = await getAppSetting('whatsapp_phone_number_id', client);
     if (!phoneId) {
         throw new Error('WhatsApp Phone Number ID not configured. Please set it in /dashboard/settings');
     }
@@ -128,15 +129,15 @@ export async function getWhatsAppPhoneNumberId(): Promise<string> {
 /**
  * Get WhatsApp App Secret from settings
  */
-export async function getWhatsAppAppSecret(): Promise<string | null> {
-    return await getAppSetting('whatsapp_app_secret');
+export async function getWhatsAppAppSecret(client?: SupabaseClient): Promise<string | null> {
+    return await getAppSetting('whatsapp_app_secret', client);
 }
 
 /**
  * Get OpenAI API Key from settings
  */
-export async function getOpenAIApiKey(): Promise<string> {
-    const apiKey = await getAppSetting('openai_api_key') || process.env.OPENAI_API_KEY;
+export async function getOpenAIApiKey(client?: SupabaseClient): Promise<string> {
+    const apiKey = await getAppSetting('openai_api_key', client) || process.env.OPENAI_API_KEY;
     if (!apiKey) {
         throw new Error('OpenAI API Key not configured. Please set it in /dashboard/settings');
     }
@@ -146,17 +147,17 @@ export async function getOpenAIApiKey(): Promise<string> {
 /**
  * Get Shipping API Key from settings
  */
-export async function getShippingApiKey(): Promise<string | null> {
-    return await getAppSetting('shipping_api_key');
+export async function getShippingApiKey(client?: SupabaseClient): Promise<string | null> {
+    return await getAppSetting('shipping_api_key', client);
 }
 
 /**
  * Check if WhatsApp is fully configured
  */
-export async function isWhatsAppConfigured(): Promise<boolean> {
-    const accessToken = await getAppSetting('whatsapp_access_token');
-    const phoneNumberId = await getAppSetting('whatsapp_phone_number_id');
-    const verifyToken = await getAppSetting('whatsapp_verify_token');
+export async function isWhatsAppConfigured(client?: SupabaseClient): Promise<boolean> {
+    const accessToken = await getAppSetting('whatsapp_access_token', client);
+    const phoneNumberId = await getAppSetting('whatsapp_phone_number_id', client);
+    const verifyToken = await getAppSetting('whatsapp_verify_token', client);
 
     return !!(accessToken && phoneNumberId && verifyToken);
 }
@@ -164,8 +165,8 @@ export async function isWhatsAppConfigured(): Promise<boolean> {
 /**
  * Check if AI is configured
  */
-export async function isAIConfigured(): Promise<boolean> {
-    const apiKey = await getAppSetting('openai_api_key');
+export async function isAIConfigured(client?: SupabaseClient): Promise<boolean> {
+    const apiKey = await getAppSetting('openai_api_key', client);
     return !!apiKey;
 }
 

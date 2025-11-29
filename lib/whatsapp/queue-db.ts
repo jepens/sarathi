@@ -4,6 +4,8 @@ import { generateRAGResponse } from '@/lib/ai/rag';
 import { whatsappLogger } from '@/lib/utils/logger';
 import { logSystemMessage } from '@/lib/whatsapp/history';
 
+import { SupabaseClient } from '@supabase/supabase-js';
+
 /**
  * Supabase-based message queue
  * Works across multiple instances
@@ -23,9 +25,9 @@ export interface QueueJob {
 /**
  * Add message to queue
  */
-export async function enqueueMessage(phoneNumber: string, messageText: string): Promise<string> {
+export async function enqueueMessage(phoneNumber: string, messageText: string, client?: SupabaseClient): Promise<string> {
     try {
-        const supabase = await createClient();
+        const supabase = client || await createClient();
 
         const { data, error } = await supabase
             .from('message_queue')
@@ -52,9 +54,21 @@ export async function enqueueMessage(phoneNumber: string, messageText: string): 
  * Process pending messages
  * Call this from a cron job or background worker
  */
-export async function processQueue(): Promise<void> {
+export async function processQueue(client?: SupabaseClient): Promise<void> {
     try {
-        const supabase = await createClient();
+        // Use provided client, or create one with Service Role if available (for cron jobs), or fall back to standard createClient
+        let supabase = client;
+        if (!supabase) {
+            if (process.env.SUPABASE_SERVICE_ROLE_KEY) {
+                const { createClient: createSupabaseClient } = await import('@supabase/supabase-js');
+                supabase = createSupabaseClient(
+                    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+                    process.env.SUPABASE_SERVICE_ROLE_KEY
+                );
+            } else {
+                supabase = await createClient();
+            }
+        }
 
         // Get pending messages (oldest first)
         const { data: jobs, error } = await supabase
@@ -70,7 +84,7 @@ export async function processQueue(): Promise<void> {
         whatsappLogger.info(`Processing ${jobs.length} messages from queue`);
 
         for (const job of jobs) {
-            await processJob(job as QueueJob);
+            await processJob(job as QueueJob, supabase);
         }
 
     } catch (error) {
@@ -81,9 +95,7 @@ export async function processQueue(): Promise<void> {
 /**
  * Process a single job
  */
-async function processJob(job: QueueJob): Promise<void> {
-    const supabase = await createClient();
-
+async function processJob(job: QueueJob, supabase: SupabaseClient): Promise<void> {
     try {
         // Mark as processing
         await supabase
@@ -111,7 +123,8 @@ async function processJob(job: QueueJob): Promise<void> {
         const aiResponse = await generateRAGResponse(job.message_text, history, job.phone_number);
 
         // Send WhatsApp message
-        await sendWhatsAppMessage(job.phone_number, aiResponse.message);
+        // Pass the supabase client (which might have Service Role) to access settings
+        await sendWhatsAppMessage(job.phone_number, aiResponse.message, supabase);
 
         // Store in chat history
         await supabase.from('whatsapp_chats').upsert({
@@ -163,7 +176,7 @@ async function processJob(job: QueueJob): Promise<void> {
 
             // Send fallback message
             try {
-                await sendWhatsAppMessage(job.phone_number, 'Maaf, terjadi kesalahan saat memproses pesan Anda.');
+                await sendWhatsAppMessage(job.phone_number, 'Maaf, terjadi kesalahan saat memproses pesan Anda.', supabase);
             } catch (fallbackError) {
                 whatsappLogger.error('Failed to send fallback message', fallbackError);
             }

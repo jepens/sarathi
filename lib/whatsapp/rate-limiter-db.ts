@@ -1,5 +1,7 @@
 import { createClient } from '@/lib/supabase/server';
 
+import { SupabaseClient } from '@supabase/supabase-js';
+
 /**
  * Supabase-based rate limiter
  * Works across multiple instances
@@ -8,9 +10,9 @@ import { createClient } from '@/lib/supabase/server';
 const MAX_REQUESTS = 10;
 const WINDOW_MS = 60000; // 1 minute
 
-export async function checkRateLimit(identifier: string): Promise<boolean> {
+export async function checkRateLimit(identifier: string, client?: SupabaseClient): Promise<boolean> {
     try {
-        const supabase = await createClient();
+        const supabase = client || await createClient();
 
         // Try to get existing rate limit entry
         const { data: existing, error: fetchError } = await supabase

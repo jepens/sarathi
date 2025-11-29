@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { createClient } from '@supabase/supabase-js';
 import { verifyWhatsAppSignature } from '@/lib/whatsapp/security';
 import { checkRateLimit } from '@/lib/whatsapp/rate-limiter-db';
 import { enqueueMessage, processQueue } from '@/lib/whatsapp/queue-db';
@@ -46,6 +47,13 @@ export async function POST(request: Request) {
         // Enhanced logging for debugging
         whatsappLogger.info('Webhook received:', JSON.stringify(body, null, 2));
 
+        // Initialize Supabase client with Service Role Key for backend operations
+        // This bypasses RLS policies to ensure we can always log messages
+        const supabase = createClient(
+            process.env.NEXT_PUBLIC_SUPABASE_URL!,
+            process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+        );
+
         // Check if this is an event from a WhatsApp Business Account
         if (body.object === 'whatsapp_business_account') {
             if (body.entry && body.entry[0].changes && body.entry[0].changes[0].value.messages && body.entry[0].changes[0].value.messages[0]) {
@@ -60,7 +68,8 @@ export async function POST(request: Request) {
                     whatsappLogger.info(`Received message from ${from}: ${messageBody}`);
 
                     // Rate limiting (database-based)
-                    const allowed = await checkRateLimit(from);
+                    // Pass service role client to bypass RLS
+                    const allowed = await checkRateLimit(from, supabase);
                     if (!allowed) {
                         whatsappLogger.warn(`Rate limit exceeded for ${from}`);
                         await sendWhatsAppMessage(from, 'Mohon tunggu sebentar sebelum mengirim pesan lagi.');
@@ -69,22 +78,17 @@ export async function POST(request: Request) {
                     }
 
                     // Add to database queue
-                    await enqueueMessage(from, messageBody);
+                    // Pass service role client to bypass RLS
+                    await enqueueMessage(from, messageBody, supabase);
                     whatsappLogger.info(`Message from ${from} added to queue`);
 
                     // Trigger queue processing immediately (fire and forget)
-                    processQueue().catch(err => whatsappLogger.error('Error processing queue immediately', err));
+                    // Pass the service role client so it can access settings
+                    processQueue(supabase).catch(err => whatsappLogger.error('Error processing queue immediately', err));
 
                     // Store in chat history (Async - don't await to speed up webhook response)
-                    // Use direct Supabase client (not server client) because webhook has no cookies
                     (async () => {
                         try {
-                            const { createClient: createSupabaseClient } = await import('@supabase/supabase-js');
-                            const supabase = createSupabaseClient(
-                                process.env.NEXT_PUBLIC_SUPABASE_URL!,
-                                process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-                            );
-
                             // Update chat summary
                             const { error: chatError } = await supabase
                                 .from('whatsapp_chats')
