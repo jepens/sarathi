@@ -105,58 +105,59 @@ export async function checkVerifyToken(inputToken: string, client?: SupabaseClie
 }
 
 /**
- * Get WhatsApp Access Token from settings
+ * Get WhatsApp Access Token from env
  */
-export async function getWhatsAppAccessToken(client?: SupabaseClient): Promise<string> {
-    const token = await getAppSetting('whatsapp_access_token', client);
+export async function getWhatsAppAccessToken(): Promise<string> {
+    const token = process.env.WHATSAPP_ACCESS_TOKEN;
     if (!token) {
-        throw new Error('WhatsApp Access Token not configured. Please set it in /dashboard/settings');
+        throw new Error('WhatsApp Access Token not configured in .env');
     }
     return token;
 }
 
 /**
- * Get WhatsApp Phone Number ID from settings
+ * Get WhatsApp Phone Number ID from env
  */
-export async function getWhatsAppPhoneNumberId(client?: SupabaseClient): Promise<string> {
-    const phoneId = await getAppSetting('whatsapp_phone_number_id', client);
+export async function getWhatsAppPhoneNumberId(): Promise<string> {
+    const phoneId = process.env.WHATSAPP_PHONE_NUMBER_ID;
     if (!phoneId) {
-        throw new Error('WhatsApp Phone Number ID not configured. Please set it in /dashboard/settings');
+        throw new Error('WhatsApp Phone Number ID not configured in .env');
     }
     return phoneId;
 }
 
 /**
- * Get WhatsApp App Secret from settings
+ * Get WhatsApp App Secret from env
  */
-export async function getWhatsAppAppSecret(client?: SupabaseClient): Promise<string | null> {
-    return await getAppSetting('whatsapp_app_secret', client);
+export async function getWhatsAppAppSecret(): Promise<string | null> {
+    return process.env.WHATSAPP_APP_SECRET || null;
 }
 
 /**
- * Get OpenAI API Key from settings
+ * Get OpenAI API Key from env
  */
-export async function getOpenAIApiKey(client?: SupabaseClient): Promise<string> {
-    const apiKey = await getAppSetting('openai_api_key', client) || process.env.OPENAI_API_KEY;
+export async function getOpenAIApiKey(): Promise<string> {
+    const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) {
-        throw new Error('OpenAI API Key not configured. Please set it in /dashboard/settings');
+        throw new Error('OpenAI API Key not configured in .env');
     }
     return apiKey;
 }
 
 /**
- * Get Shipping API Key from settings
+ * Get Shipping API Key from env
  */
-export async function getShippingApiKey(client?: SupabaseClient): Promise<string | null> {
-    return await getAppSetting('shipping_api_key', client);
+export async function getShippingApiKey(): Promise<string | null> {
+    return process.env.SHIPPING_COST_KOMERCE_API_KEY || null;
 }
 
 /**
  * Check if WhatsApp is fully configured
  */
 export async function isWhatsAppConfigured(client?: SupabaseClient): Promise<boolean> {
-    const accessToken = await getAppSetting('whatsapp_access_token', client);
-    const phoneNumberId = await getAppSetting('whatsapp_phone_number_id', client);
+    const accessToken = process.env.WHATSAPP_ACCESS_TOKEN;
+    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+    // Verify token is still in DB
     const verifyToken = await getAppSetting('whatsapp_verify_token', client);
 
     return !!(accessToken && phoneNumberId && verifyToken);
@@ -165,8 +166,8 @@ export async function isWhatsAppConfigured(client?: SupabaseClient): Promise<boo
 /**
  * Check if AI is configured
  */
-export async function isAIConfigured(client?: SupabaseClient): Promise<boolean> {
-    const apiKey = await getAppSetting('openai_api_key', client);
+export async function isAIConfigured(): Promise<boolean> {
+    const apiKey = process.env.OPENAI_API_KEY;
     return !!apiKey;
 }
 

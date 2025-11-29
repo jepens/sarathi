@@ -9,30 +9,20 @@ import { CheckCircle2, XCircle, Save, Loader2, Copy, RefreshCw } from "lucide-re
 import { Badge } from "@/components/ui/badge";
 import { updateWebhookSettings } from '../actions';
 import { toast } from "sonner";
-import { SecureInput } from './SecureInput';
 
 interface WebhookSettingsProps {
     initialWebhookUrl: string;
     initialVerifyToken: string;
-    initialAccessToken: string;
-    initialPhoneNumberId: string;
-    initialAppSecret: string;
     isConfigured: boolean;
 }
 
 export function WebhookSettings({
     initialWebhookUrl,
     initialVerifyToken,
-    initialAccessToken,
-    initialPhoneNumberId,
-    initialAppSecret,
     isConfigured
 }: WebhookSettingsProps) {
     const [webhookUrl, setWebhookUrl] = useState(initialWebhookUrl);
     const [verifyToken, setVerifyToken] = useState(initialVerifyToken);
-    const [accessToken, setAccessToken] = useState(initialAccessToken);
-    const [phoneNumberId, setPhoneNumberId] = useState(initialPhoneNumberId);
-    const [appSecret, setAppSecret] = useState(initialAppSecret);
     const [isEditing, setIsEditing] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
 
@@ -49,9 +39,6 @@ export function WebhookSettings({
             const formData = new FormData();
             formData.append('webhookUrl', webhookUrl);
             formData.append('verifyToken', verifyToken);
-            formData.append('accessToken', accessToken);
-            formData.append('phoneNumberId', phoneNumberId);
-            formData.append('appSecret', appSecret);
 
             await updateWebhookSettings(formData);
 
@@ -154,49 +141,6 @@ export function WebhookSettings({
                         </div>
                     </div>
 
-                    <div className="space-y-2">
-                        <Label htmlFor="access-token">Access Token 🔐</Label>
-                        <SecureInput
-                            id="access-token"
-                            value={accessToken}
-                            onChange={setAccessToken}
-                            disabled={!isEditing}
-                            placeholder="Enter WhatsApp Access Token"
-                        />
-                        <p className="text-xs text-muted-foreground">
-                            Get this from Meta Developer Portal → WhatsApp → API Setup
-                        </p>
-                    </div>
-
-                    <div className="space-y-2">
-                        <Label htmlFor="phone-number-id">Phone Number ID</Label>
-                        <Input
-                            id="phone-number-id"
-                            value={phoneNumberId}
-                            onChange={(e) => setPhoneNumberId(e.target.value)}
-                            disabled={!isEditing}
-                            className="font-mono text-sm"
-                            placeholder="Enter Phone Number ID"
-                        />
-                        <p className="text-xs text-muted-foreground">
-                            Find this in Meta Developer Portal → WhatsApp → API Setup
-                        </p>
-                    </div>
-
-                    <div className="space-y-2">
-                        <Label htmlFor="app-secret">App Secret 🔐 (Optional)</Label>
-                        <SecureInput
-                            id="app-secret"
-                            value={appSecret}
-                            onChange={setAppSecret}
-                            disabled={!isEditing}
-                            placeholder="Enter App Secret for webhook validation"
-                        />
-                        <p className="text-xs text-muted-foreground">
-                            Used for webhook signature validation (recommended for production)
-                        </p>
-                    </div>
-
                     <div className="flex justify-end gap-2 pt-2">
                         {isEditing ? (
                             <>
@@ -207,9 +151,6 @@ export function WebhookSettings({
                                         setIsEditing(false);
                                         setWebhookUrl(initialWebhookUrl);
                                         setVerifyToken(initialVerifyToken);
-                                        setAccessToken(initialAccessToken);
-                                        setPhoneNumberId(initialPhoneNumberId);
-                                        setAppSecret(initialAppSecret);
                                     }}
                                     disabled={isSaving}
                                 >
