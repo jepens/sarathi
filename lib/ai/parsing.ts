@@ -1,18 +1,18 @@
+import { PDFParse } from 'pdf-parse';
+
 export async function parseFile(fileBuffer: Buffer, fileType: string): Promise<string> {
     if (fileType === 'application/pdf') {
-        // PDF parsing in server-side Next.js is complex due to worker requirements
-        // For production, consider using:
-        // 1. External service like Unstructured.io API
-        // 2. Separate microservice for PDF processing
-        // 3. Client-side processing with Web Workers
-        // For now, we'll throw a helpful error
-        throw new Error(
-            'PDF parsing is not yet supported. Please upload .txt or .md files, ' +
-            'or convert your PDF to text first. PDF support will be added in a future update.'
-        )
+        try {
+            const parser = new PDFParse({ data: fileBuffer });
+            const data = await parser.getText();
+            return data.text;
+        } catch (error) {
+            console.error('Error parsing PDF:', error);
+            throw new Error('Failed to parse PDF file. Please ensure it is a valid PDF.');
+        }
     } else {
         // Assume text/plain or markdown
-        return fileBuffer.toString('utf-8')
+        return fileBuffer.toString('utf-8');
     }
 }
 

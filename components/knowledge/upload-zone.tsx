@@ -101,7 +101,7 @@ export function UploadZone({ onUploadComplete }: UploadZoneProps = {}) {
                         {isUploading ? "Processing..." : "Upload Knowledge"}
                     </h3>
                     <p className="text-sm text-muted-foreground">
-                        Drag & drop TXT or MD files here
+                        Drag & drop PDF, TXT, or MD files here
                     </p>
                 </div>
                 <Button variant="outline" disabled={isUploading}>
@@ -112,7 +112,7 @@ export function UploadZone({ onUploadComplete }: UploadZoneProps = {}) {
                     className="hidden"
                     ref={fileInputRef}
                     onChange={handleFileSelect}
-                    accept=".txt,.md"
+                    accept=".txt,.md,.pdf"
                 />
             </CardContent>
         </Card>

@@ -60,7 +60,7 @@
 | **AI Ingestion (Text)** | ✅ Complete | 100% |
 | **Document Management** | ✅ Complete | 100% |
 | **Vector Search API** | ✅ Complete | 100% |
-| **AI Ingestion (PDF)** | ⏸️ Skipped | 0% |
+| **AI Ingestion (PDF)** | ✅ Complete | 100% |
 | **Chat Interface** | ✅ Complete | 100% |
 | **Product Management** | ✅ Complete | 100% |
 | **WhatsApp Integration** | ✅ Complete | 100% |
@@ -631,6 +631,60 @@ NODE_ENV=production
 
 ---
 
+### ✅ Phase 6 - INTELLIGENT STOCK MANAGEMENT (TOOLS) COMPLETE
+
+**Status**: OpenAI Tool Calling fully implemented and tested
+**Implementation Date**: 2025-12-01
+
+**Features Implemented**:
+1. **Tool Definitions** (`lib/ai/tools.ts`)
+   - ✅ `check_availability`: Real-time stock & price check
+   - ✅ `list_products`: Dynamic product catalog listing
+   - ✅ Fuzzy matching for product names
+
+2. **RAG Integration** (`lib/ai/rag.ts`)
+   - ✅ OpenAI Function Calling loop implemented
+   - ✅ Seamless integration with existing RAG context
+   - ✅ AI can now "act" (query DB) instead of just "read" (context)
+
+**Benefits**:
+- ✅ **Real-time Accuracy**: Stock info is always 100% up-to-date.
+- ✅ **Reduced Hallucinations**: AI relies on DB query results, not just similarity search.
+- ✅ **Better UX**: "Stok tinggal berapa?" now gets a specific number.
+
+**Next Steps**: Monitor token usage and add more tools as needed. 🚀
+
+### ✅ Phase 6.1 - KNOWLEDGE BASE UPGRADE (PDF SUPPORT)
+
+**Status**: PDF Parsing implemented
+**Implementation Date**: 2025-12-01
+
+**Features**:
+- ✅ **PDF Support**: Server-side parsing using `pdf-parse`.
+- ✅ **UI Upgrade**: Upload zone now accepts `.pdf` files.
+- ✅ **Error Handling**: Graceful handling of invalid PDF files.
+
+---
+
+### ✅ Phase 6.2 - DATABASE OPTIMIZATION COMPLETE
+
+**Status**: Database indexing and extensions applied
+**Implementation Date**: 2025-12-01
+
+**Optimizations Applied**:
+1. **Extensions**: Enabled `pg_trgm` for advanced text search.
+2. **Indices**:
+   - `products_name_trgm_idx` (GIN) for fast fuzzy search.
+   - `products_type_idx` for filtering.
+   - `orders_customer_phone_idx` for order history.
+   - `whatsapp_messages_phone_created_at_idx` for chat history.
+
+**Benefits**:
+- ✅ **Faster Search**: Product lookups via AI tools will be significantly faster.
+- ✅ **Scalability**: Prepared for larger datasets.
+
+---
+
 ### ✅ Phase 2 - COMPLETE & VERIFIED
 
 **Status**: Chat Interface fully functional and tested
@@ -893,4 +947,34 @@ const aiResponse = await generateRAGResponse(job.message_text, history, job.phon
 - ✅ Conversation flows naturally
 - Payment Integration (Midtrans/Xendit)
 - Analytics Dashboard (Order stats, revenue tracking)
+
+---
+
+## 🔮 Future Roadmap (Advanced Features)
+
+### Phase 7: Automated Payment Gateway (Xendit) 💸
+- **Goal**: Automate revenue collection and stock reduction.
+- **Features**:
+  - Auto-generate Invoice URLs.
+  - Webhook for payment confirmation.
+  - Auto-update Order Status to 'PAID'.
+
+### Phase 8: AI Vision (Multimodal) 👁️
+- **Goal**: Allow AI to "see" products and payment proofs.
+- **Features**:
+  - Product identification from photos.
+  - Payment receipt verification.
+
+### Phase 9: Marketing Broadcasts (CRM) 📢
+- **Goal**: Proactive sales and customer retention.
+- **Features**:
+  - Bulk message sending (HSM).
+  - Customer segmentation (Last Order, Interest).
+
+### Phase 10: Advanced Analytics 📊
+- **Goal**: Data-driven insights.
+- **Features**:
+  - Sales trends, Top products, AI performance metrics.
+
+---
 

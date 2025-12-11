@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server';
 import OpenAI from 'openai';
 import { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
 import { getActiveSystemMessage } from './system-message';
+import { stockTools, checkAvailability, listProducts } from './tools';
 
 // Types
 export interface ChatMessage {
@@ -384,13 +385,55 @@ ${contextText}
             model: 'gpt-4o',
             messages: apiMessages,
             temperature: 0.3,
+            tools: stockTools,
+            tool_choice: 'auto',
         });
 
-        let responseMessage = completion.choices[0].message.content || 'Maaf, saya tidak dapat memproses permintaan Anda saat ini.';
+        let responseMessage = completion.choices[0].message;
+
+        // Handle Tool Calls
+        if (responseMessage.tool_calls) {
+            // Append the assistant's message with tool calls to history
+            apiMessages.push(responseMessage);
+
+            for (const toolCall of responseMessage.tool_calls) {
+                if (toolCall.type !== 'function') continue;
+
+                const functionName = toolCall.function.name;
+                const functionArgs = JSON.parse(toolCall.function.arguments);
+                let toolResult = '';
+
+                console.log(`🛠️ Executing tool: ${functionName}`, functionArgs);
+
+                if (functionName === 'check_availability') {
+                    toolResult = await checkAvailability(functionArgs.product_name);
+                } else if (functionName === 'list_products') {
+                    toolResult = await listProducts(functionArgs.limit);
+                }
+
+                // Append tool result to history
+                apiMessages.push({
+                    role: 'tool',
+                    tool_call_id: toolCall.id,
+                    content: toolResult,
+                });
+            }
+
+            // Second OpenAI Call (to generate final answer based on tool results)
+            const secondCompletion = await openai.chat.completions.create({
+                model: 'gpt-4o',
+                messages: apiMessages,
+                temperature: 0.3,
+            });
+
+            responseMessage = secondCompletion.choices[0].message;
+        }
+
+        let finalContent = responseMessage.content || 'Maaf, saya tidak dapat memproses permintaan Anda saat ini.';
 
         // Check for [UPDATE_NAME: ...] tag
         const nameTagRegex = /\[UPDATE_NAME:\s*(.*?)\]/;
-        const match = responseMessage.match(nameTagRegex);
+        const match = finalContent.match(nameTagRegex);
 
         if (match && match[1]) {
             const extractedName = match[1].trim();
@@ -401,18 +444,18 @@ ${contextText}
             }
 
             // Remove the tag from the response
-            responseMessage = responseMessage.replace(match[0], '').trim();
+            finalContent = finalContent.replace(match[0], '').trim();
         }
 
         // Check for [CREATE_ORDER] tag and process it
-        const tagStart = responseMessage.indexOf('[CREATE_ORDER:');
+        const tagStart = finalContent.indexOf('[CREATE_ORDER:');
         if (tagStart !== -1) {
             try {
-                const jsonStart = responseMessage.indexOf('{', tagStart);
-                const tagEnd = responseMessage.lastIndexOf(']');
+                const jsonStart = finalContent.indexOf('{', tagStart);
+                const tagEnd = finalContent.lastIndexOf(']');
 
                 if (jsonStart !== -1 && tagEnd !== -1 && tagEnd > jsonStart) {
-                    const jsonStr = responseMessage.substring(jsonStart, tagEnd);
+                    const jsonStr = finalContent.substring(jsonStart, tagEnd);
                     const orderData = JSON.parse(jsonStr);
 
                     // Validate order data
@@ -424,21 +467,21 @@ ${contextText}
                             try {
                                 await createOrder(phoneNumber, orderData);
                                 // Success - remove the tag from response
-                                responseMessage = responseMessage.substring(0, tagStart) + responseMessage.substring(tagEnd + 1);
+                                finalContent = finalContent.substring(0, tagStart) + finalContent.substring(tagEnd + 1);
                             } catch (orderError) {
                                 // Order creation failed (e.g., insufficient stock)
                                 console.error('Order creation failed:', orderError);
 
                                 // Remove the CREATE_ORDER tag
-                                responseMessage = responseMessage.substring(0, tagStart) + responseMessage.substring(tagEnd + 1);
+                                finalContent = finalContent.substring(0, tagStart) + finalContent.substring(tagEnd + 1);
 
                                 // Append error message to response
                                 const errorMsg = orderError instanceof Error ? orderError.message : 'Gagal membuat pesanan';
-                                responseMessage += `\n\n❌ Maaf, pesanan tidak dapat diproses. ${errorMsg}`;
+                                finalContent += `\n\n❌ Maaf, pesanan tidak dapat diproses. ${errorMsg}`;
                             }
                         } else {
                             // No phone number - just remove tag
-                            responseMessage = responseMessage.substring(0, tagStart) + responseMessage.substring(tagEnd + 1);
+                            finalContent = finalContent.substring(0, tagStart) + finalContent.substring(tagEnd + 1);
                         }
                     } else {
                         console.error('Invalid order data structure:', orderData);
@@ -459,7 +502,7 @@ ${contextText}
         }
 
         return {
-            message: responseMessage,
+            message: finalContent,
             sources: sources,
         };
 
