@@ -91,7 +91,7 @@ export async function POST(request: Request) {
         if (body.object === 'whatsapp_business_account') {
             
             // ========== TAMBAHAN BARU: ROUTING CONFIG ==========
-            const MUDIK_PHONE_NUMBER_ID = '94146140571942';
+            const MUDIK_PHONE_NUMBER_ID = '941461405719425';
             const MUDIK_WEBHOOK_URL = 'https://mudik.buildwithabdul.com/api/webhook/whatsapp';
             
             // Ambil metadata untuk routing

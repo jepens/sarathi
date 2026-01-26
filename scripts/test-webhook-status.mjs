@@ -8,7 +8,7 @@
 const WEBHOOK_URL = process.argv[2] || 'http://localhost:3000/api/webhook/whatsapp';
 
 // Mudik phone number ID for routing
-const MUDIK_PHONE_NUMBER_ID = '94146140571942';
+const MUDIK_PHONE_NUMBER_ID = '941461405719425';
 // Nindra phone number ID (replace with actual if different)
 const NINDRA_PHONE_NUMBER_ID = '668003893055590';
 
