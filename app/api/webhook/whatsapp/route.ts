@@ -56,6 +56,60 @@ export async function POST(request: Request) {
 
         // Check if this is an event from a WhatsApp Business Account
         if (body.object === 'whatsapp_business_account') {
+            // ========== ROUTING CONFIG ==========
+            const MUDIK_PHONE_NUMBER_ID = '94146140571942';
+            const MUDIK_WEBHOOK_URL = 'https://mudik.buildwithabdul.com/api/webhook/whatsapp';
+
+            // Extract metadata for routing
+            const metadata = body.entry?.[0]?.changes?.[0]?.value?.metadata;
+            const phoneNumberId = metadata?.phone_number_id;
+
+            whatsappLogger.info(`Webhook from phone_number_id: ${phoneNumberId}`);
+
+            // ========== HANDLE STATUS CALLBACKS ==========
+            const statuses = body.entry?.[0]?.changes?.[0]?.value?.statuses;
+
+            if (statuses && statuses.length > 0) {
+                // This is a STATUS callback (sent/delivered/read/failed)
+                whatsappLogger.info(`Status callback received: ${statuses[0].status} for ${statuses[0].id}`);
+
+                if (phoneNumberId === MUDIK_PHONE_NUMBER_ID) {
+                    // Forward to Mudik webhook
+                    try {
+                        const forwardResponse = await fetch(MUDIK_WEBHOOK_URL, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'X-Forwarded-From': 'nindra'
+                            },
+                            body: JSON.stringify(body)
+                        });
+
+                        if (forwardResponse.ok) {
+                            whatsappLogger.info(`Status forwarded to Mudik successfully`);
+                        } else {
+                            whatsappLogger.error(`Failed to forward to Mudik: ${forwardResponse.status}`);
+                        }
+                    } catch (err) {
+                        whatsappLogger.error('Error forwarding to Mudik:', err);
+                    }
+                } else {
+                    // Status callback for Nindra (not implemented yet)
+                    whatsappLogger.info('Status callback for Nindra - not implemented yet');
+                }
+
+                // Always return 200 to Meta
+                return new NextResponse('EVENT_RECEIVED', { status: 200 });
+            }
+
+            // ========== SKIP MESSAGES FROM MUDIK ==========
+            if (phoneNumberId === MUDIK_PHONE_NUMBER_ID) {
+                // Mudik is outbound only, ignore incoming messages to this number
+                whatsappLogger.info('Message from Mudik number - ignoring (Mudik is outbound only)');
+                return new NextResponse('EVENT_RECEIVED', { status: 200 });
+            }
+
+            // ========== HANDLE NINDRA MESSAGES ==========
             if (body.entry && body.entry[0].changes && body.entry[0].changes[0].value.messages && body.entry[0].changes[0].value.messages[0]) {
                 const message = body.entry[0].changes[0].value.messages[0];
                 const from = message.from; // Sender's phone number
