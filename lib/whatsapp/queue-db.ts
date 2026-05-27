@@ -124,7 +124,7 @@ async function processJob(job: QueueJob, supabase: SupabaseClient): Promise<void
 
         // Send WhatsApp message
         // Pass the supabase client (which might have Service Role) to access settings
-        await sendWhatsAppMessage(job.phone_number, aiResponse.message);
+        const sendResult = await sendWhatsAppMessage(job.phone_number, aiResponse.message);
 
         // Store in chat history
         await supabase.from('whatsapp_chats').upsert({
@@ -137,7 +137,10 @@ async function processJob(job: QueueJob, supabase: SupabaseClient): Promise<void
         await supabase.from('whatsapp_messages').insert({
             phone_number: job.phone_number,
             role: 'assistant',
-            content: aiResponse.message
+            content: aiResponse.message,
+            wa_message_id: sendResult.waMessageId,
+            status: 'sent',
+            status_updated_at: new Date().toISOString(),
         });
 
         // Mark as completed

@@ -28,8 +28,9 @@ export async function POST(request: Request) {
 
         // Send via Meta first — if Meta rejects (e.g. past 24h window), we
         // don't want a phantom assistant message stored locally that the
-        // customer never actually received.
-        await sendWhatsAppMessage(phone_number, message);
+        // customer never actually received. Capture wamid so the webhook
+        // status callback can later flip this row to delivered/read/failed.
+        const sendResult = await sendWhatsAppMessage(phone_number, message);
 
         const { error: chatError } = await supabase
             .from('whatsapp_chats')
@@ -47,7 +48,10 @@ export async function POST(request: Request) {
             .insert({
                 phone_number,
                 role: 'assistant',
-                content: message
+                content: message,
+                wa_message_id: sendResult.waMessageId,
+                status: 'sent',
+                status_updated_at: new Date().toISOString(),
             });
 
         if (msgError) throw msgError;

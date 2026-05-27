@@ -4,15 +4,41 @@ import { useEffect, useState, useRef, useCallback } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Send, MoreVertical, Phone, Video } from 'lucide-react';
+import { Send, MoreVertical, Phone, Video, Check, CheckCheck, AlertCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
+
+type MessageStatus = 'sent' | 'delivered' | 'read' | 'failed' | null;
+
+// WhatsApp-style status indicator next to an outbound message bubble.
+// Maps to Meta status callbacks: sent → 1 grey check, delivered → 2 grey
+// checks, read → 2 blue checks, failed → red exclamation icon. Null/legacy
+// rows show nothing so we don't lie about historical messages.
+function MessageStatusIcon({ status }: { status: MessageStatus }) {
+    if (status === 'failed') {
+        return <AlertCircle className="h-3.5 w-3.5 text-red-600" aria-label="Failed" />;
+    }
+    if (status === 'read') {
+        return <CheckCheck className="h-3.5 w-3.5 text-blue-500" aria-label="Read" />;
+    }
+    if (status === 'delivered') {
+        return <CheckCheck className="h-3.5 w-3.5 text-zinc-500" aria-label="Delivered" />;
+    }
+    if (status === 'sent') {
+        return <Check className="h-3.5 w-3.5 text-zinc-500" aria-label="Sent" />;
+    }
+    return null;
+}
 
 interface Message {
     id: string;
     role: 'user' | 'assistant' | 'system';
     content: string;
     created_at: string;
+    status?: MessageStatus;
+    error_code?: number | null;
+    error_title?: string | null;
+    error_detail?: string | null;
 }
 
 interface ChatWindowProps {
@@ -185,6 +211,8 @@ export function ChatWindow({ phoneNumber }: ChatWindowProps) {
                                     );
                                 }
 
+                                const isOutbound = msg.role === 'assistant';
+                                const failed = isOutbound && msg.status === 'failed';
                                 return (
                                     <div
                                         key={msg.id}
@@ -192,13 +220,39 @@ export function ChatWindow({ phoneNumber }: ChatWindowProps) {
                                             "max-w-[80%] rounded-lg p-2 px-3 text-sm shadow-sm relative",
                                             msg.role === 'user'
                                                 ? "bg-white self-start text-black rounded-tl-none"
-                                                : "bg-[#d9fdd3] self-end text-black rounded-tr-none"
+                                                : failed
+                                                    ? "bg-red-50 border border-red-300 self-end text-black rounded-tr-none"
+                                                    : "bg-[#d9fdd3] self-end text-black rounded-tr-none"
                                         )}
                                     >
-                                        <p className="leading-relaxed">{msg.content}</p>
-                                        <span className="text-[10px] float-right ml-2 mt-1 text-zinc-500">
-                                            {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                                        </span>
+                                        <p className="leading-relaxed whitespace-pre-wrap">{msg.content}</p>
+                                        <div className="flex items-center justify-end gap-1 mt-1 text-[10px] text-zinc-500">
+                                            <span>
+                                                {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                            </span>
+                                            {isOutbound && <MessageStatusIcon status={msg.status ?? null} />}
+                                        </div>
+                                        {failed && (
+                                            <div className="mt-1 text-[11px] text-red-700 border-t border-red-200 pt-1">
+                                                <div className="flex items-start gap-1">
+                                                    <AlertCircle className="h-3 w-3 mt-0.5 flex-shrink-0" />
+                                                    <div>
+                                                        <div className="font-medium">
+                                                            {msg.error_title ?? 'Gagal terkirim'}
+                                                            {msg.error_code ? ` (Kode ${msg.error_code})` : ''}
+                                                        </div>
+                                                        {msg.error_detail && (
+                                                            <div className="opacity-80">{msg.error_detail}</div>
+                                                        )}
+                                                        {msg.error_code === 131047 && (
+                                                            <div className="mt-1 italic opacity-90">
+                                                                Tip: Customer harus kirim pesan dulu, ATAU pakai template message yang sudah di-approve di Meta Business Manager.
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        )}
                                     </div>
                                 );
                             })}

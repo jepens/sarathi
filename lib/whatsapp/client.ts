@@ -54,7 +54,12 @@ function makeWhatsAppApiError(payload: unknown, httpStatus: number): WhatsAppApi
     return err;
 }
 
-export async function sendWhatsAppMessage(to: string, text: string) {
+export interface SendWhatsAppResult {
+    waMessageId: string | null;  // Meta's `wamid.*` — null if the response shape was unexpected
+    raw: unknown;                // Full Meta response for debugging
+}
+
+export async function sendWhatsAppMessage(to: string, text: string): Promise<SendWhatsAppResult> {
     const phoneNumberId = await getWhatsAppPhoneNumberId();
     const accessToken = await getWhatsAppAccessToken();
 
@@ -94,7 +99,20 @@ export async function sendWhatsAppMessage(to: string, text: string) {
         throw makeWhatsAppApiError(errorPayload, response.status);
     }
 
-    return await response.json();
+    const raw = await response.json();
+    // Meta success shape: { messaging_product, contacts: [...], messages: [{ id: 'wamid.XXX', message_status }] }
+    let waMessageId: string | null = null;
+    if (raw && typeof raw === 'object') {
+        const messages = (raw as Record<string, unknown>).messages;
+        if (Array.isArray(messages) && messages.length > 0) {
+            const first = messages[0];
+            if (first && typeof first === 'object') {
+                const id = (first as Record<string, unknown>).id;
+                if (typeof id === 'string' && id.length > 0) waMessageId = id;
+            }
+        }
+    }
+    return { waMessageId, raw };
 }
 
 // Human-friendly hints for common Meta error codes. Returned alongside the

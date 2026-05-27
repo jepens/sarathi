@@ -105,8 +105,46 @@ export async function POST(request: Request) {
                         whatsappLogger.error('Error forwarding to Mudik:', err);
                     }
                 } else {
-                    // Status callback for Nindra (not implemented yet)
-                    whatsappLogger.info('Status callback for Nindra - not implemented yet');
+                    // Status callback for Nindra — match by wamid and update
+                    // the row's status. Failed deliveries (e.g. code 131047
+                    // "Re-engagement message" when past the 24h customer
+                    // service window) used to be silent because we never
+                    // wrote the failure back to the DB row.
+                    for (const statusEntry of statuses) {
+                        const wamid: string | undefined = statusEntry?.id;
+                        const newStatus: string | undefined = statusEntry?.status;
+                        if (!wamid || !newStatus) continue;
+
+                        // Only persist the canonical Meta states we track. Unknown
+                        // values are ignored to avoid violating the CHECK constraint.
+                        const trackedStatuses = new Set(['sent', 'delivered', 'read', 'failed']);
+                        if (!trackedStatuses.has(newStatus)) continue;
+
+                        const patch: Record<string, unknown> = {
+                            status: newStatus,
+                            status_updated_at: new Date().toISOString(),
+                        };
+
+                        if (newStatus === 'failed' && Array.isArray(statusEntry.errors) && statusEntry.errors.length > 0) {
+                            const err = statusEntry.errors[0];
+                            if (typeof err?.code === 'number') patch.error_code = err.code;
+                            if (typeof err?.title === 'string') patch.error_title = err.title;
+                            const detail = err?.error_data?.details;
+                            if (typeof detail === 'string') patch.error_detail = detail;
+                            else if (typeof err?.message === 'string') patch.error_detail = err.message;
+                        }
+
+                        const { error: updateErr } = await supabase
+                            .from('whatsapp_messages')
+                            .update(patch)
+                            .eq('wa_message_id', wamid);
+
+                        if (updateErr) {
+                            whatsappLogger.error(`Failed to update status for ${wamid}`, updateErr);
+                        } else {
+                            whatsappLogger.info(`Updated status=${newStatus} for ${wamid}`);
+                        }
+                    }
                 }
 
                 // Always return 200 to Meta
