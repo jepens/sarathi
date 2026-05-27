@@ -125,7 +125,7 @@ export function TestChatPreview() {
                         <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
                             <MessageSquare className="h-12 w-12 mb-2 opacity-20" />
                             <p className="text-sm">Send a message to test AI responses</p>
-                            <p className="text-xs mt-1">Try: &quot;Ada produk apa saja?&quot; atau &quot;Berapa ongkir ke Bandung?&quot;</p>
+                            <p className="text-xs mt-1">Try: &quot;Paket team building apa saja?&quot; atau &quot;Saya cari EO untuk gathering 100 orang di Sentul&quot;</p>
                         </div>
                     ) : (
                         <div className="space-y-4">

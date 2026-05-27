@@ -66,14 +66,14 @@ export default function ProductsPage() {
         <div className="space-y-8">
             <div className="flex items-center justify-between">
                 <div className="space-y-1">
-                    <h1 className="text-3xl font-bold tracking-tight">Products & Services</h1>
+                    <h1 className="text-3xl font-bold tracking-tight">Paket Acara</h1>
                     <p className="text-muted-foreground">
-                        Manage your product inventory and service offerings.
+                        Kelola katalog paket acara dan layanan EO Anda.
                     </p>
                 </div>
                 <Button onClick={handleAddProduct}>
                     <Plus className="mr-2 h-4 w-4" />
-                    Add Item
+                    Tambah Paket
                 </Button>
             </div>
 
@@ -100,7 +100,7 @@ export default function ProductsPage() {
                 <div className="relative">
                     <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
                     <Input
-                        placeholder="Search catalog..."
+                        placeholder="Cari paket..."
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
                         className="pl-8 max-w-sm bg-black/20 border-white/10"

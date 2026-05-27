@@ -7,8 +7,8 @@ import { Toaster } from "@/components/ui/sonner";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Sahabat UMKM",
-  description: "AI-Powered Sales Assistant",
+  title: "Sailendra Assistant",
+  description: "AI-Powered Assistant for Event Organizer",
 };
 
 export default function RootLayout({

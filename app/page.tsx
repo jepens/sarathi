@@ -62,7 +62,7 @@ export default function Home() {
             <div className="bg-primary/10 p-2 rounded-lg">
               <Bot className="h-6 w-6 text-primary" />
             </div>
-            <span className="font-bold text-lg tracking-tight">Sahabat UMKM</span>
+            <span className="font-bold text-lg tracking-tight">Sailendra Assistant</span>
           </div>
           <nav className="flex items-center gap-4">
             <Link href="/login">

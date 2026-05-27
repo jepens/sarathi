@@ -89,7 +89,14 @@ export async function getVerifyToken(client?: SupabaseClient): Promise<string> {
  * Uses Database RPC to avoid exposing the token to the client/anon users
  */
 export async function checkVerifyToken(inputToken: string, client?: SupabaseClient): Promise<boolean> {
-    const supabase = client || await createClient();
+    // Webhook GET (Meta token challenge) has no user session — use service
+    // role so we can revoke anon+authenticated EXECUTE on the underlying
+    // SECURITY DEFINER function (advisor finding).
+    let supabase = client;
+    if (!supabase) {
+        const { createServiceOrServerClient } = await import('@/lib/supabase/service');
+        supabase = await createServiceOrServerClient();
+    }
 
     // Try RPC first (secure way)
     const { data, error } = await supabase.rpc('verify_webhook_token', { input_token: inputToken });

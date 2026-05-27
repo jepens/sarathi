@@ -2,7 +2,7 @@
 
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
-import { BookOpen, Home, MessageSquare, Settings, ShoppingBag, MessageCircle, LogOut, Users, ClipboardList, Bug } from "lucide-react"
+import { BookOpen, Home, MessageSquare, Settings, ShoppingBag, MessageCircle, LogOut, Users, ClipboardList, Bug, Kanban, Calendar, Building2 } from "lucide-react"
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
 import { createClient } from "@/lib/supabase/client"
@@ -25,7 +25,7 @@ export function Sidebar({ className }: SidebarProps) {
             <div className="space-y-4 py-4">
                 <div className="px-3 py-2">
                     <h2 className="mb-2 px-4 text-lg font-semibold tracking-tight text-sidebar-foreground">
-                        Sahabat UMKM
+                        Sailendra Assistant
                     </h2>
                     <div className="space-y-1">
                         <Link href="/dashboard">
@@ -43,13 +43,25 @@ export function Sidebar({ className }: SidebarProps) {
                         <Link href="/dashboard/products">
                             <Button variant={pathname === "/dashboard/products" ? "secondary" : "ghost"} className="w-full justify-start">
                                 <ShoppingBag className="mr-2 h-4 w-4" />
-                                Products
+                                Paket Acara
                             </Button>
                         </Link>
                         <Link href="/dashboard/orders">
                             <Button variant={pathname === "/dashboard/orders" ? "secondary" : "ghost"} className="w-full justify-start">
                                 <ClipboardList className="mr-2 h-4 w-4" />
-                                Orders
+                                Bookings
+                            </Button>
+                        </Link>
+                        <Link href="/dashboard/pipeline">
+                            <Button variant={pathname === "/dashboard/pipeline" ? "secondary" : "ghost"} className="w-full justify-start">
+                                <Kanban className="mr-2 h-4 w-4" />
+                                Pipeline
+                            </Button>
+                        </Link>
+                        <Link href="/dashboard/calendar">
+                            <Button variant={pathname === "/dashboard/calendar" ? "secondary" : "ghost"} className="w-full justify-start">
+                                <Calendar className="mr-2 h-4 w-4" />
+                                Calendar
                             </Button>
                         </Link>
                         <Link href="/dashboard/chat">
@@ -68,6 +80,12 @@ export function Sidebar({ className }: SidebarProps) {
                             <Button variant={pathname.startsWith("/dashboard/contacts") ? "secondary" : "ghost"} className="w-full justify-start">
                                 <Users className="mr-2 h-4 w-4" />
                                 Contacts
+                            </Button>
+                        </Link>
+                        <Link href="/dashboard/vendors">
+                            <Button variant={pathname.startsWith("/dashboard/vendors") ? "secondary" : "ghost"} className="w-full justify-start">
+                                <Building2 className="mr-2 h-4 w-4" />
+                                Vendors
                             </Button>
                         </Link>
                         <Link href="/dashboard/settings">

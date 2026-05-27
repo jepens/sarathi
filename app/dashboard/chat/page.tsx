@@ -30,39 +30,100 @@ export default function ChatPage() {
         if (!input.trim() || isLoading) return;
 
         const userMessage: Message = { role: 'user', content: input };
-        setMessages((prev) => [...prev, userMessage]);
+        // Use the snapshot for the API call so the new user message isn't echoed back.
+        const historySnapshot = messages;
+        setMessages((prev) => [...prev, userMessage, { role: 'assistant', content: '' }]);
+        const submittedInput = input;
         setInput('');
         setIsLoading(true);
 
+        const appendDelta = (delta: string) => {
+            setMessages((prev) => {
+                const next = [...prev];
+                const last = next[next.length - 1];
+                if (last && last.role === 'assistant') {
+                    next[next.length - 1] = { ...last, content: last.content + delta };
+                }
+                return next;
+            });
+        };
+
+        const setAssistantContent = (content: string, sources?: string[]) => {
+            setMessages((prev) => {
+                const next = [...prev];
+                const last = next[next.length - 1];
+                if (last && last.role === 'assistant') {
+                    next[next.length - 1] = { ...last, content, sources };
+                }
+                return next;
+            });
+        };
+
+        const setSources = (sources: string[]) => {
+            setMessages((prev) => {
+                const next = [...prev];
+                const last = next[next.length - 1];
+                if (last && last.role === 'assistant') {
+                    next[next.length - 1] = { ...last, sources };
+                }
+                return next;
+            });
+        };
+
         try {
-            const response = await fetch('/api/chat', {
+            const response = await fetch('/api/chat/stream', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    message: input,
-                    history: messages,
+                    message: submittedInput,
+                    history: historySnapshot,
                 }),
             });
 
-            if (!response.ok) {
+            if (!response.ok || !response.body) {
                 throw new Error('Failed to get response');
             }
 
-            const data = await response.json();
-            const assistantMessage: Message = {
-                role: 'assistant',
-                content: data.message,
-                sources: data.sources,
-            };
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
 
-            setMessages((prev) => [...prev, assistantMessage]);
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+                buffer += decoder.decode(value, { stream: true });
+                let newlineIdx;
+                while ((newlineIdx = buffer.indexOf('\n')) !== -1) {
+                    const line = buffer.slice(0, newlineIdx).trim();
+                    buffer = buffer.slice(newlineIdx + 1);
+                    if (!line) continue;
+                    let event: { type: string; [k: string]: unknown };
+                    try {
+                        event = JSON.parse(line);
+                    } catch {
+                        continue;
+                    }
+                    if (event.type === 'text' && typeof event.delta === 'string') {
+                        appendDelta(event.delta);
+                    } else if (event.type === 'sources' && Array.isArray(event.sources)) {
+                        setSources(event.sources as string[]);
+                    } else if (event.type === 'error') {
+                        const errMsg =
+                            typeof event.error === 'string'
+                                ? event.error
+                                : 'Internal error';
+                        setAssistantContent(`Maaf, terjadi kesalahan: ${errMsg}`);
+                        // Release the underlying body so the server-side
+                        // request.signal fires and OpenAI generation stops.
+                        await reader.cancel().catch(() => {});
+                        return;
+                    }
+                    // tool / done events are advisory — no UI change for now.
+                }
+            }
         } catch (error) {
             console.error('Chat error:', error);
-            const errorMessage: Message = {
-                role: 'assistant',
-                content: 'Maaf, terjadi kesalahan. Silakan coba lagi.',
-            };
-            setMessages((prev) => [...prev, errorMessage]);
+            setAssistantContent('Maaf, terjadi kesalahan. Silakan coba lagi.');
         } finally {
             setIsLoading(false);
         }

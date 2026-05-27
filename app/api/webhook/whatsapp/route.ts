@@ -30,14 +30,25 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
     try {
-        // Get raw body for signature verification
+        // Get raw body for signature verification.
+        // MUST be the raw bytes — re-stringifying parsed JSON breaks the HMAC.
         const rawBody = await request.text();
         const signature = request.headers.get('x-hub-signature-256');
 
-        // Verify signature (optional in development)
-        if (process.env.NODE_ENV === 'production') {
-            if (!(await verifyWhatsAppSignature(rawBody, signature))) {
-                whatsappLogger.warn('Invalid webhook signature');
+        // Always verify signature unless an operator explicitly opts out.
+        // Use the env flag only for local dev or replay testing — never in prod.
+        const skipSignatureVerification =
+            process.env.WHATSAPP_WEBHOOK_SKIP_SIGNATURE === 'true';
+
+        if (skipSignatureVerification) {
+            whatsappLogger.warn(
+                '⚠️  Webhook signature verification SKIPPED via WHATSAPP_WEBHOOK_SKIP_SIGNATURE=true. ' +
+                    'This is INSECURE and must NEVER be set in production.'
+            );
+        } else {
+            const valid = await verifyWhatsAppSignature(rawBody, signature);
+            if (!valid) {
+                whatsappLogger.warn('Rejected webhook with invalid/missing signature');
                 return new NextResponse('Forbidden', { status: 403 });
             }
         }

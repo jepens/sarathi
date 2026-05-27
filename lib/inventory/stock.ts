@@ -1,4 +1,5 @@
 import { createClient } from '@/lib/supabase/server';
+import type { SupabaseClient } from '@supabase/supabase-js';
 
 /**
  * Stock Management Module
@@ -10,6 +11,7 @@ export interface OrderItem {
     name: string;
     qty: number;
     price?: number;
+    note?: string;
 }
 
 export interface StockValidationResult {
@@ -22,13 +24,150 @@ export interface StockValidationResult {
     message?: string;
 }
 
+export interface PricedItem {
+    product_id: string;
+    name: string;
+    qty: number;
+    price: number;
+    type: 'product' | 'service';
+    note?: string;
+}
+
+export interface RepriceResult {
+    valid: boolean;
+    items?: PricedItem[];
+    total_amount?: number;
+    message?: string;
+    mismatches?: Array<{
+        product_id: string;
+        name: string;
+        llm_price: number;
+        db_price: number;
+    }>;
+}
+
+const PRICE_TOLERANCE_RUPIAH = 1;
+
+/**
+ * Reprice order items against the authoritative DB.
+ *
+ * The AI may emit a `[CREATE_ORDER]` tag containing `price` and `total_amount`.
+ * Trusting those values lets a prompt-injection attacker (or a hallucinating
+ * model) set arbitrary prices. This helper rebuilds every line item from the
+ * `products` table and returns a server-computed total. Any LLM-supplied price
+ * that diverges from the DB by more than PRICE_TOLERANCE_RUPIAH is reported as
+ * a mismatch so it can be logged/monitored.
+ *
+ * Items without a `product_id` are rejected so the AI is forced to ground each
+ * line on a real catalog entry (it has the `check_availability` / `list_products`
+ * tools for that).
+ */
+export async function repriceItems(
+    rawItems: Array<{
+        product_id?: string;
+        name?: string;
+        qty: number;
+        price?: number;
+        note?: string;
+    }>,
+    client?: SupabaseClient
+): Promise<RepriceResult> {
+    if (!Array.isArray(rawItems) || rawItems.length === 0) {
+        return { valid: false, message: 'Pesanan tidak memiliki item.' };
+    }
+
+    const supabase = client || (await createClient());
+    const pricedItems: PricedItem[] = [];
+    const mismatches: NonNullable<RepriceResult['mismatches']> = [];
+
+    for (const raw of rawItems) {
+        if (!raw.product_id || typeof raw.product_id !== 'string') {
+            return {
+                valid: false,
+                message: `Produk "${raw.name ?? 'tidak dikenal'}" tidak memiliki ID. AI harus memilih produk dari katalog yang tersedia.`,
+            };
+        }
+
+        const qty = Number(raw.qty);
+        if (!Number.isInteger(qty) || qty <= 0) {
+            return {
+                valid: false,
+                message: `Jumlah tidak valid untuk "${raw.name ?? raw.product_id}". Harus bilangan bulat > 0.`,
+            };
+        }
+
+        const { data: product, error } = await supabase
+            .from('products')
+            .select('id, name, price, type')
+            .eq('id', raw.product_id)
+            .single();
+
+        if (error || !product) {
+            return {
+                valid: false,
+                message: `Produk dengan ID ${raw.product_id} tidak ditemukan di katalog.`,
+            };
+        }
+
+        const dbPrice = Number(product.price);
+        if (!Number.isFinite(dbPrice) || dbPrice < 0) {
+            return {
+                valid: false,
+                message: `Harga tidak valid untuk produk "${product.name}".`,
+            };
+        }
+
+        if (raw.price !== undefined) {
+            const llmPrice = Number(raw.price);
+            if (
+                Number.isFinite(llmPrice) &&
+                Math.abs(dbPrice - llmPrice) > PRICE_TOLERANCE_RUPIAH
+            ) {
+                mismatches.push({
+                    product_id: product.id,
+                    name: product.name,
+                    llm_price: llmPrice,
+                    db_price: dbPrice,
+                });
+            }
+        }
+
+        pricedItems.push({
+            product_id: product.id,
+            name: product.name,
+            qty,
+            price: dbPrice,
+            type: (product.type === 'service' ? 'service' : 'product'),
+            note: typeof raw.note === 'string' ? raw.note : undefined,
+        });
+    }
+
+    const total_amount = pricedItems.reduce(
+        (sum, item) => sum + item.price * item.qty,
+        0
+    );
+
+    return {
+        valid: true,
+        items: pricedItems,
+        total_amount,
+        mismatches: mismatches.length > 0 ? mismatches : undefined,
+    };
+}
+
 /**
  * Validate if sufficient stock is available for order items
  * Only validates products (type='product'), skips services
+ *
+ * Accepts an optional SupabaseClient so callers (e.g. the webhook flow) can
+ * pass a service-role client and stay consistent with repriceItems.
  */
-export async function validateStock(items: OrderItem[]): Promise<StockValidationResult> {
+export async function validateStock(
+    items: OrderItem[],
+    client?: SupabaseClient
+): Promise<StockValidationResult> {
     try {
-        const supabase = await createClient();
+        const supabase = client || (await createClient());
         const insufficientItems: Array<{ name: string; requested: number; available: number }> = [];
 
         for (const item of items) {

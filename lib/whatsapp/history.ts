@@ -1,9 +1,13 @@
-import { createClient } from '@/lib/supabase/server';
+import { createServiceOrServerClient } from '@/lib/supabase/service';
 import { whatsappLogger } from '@/lib/utils/logger';
 
+// Uses the service-role-or-server helper because this is called from the
+// WhatsApp webhook path (no user session) — without service_role we'd be
+// writing as anon, which no longer has access to whatsapp_chats /
+// whatsapp_messages after the public RLS policies were dropped.
 export async function logSystemMessage(phoneNumber: string, content: string) {
     try {
-        const supabase = await createClient();
+        const supabase = await createServiceOrServerClient();
 
         // Update chat summary
         await supabase
