@@ -1,30 +1,36 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
-import { sendWhatsAppMessage } from '@/lib/whatsapp/client';
+import { sendWhatsAppMessage, describeWhatsAppError, type WhatsAppApiError } from '@/lib/whatsapp/client';
 import { whatsappLogger } from '@/lib/utils/logger';
 
 export async function POST(request: Request) {
+    let phone_number: string | undefined;
+    let message: string | undefined;
+
     try {
-        const { phone_number, message } = await request.json();
+        const body = await request.json();
+        phone_number = body.phone_number;
+        message = body.message;
 
         if (!phone_number || !message) {
-            return new NextResponse('Missing phone_number or message', { status: 400 });
+            return NextResponse.json(
+                { error: 'Missing phone_number or message' },
+                { status: 400 }
+            );
         }
 
-        // Store in database
         const supabase = await createClient();
 
-        // Check authentication
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) {
-            return new NextResponse('Unauthorized', { status: 401 });
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
         }
 
-
-        // Send WhatsApp message
+        // Send via Meta first — if Meta rejects (e.g. past 24h window), we
+        // don't want a phantom assistant message stored locally that the
+        // customer never actually received.
         await sendWhatsAppMessage(phone_number, message);
 
-        // Update chat summary
         const { error: chatError } = await supabase
             .from('whatsapp_chats')
             .upsert({
@@ -36,7 +42,6 @@ export async function POST(request: Request) {
 
         if (chatError) throw chatError;
 
-        // Insert message
         const { error: msgError } = await supabase
             .from('whatsapp_messages')
             .insert({
@@ -52,6 +57,24 @@ export async function POST(request: Request) {
 
     } catch (error) {
         whatsappLogger.error('Error sending admin message', error);
-        return new NextResponse('Internal Server Error', { status: 500 });
+
+        // Meta API errors carry a `code` property — surface it to the UI so
+        // the admin can see exactly why the send failed (24h window, expired
+        // token, rate limit, etc.). Generic 500 hides the actual cause.
+        const apiErr = error as WhatsAppApiError;
+        if (typeof apiErr.code === 'number') {
+            return NextResponse.json(
+                {
+                    error: describeWhatsAppError(apiErr),
+                    code: apiErr.code,
+                    subcode: apiErr.subcode,
+                    fbtrace_id: apiErr.fbtraceId,
+                },
+                { status: 502 }   // 502 Bad Gateway — upstream (Meta) rejected
+            );
+        }
+
+        const msg = error instanceof Error ? error.message : 'Internal Server Error';
+        return NextResponse.json({ error: msg }, { status: 500 });
     }
 }

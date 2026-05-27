@@ -100,13 +100,38 @@ export function ChatWindow({ phoneNumber }: ChatWindowProps) {
                 })
             });
 
-            if (!response.ok) throw new Error('Failed to send message');
+            if (!response.ok) {
+                // Server returns { error, code?, fbtrace_id? } for Meta API
+                // failures (e.g. past 24h window → code 131047). Show the
+                // actual reason so admin knows what to do (resend later,
+                // wait for customer reply, etc.) rather than a generic
+                // "Failed to send message".
+                const payload = (await response
+                    .json()
+                    .catch(() => ({} as { error?: string }))) as {
+                    error?: string;
+                    code?: number;
+                };
+                const reason = payload.error
+                    || `Failed to send (HTTP ${response.status})`;
+                throw new Error(reason);
+            }
 
             setNewMessage('');
+            // Force-refresh the message list immediately so the admin sees
+            // their sent bubble appear. We can't rely on realtime alone
+            // (only just enabled it) and the 10s polling interval feels
+            // unresponsive — admins thought the send had failed.
+            await fetchMessages();
 
         } catch (error) {
             console.error('Error sending message:', error);
-            toast.error('Failed to send message');
+            const msg = error instanceof Error
+                ? error.message
+                : 'Failed to send message';
+            // Long Meta error descriptions wrap nicely in sonner's default
+            // toast; keep it open longer so the admin can read it.
+            toast.error(msg, { duration: 10_000 });
         } finally {
             setSending(false);
         }
