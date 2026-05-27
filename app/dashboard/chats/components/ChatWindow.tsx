@@ -4,9 +4,10 @@ import { useEffect, useState, useRef, useCallback } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Send, MoreVertical, Phone, Video, Check, CheckCheck, AlertCircle } from 'lucide-react';
+import { Send, MoreVertical, Phone, Video, Check, CheckCheck, AlertCircle, FileText } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
+import { SendTemplateDialog } from './SendTemplateDialog';
 
 type MessageStatus = 'sent' | 'delivered' | 'read' | 'failed' | null;
 
@@ -50,6 +51,7 @@ export function ChatWindow({ phoneNumber }: ChatWindowProps) {
     const [newMessage, setNewMessage] = useState('');
     const [sending, setSending] = useState(false);
     const [contactName, setContactName] = useState<string | null>(null);
+    const [templateDialogOpen, setTemplateDialogOpen] = useState(false);
     const scrollRef = useRef<HTMLDivElement>(null);
     const supabase = createClient();
 
@@ -263,6 +265,17 @@ export function ChatWindow({ phoneNumber }: ChatWindowProps) {
             </div>
 
             <div className="p-3 bg-[#f0f2f5] flex items-center gap-2 flex-shrink-0">
+                <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
+                    onClick={() => setTemplateDialogOpen(true)}
+                    title="Kirim template message (re-engage di luar 24-jam window)"
+                    aria-label="Send template message"
+                    className="h-12 w-12 rounded-lg shrink-0 text-[#54656f] hover:text-[#111b21] hover:bg-[#e5e7eb]"
+                >
+                    <FileText className="h-5 w-5" />
+                </Button>
                 <form
                     onSubmit={(e) => { e.preventDefault(); handleSend(); }}
                     className="flex gap-2 w-full"
@@ -287,6 +300,13 @@ export function ChatWindow({ phoneNumber }: ChatWindowProps) {
                     </Button>
                 </form>
             </div>
+
+            <SendTemplateDialog
+                open={templateDialogOpen}
+                onOpenChange={setTemplateDialogOpen}
+                phoneNumber={phoneNumber}
+                onSent={fetchMessages}
+            />
         </div>
     );
 }

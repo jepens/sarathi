@@ -13,7 +13,7 @@ export interface WhatsAppApiError extends Error {
     httpStatus?: number;  // HTTP status code from Graph API
 }
 
-function makeWhatsAppApiError(payload: unknown, httpStatus: number): WhatsAppApiError {
+export function makeWhatsAppApiError(payload: unknown, httpStatus: number): WhatsAppApiError {
     // Safe-walk the Meta error shape:
     //   { error: { code, error_subcode, message, error_data: { details },
     //              error_user_title, error_user_msg, fbtrace_id } }

@@ -141,6 +141,19 @@ export async function getWhatsAppAppSecret(): Promise<string | null> {
 }
 
 /**
+ * Get WhatsApp Business Account ID (WABA) from env. Required for the
+ * template-message API (listing approved templates + sending re-engagement
+ * messages outside the 24-hour customer service window).
+ */
+export async function getWhatsAppBusinessAccountId(): Promise<string> {
+    const wabaId = process.env.WHATSAPP_BUSINESS_ACCOUNT_ID;
+    if (!wabaId) {
+        throw new Error('WhatsApp Business Account ID not configured in .env (WHATSAPP_BUSINESS_ACCOUNT_ID)');
+    }
+    return wabaId;
+}
+
+/**
  * Get OpenAI API Key from env
  */
 export async function getOpenAIApiKey(): Promise<string> {
