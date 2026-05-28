@@ -34,6 +34,66 @@ async function resolveContactKey(
     return from;
 }
 
+// A real phone number is all digits, 8-15 long (E.164 without the +). A BSUID
+// (e.g. "ID.26557548613939612") or username fails this, so we use it to tell
+// "Meta gave us a real phone" apart from "Meta gave us an identifier".
+function looksLikePhone(value: unknown): value is string {
+    return typeof value === 'string' && /^[0-9]{8,15}$/.test(value);
+}
+
+// Phase B — user_id_update. Meta fires this when a customer changes their
+// phone number: the BSUID regenerates and we get the old + new IDs. We move
+// our stored bsuid from old → new so the next inbound message still resolves
+// to the same contact (phone_number PK stays put — no re-key).
+//
+// The exact payload shape isn't fully documented during the 2026 rollout, so
+// we parse defensively across the likely field names and log the raw value
+// when we can't find a pair.
+async function handleUserIdUpdate(
+    supabase: SupabaseClient,
+    value: Record<string, unknown>
+): Promise<void> {
+    // Candidate containers: value.user_id_updates[] (most likely) or a single
+    // object on the value itself.
+    const updates: Array<Record<string, unknown>> = [];
+    if (Array.isArray(value.user_id_updates)) {
+        for (const u of value.user_id_updates) {
+            if (u && typeof u === 'object') updates.push(u as Record<string, unknown>);
+        }
+    } else {
+        updates.push(value);
+    }
+
+    const pick = (o: Record<string, unknown>, keys: string[]): string | null => {
+        for (const k of keys) {
+            const v = o[k];
+            if (typeof v === 'string' && v.length > 0) return v;
+        }
+        return null;
+    };
+
+    for (const u of updates) {
+        const oldId = pick(u, ['old_user_id', 'previous_user_id', 'old_wa_id', 'previous_wa_id']);
+        const newId = pick(u, ['new_user_id', 'current_user_id', 'new_wa_id', 'current_wa_id']);
+        if (!oldId || !newId) {
+            whatsappLogger.warn(`user_id_update: could not parse old/new id from ${JSON.stringify(u)}`);
+            continue;
+        }
+
+        const { data, error } = await supabase
+            .from('whatsapp_chats')
+            .update({ bsuid: newId, updated_at: new Date().toISOString() })
+            .eq('bsuid', oldId)
+            .select('phone_number');
+
+        if (error) {
+            whatsappLogger.error(`user_id_update: failed to move bsuid ${oldId}→${newId}`, error);
+        } else {
+            whatsappLogger.info(`user_id_update: moved bsuid ${oldId}→${newId} for ${data?.length ?? 0} contact(s)`);
+        }
+    }
+}
+
 export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const mode = searchParams.get('hub.mode');
@@ -97,10 +157,26 @@ export async function POST(request: Request) {
             const MUDIK_WEBHOOK_URL = 'https://mudik.buildwithabdul.com/api/webhook/whatsapp';
 
             // Extract metadata for routing
-            const metadata = body.entry?.[0]?.changes?.[0]?.value?.metadata;
+            const change = body.entry?.[0]?.changes?.[0];
+            const metadata = change?.value?.metadata;
             const phoneNumberId = metadata?.phone_number_id;
 
             whatsappLogger.info(`Webhook from phone_number_id: ${phoneNumberId}`);
+
+            // ========== HANDLE user_id_update (Phase B) ==========
+            // Fires when a customer changes their phone number → BSUID
+            // regenerates. We move our stored bsuid old→new so the contact
+            // stays linked. Detect by the change field name or a
+            // user_id_update(s) key on the value.
+            const changeValue = (change?.value ?? {}) as Record<string, unknown>;
+            const isUserIdUpdate =
+                change?.field === 'user_id_update' ||
+                'user_id_updates' in changeValue ||
+                'user_id_update' in changeValue;
+            if (isUserIdUpdate) {
+                await handleUserIdUpdate(supabase, changeValue);
+                return new NextResponse('EVENT_RECEIVED', { status: 200 });
+            }
 
             // ========== HANDLE STATUS CALLBACKS ==========
             const statuses = body.entry?.[0]?.changes?.[0]?.value?.statuses;
@@ -214,11 +290,48 @@ export async function POST(request: Request) {
                 const bsuid: string | null =
                     value.contacts?.[0]?.user_id ?? message.from_user_id ?? null;
 
+                // Phase C — best-known real phone. Whenever Meta hands us a
+                // wa_id (or `from` is itself a phone), record it as
+                // verified_phone so we can still reach a contact whose PK is a
+                // BSUID. null when we only got an identifier.
+                const waId: string | null =
+                    (looksLikePhone(value.contacts?.[0]?.wa_id) && value.contacts[0].wa_id) ||
+                    (looksLikePhone(from) && from) ||
+                    null;
+
                 // Canonical CRM key — reuse an existing contact's phone_number
                 // when we recognise the BSUID; otherwise use `from`.
                 const contactKey = await resolveContactKey(supabase, from, bsuid);
 
                 whatsappLogger.info(`Message details - From: ${from}, BSUID: ${bsuid ?? 'none'}, Key: ${contactKey}, Type: ${messageType}`);
+
+                // ===== Phase C: explicit contact share (REQUEST_CONTACT_INFO) =====
+                // When a customer taps the REQUEST_CONTACT_INFO button (or sends
+                // a contact card), Meta delivers a `contacts`-type message with
+                // the shared phone. Capture it into verified_phone and stop —
+                // no AI reply needed for a contact share.
+                if (messageType === 'contacts') {
+                    const shared = Array.isArray(message.contacts) ? message.contacts[0] : null;
+                    const phones = shared && Array.isArray(shared.phones) ? shared.phones : [];
+                    let sharedPhone: string | null = null;
+                    for (const p of phones) {
+                        if (looksLikePhone(p?.wa_id)) { sharedPhone = p.wa_id; break; }
+                        const digits = typeof p?.phone === 'string' ? p.phone.replace(/\D+/g, '') : '';
+                        if (looksLikePhone(digits)) { sharedPhone = digits; break; }
+                    }
+                    const recovered = sharedPhone ?? waId;
+                    if (recovered) {
+                        const nowIso = new Date().toISOString();
+                        const patch: Record<string, unknown> = { verified_phone: recovered, updated_at: nowIso };
+                        if (bsuid) patch.bsuid = bsuid;
+                        await supabase.from('whatsapp_chats').update(patch).eq('phone_number', contactKey);
+                        await logSystemMessage(contactKey, `Customer shared contact info — phone tersimpan: ${recovered}`);
+                        whatsappLogger.info(`Contact share captured for ${contactKey}: ${recovered}`);
+                    } else {
+                        whatsappLogger.warn(`Contact share from ${contactKey} had no usable phone`);
+                    }
+                    return new NextResponse('EVENT_RECEIVED', { status: 200 });
+                }
 
                 if (messageType === 'text') {
                     const messageBody = message.text.body;
@@ -261,6 +374,9 @@ export async function POST(request: Request) {
                                 updated_at: inboundNow,
                             };
                             if (bsuid) chatPatch.bsuid = bsuid;
+                            // Catch-all phone recovery: if Meta revealed a real
+                            // phone on this webhook, keep it as verified_phone.
+                            if (waId) chatPatch.verified_phone = waId;
                             const { error: chatError } = await supabase
                                 .from('whatsapp_chats')
                                 .upsert(chatPatch, { onConflict: 'phone_number' });
