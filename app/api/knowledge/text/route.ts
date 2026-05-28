@@ -72,6 +72,20 @@ export async function POST(request: Request) {
         );
     }
 
+    // Embed ALL chunks BEFORE any destructive write. If embedding fails we
+    // return without having touched kb_sources or deleted the old chunks, so
+    // the previously-saved version stays intact (no partial/corrupt state).
+    const chunks = chunkText(content);
+    const embeddings: number[][] = [];
+    for (let i = 0; i < chunks.length; i++) {
+        try {
+            embeddings.push(await generateEmbedding(chunks[i]));
+        } catch (e) {
+            console.error('Embedding failed for chunk', i, e);
+            return NextResponse.json({ error: 'Gagal membuat embedding' }, { status: 500 });
+        }
+    }
+
     // 1. Upsert the canonical editable source.
     const { error: upsertErr } = await supabase
         .from('kb_sources')
@@ -80,7 +94,8 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: `Gagal menyimpan sumber: ${upsertErr.message}` }, { status: 500 });
     }
 
-    // 2. Replace derived chunks: remove old ones for this title, then re-embed.
+    // 2. Replace derived chunks: remove old ones for this title, then insert
+    //    the freshly-embedded set in one batch.
     const { error: delErr } = await supabase
         .from('documents')
         .delete()
@@ -89,32 +104,24 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: `Gagal membersihkan chunk lama: ${delErr.message}` }, { status: 500 });
     }
 
-    const chunks = chunkText(content);
     const nowIso = new Date().toISOString();
-    for (let i = 0; i < chunks.length; i++) {
-        let embedding;
-        try {
-            embedding = await generateEmbedding(chunks[i]);
-        } catch (e) {
-            console.error('Embedding failed for chunk', i, e);
-            return NextResponse.json({ error: 'Gagal membuat embedding' }, { status: 500 });
-        }
-        const { error: insErr } = await supabase.from('documents').insert({
-            content: chunks[i],
-            metadata: {
-                file_name: title,
-                source: title,
-                file_type: FILE_TYPE,
-                origin: 'editor',
-                chunk_index: i,
-                created_at: nowIso,
-            },
-            embedding,
-        });
-        if (insErr) {
-            console.error('Insert chunk failed', insErr);
-            return NextResponse.json({ error: `Gagal menyimpan chunk: ${insErr.message}` }, { status: 500 });
-        }
+    const rows = chunks.map((chunk, i) => ({
+        content: chunk,
+        metadata: {
+            file_name: title,
+            source: title,
+            file_type: FILE_TYPE,
+            origin: 'editor',
+            chunk_index: i,
+            created_at: nowIso,
+        },
+        embedding: embeddings[i],
+    }));
+
+    const { error: insErr } = await supabase.from('documents').insert(rows);
+    if (insErr) {
+        console.error('Insert chunks failed', insErr);
+        return NextResponse.json({ error: `Gagal menyimpan chunk: ${insErr.message}` }, { status: 500 });
     }
 
     return NextResponse.json({ ok: true, title, chunks: chunks.length });
