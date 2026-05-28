@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { Input } from '@/components/ui/input';
-import { Search } from 'lucide-react';
+import { Search, Clock } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface Chat {
@@ -11,7 +11,18 @@ interface Chat {
     contact_name: string | null;
     last_message: string;
     last_message_at: string;
+    last_inbound_at: string | null;
     unread_count: number;
+}
+
+const WINDOW_MS = 24 * 60 * 60 * 1000; // Meta 24-hour customer service window
+
+// Returns true when free-form replies are blocked by Meta — i.e. the customer
+// either never messaged us (no window ever opened) or last replied >24h ago.
+// In both cases the admin must use a template message (code 131047).
+function isWindowExpired(lastInboundAt: string | null): boolean {
+    if (!lastInboundAt) return true;
+    return Date.now() - new Date(lastInboundAt).getTime() > WINDOW_MS;
 }
 
 interface ChatListProps {
@@ -125,9 +136,20 @@ export function ChatList({ selectedPhone, onSelect }: ChatListProps) {
                                             {formatTime(chat.last_message_at)}
                                         </span>
                                     </div>
-                                    <p className="text-[13px] text-[#667781] truncate pr-2 leading-5">
-                                        {chat.last_message}
-                                    </p>
+                                    <div className="flex items-center justify-between gap-2">
+                                        <p className="text-[13px] text-[#667781] truncate leading-5">
+                                            {chat.last_message}
+                                        </p>
+                                        {isWindowExpired(chat.last_inbound_at) && (
+                                            <span
+                                                title="Lebih dari 24 jam sejak pesan terakhir customer. Balasan biasa akan ditolak Meta (kode 131047) — pakai template message."
+                                                className="shrink-0 inline-flex items-center gap-1 rounded-full bg-amber-100 text-amber-800 border border-amber-300 px-1.5 py-0.5 text-[10px] font-medium leading-none"
+                                            >
+                                                <Clock className="h-2.5 w-2.5" />
+                                                Perlu template
+                                            </span>
+                                        )}
+                                    </div>
                                 </div>
                             </button>
                         ))}

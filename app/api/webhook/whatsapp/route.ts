@@ -192,14 +192,20 @@ export async function POST(request: Request) {
                     // Store in chat history (Async - don't await to speed up webhook response)
                     (async () => {
                         try {
-                            // Update chat summary
+                            // Update chat summary. last_inbound_at is set here
+                            // (and ONLY here, on the inbound path) because the
+                            // 24-hour customer service window resets every time
+                            // the customer messages us. Outbound sends must not
+                            // touch it.
+                            const inboundNow = new Date().toISOString();
                             const { error: chatError } = await supabase
                                 .from('whatsapp_chats')
                                 .upsert({
                                     phone_number: from,
                                     last_message: messageBody,
-                                    last_message_at: new Date().toISOString(),
-                                    updated_at: new Date().toISOString()
+                                    last_message_at: inboundNow,
+                                    last_inbound_at: inboundNow,
+                                    updated_at: inboundNow
                                 }, { onConflict: 'phone_number' });
 
                             if (chatError) {
