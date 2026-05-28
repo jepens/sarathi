@@ -322,9 +322,18 @@ export async function POST(request: Request) {
                     const recovered = sharedPhone ?? waId;
                     if (recovered) {
                         const nowIso = new Date().toISOString();
-                        const patch: Record<string, unknown> = { verified_phone: recovered, updated_at: nowIso };
+                        // Upsert (not update): a contact-share could theoretically
+                        // be the first event we see for this key, and we don't
+                        // want to silently drop the recovered phone.
+                        const patch: Record<string, unknown> = {
+                            phone_number: contactKey,
+                            verified_phone: recovered,
+                            updated_at: nowIso,
+                        };
                         if (bsuid) patch.bsuid = bsuid;
-                        await supabase.from('whatsapp_chats').update(patch).eq('phone_number', contactKey);
+                        await supabase
+                            .from('whatsapp_chats')
+                            .upsert(patch, { onConflict: 'phone_number' });
                         await logSystemMessage(contactKey, `Customer shared contact info — phone tersimpan: ${recovered}`);
                         whatsappLogger.info(`Contact share captured for ${contactKey}: ${recovered}`);
                     } else {

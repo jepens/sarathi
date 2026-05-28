@@ -84,7 +84,10 @@ export function ChatWindow({ phoneNumber }: ChatWindowProps) {
     useEffect(() => {
         fetchMessages();
 
-        // Subscribe to real-time changes
+        // Subscribe to real-time changes. INSERT = new message; UPDATE =
+        // delivery-status change (sent → delivered → read, or failed) pushed
+        // by the webhook status-callback handler. Without the UPDATE branch a
+        // failed bubble would only turn red on the next 10s poll.
         const channel = supabase
             .channel(`whatsapp_messages:${phoneNumber}`)
             .on('postgres_changes', {
@@ -93,7 +96,23 @@ export function ChatWindow({ phoneNumber }: ChatWindowProps) {
                 table: 'whatsapp_messages',
                 filter: `phone_number=eq.${phoneNumber}`
             }, (payload) => {
-                setMessages(prev => [...prev, payload.new as Message]);
+                const incoming = payload.new as Message;
+                // Dedup: handleSend() also calls fetchMessages() right after a
+                // successful send, so the row may already be present.
+                setMessages(prev =>
+                    prev.some(m => m.id === incoming.id) ? prev : [...prev, incoming]
+                );
+            })
+            .on('postgres_changes', {
+                event: 'UPDATE',
+                schema: 'public',
+                table: 'whatsapp_messages',
+                filter: `phone_number=eq.${phoneNumber}`
+            }, (payload) => {
+                const updated = payload.new as Message;
+                setMessages(prev =>
+                    prev.map(m => (m.id === updated.id ? updated : m))
+                );
             })
             .subscribe();
 
