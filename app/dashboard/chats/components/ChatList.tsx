@@ -3,12 +3,14 @@
 import { useEffect, useState, useCallback } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { Input } from '@/components/ui/input';
-import { Search, Clock } from 'lucide-react';
+import { Search, Clock, Store } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { ContactTypeBadge } from '@/components/dashboard/ContactTypeBadge';
 
 interface Chat {
     phone_number: string;
     contact_name: string | null;
+    contact_type: string | null;
     last_message: string;
     last_message_at: string;
     last_inbound_at: string | null;
@@ -123,16 +125,23 @@ export function ChatList({ selectedPhone, onSelect }: ChatListProps) {
                                 )}
                             >
                                 <div className="h-12 w-12 rounded-full bg-[#dfe5e7] flex items-center justify-center shrink-0">
-                                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-7 h-7 text-[#8696a0]">
-                                        <path fillRule="evenodd" d="M7.5 6a4.5 4.5 0 119 0 4.5 4.5 0 01-9 0zM3.751 20.105a8.25 8.25 0 0116.498 0 .75.75 0 01-.437.695A18.683 18.683 0 0112 22.5c-2.786 0-5.433-.608-7.812-1.7a.75.75 0 01-.437-.695z" clipRule="evenodd" />
-                                    </svg>
+                                    {chat.contact_type === 'vendor' ? (
+                                        <Store className="w-6 h-6 text-orange-500" />
+                                    ) : (
+                                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-7 h-7 text-[#8696a0]">
+                                            <path fillRule="evenodd" d="M7.5 6a4.5 4.5 0 119 0 4.5 4.5 0 01-9 0zM3.751 20.105a8.25 8.25 0 0116.498 0 .75.75 0 01-.437.695A18.683 18.683 0 0112 22.5c-2.786 0-5.433-.608-7.812-1.7a.75.75 0 01-.437-.695z" clipRule="evenodd" />
+                                        </svg>
+                                    )}
                                 </div>
                                 <div className="flex-1 min-w-0">
-                                    <div className="flex justify-between items-baseline mb-1">
-                                        <span className="font-medium text-[15px] text-[#111b21] truncate">
-                                            {chat.contact_name || chat.phone_number}
+                                    <div className="flex justify-between items-center mb-1 gap-2">
+                                        <span className="flex items-center gap-1.5 min-w-0">
+                                            <span className="font-medium text-[15px] text-[#111b21] truncate min-w-0">
+                                                {chat.contact_name || chat.phone_number}
+                                            </span>
+                                            <ContactTypeBadge type={chat.contact_type} className="shrink-0" />
                                         </span>
-                                        <span className="text-[12px] text-[#667781] shrink-0 ml-2">
+                                        <span className="text-[12px] text-[#667781] shrink-0">
                                             {formatTime(chat.last_message_at)}
                                         </span>
                                     </div>

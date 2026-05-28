@@ -50,10 +50,13 @@ export async function GET() {
     // (or the same table with different filters) so there's no ordering need.
     const [stageRowsRes, leadsThisMonthRes, upcomingEventsRes, revenueRowsRes] =
         await Promise.all([
-            supabase.from('whatsapp_chats').select('lead_stage'),
+            // Lead KPIs count only actual client leads — vendors / "other"
+            // (spam, internal) are classified out via contact_type (0017).
+            supabase.from('whatsapp_chats').select('lead_stage').eq('contact_type', 'lead'),
             supabase
                 .from('whatsapp_chats')
                 .select('phone_number', { count: 'exact', head: true })
+                .eq('contact_type', 'lead')
                 .gte('created_at', startOfMonth),
             supabase
                 .from('orders')

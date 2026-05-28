@@ -26,6 +26,9 @@ export async function GET(request: Request) {
     let query = supabase
         .from('whatsapp_chats')
         .select(LEAD_FIELDS)
+        // Only actual client leads belong in the funnel — vendors and "other"
+        // (spam / internal) are classified out (contact_type, migration 0017).
+        .eq('contact_type', 'lead')
         .order('last_message_at', { ascending: false });
 
     if (stage) {

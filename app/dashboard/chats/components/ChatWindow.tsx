@@ -4,10 +4,11 @@ import { useEffect, useState, useRef, useCallback } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Send, MoreVertical, Phone, Video, Check, CheckCheck, AlertCircle, FileText } from 'lucide-react';
+import { Send, MoreVertical, Phone, Video, Check, CheckCheck, AlertCircle, FileText, Store } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { SendTemplateDialog } from './SendTemplateDialog';
+import { ContactTypeBadge } from '@/components/dashboard/ContactTypeBadge';
 
 type MessageStatus = 'sent' | 'delivered' | 'read' | 'failed' | null;
 
@@ -51,6 +52,7 @@ export function ChatWindow({ phoneNumber }: ChatWindowProps) {
     const [newMessage, setNewMessage] = useState('');
     const [sending, setSending] = useState(false);
     const [contactName, setContactName] = useState<string | null>(null);
+    const [contactType, setContactType] = useState<string | null>(null);
     const [templateDialogOpen, setTemplateDialogOpen] = useState(false);
     const scrollRef = useRef<HTMLDivElement>(null);
     const supabase = createClient();
@@ -59,12 +61,13 @@ export function ChatWindow({ phoneNumber }: ChatWindowProps) {
         // Fetch contact info
         const { data: contactData } = await supabase
             .from('whatsapp_chats')
-            .select('contact_name')
+            .select('contact_name, contact_type')
             .eq('phone_number', phoneNumber)
             .single();
 
         if (contactData) {
             setContactName(contactData.contact_name);
+            setContactType(contactData.contact_type);
         }
 
         const { data, error } = await supabase
@@ -113,6 +116,18 @@ export function ChatWindow({ phoneNumber }: ChatWindowProps) {
                 setMessages(prev =>
                     prev.map(m => (m.id === updated.id ? updated : m))
                 );
+            })
+            // Contact row changes (rename, or klien/vendor re-classification from
+            // the Contacts page) — keep the header name + badge live.
+            .on('postgres_changes', {
+                event: 'UPDATE',
+                schema: 'public',
+                table: 'whatsapp_chats',
+                filter: `phone_number=eq.${phoneNumber}`
+            }, (payload) => {
+                const row = payload.new as { contact_name: string | null; contact_type: string | null };
+                setContactName(row.contact_name);
+                setContactType(row.contact_type);
             })
             .subscribe();
 
@@ -196,12 +211,19 @@ export function ChatWindow({ phoneNumber }: ChatWindowProps) {
             <div className="p-3 border-b flex justify-between items-center bg-[#f0f2f5] shadow-sm flex-shrink-0">
                 <div className="flex items-center gap-3">
                     <div className="h-10 w-10 rounded-full bg-[#dfe5e7] flex items-center justify-center">
-                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6 text-[#8696a0]">
-                            <path fillRule="evenodd" d="M7.5 6a4.5 4.5 0 119 0 4.5 4.5 0 01-9 0zM3.751 20.105a8.25 8.25 0 0116.498 0 .75.75 0 01-.437.695A18.683 18.683 0 0112 22.5c-2.786 0-5.433-.608-7.812-1.7a.75.75 0 01-.437-.695z" clipRule="evenodd" />
-                        </svg>
+                        {contactType === 'vendor' ? (
+                            <Store className="w-5 h-5 text-orange-500" />
+                        ) : (
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6 text-[#8696a0]">
+                                <path fillRule="evenodd" d="M7.5 6a4.5 4.5 0 119 0 4.5 4.5 0 01-9 0zM3.751 20.105a8.25 8.25 0 0116.498 0 .75.75 0 01-.437.695A18.683 18.683 0 0112 22.5c-2.786 0-5.433-.608-7.812-1.7a.75.75 0 01-.437-.695z" clipRule="evenodd" />
+                            </svg>
+                        )}
                     </div>
                     <div>
-                        <h2 className="font-semibold text-sm text-[#111b21]">{contactName || phoneNumber}</h2>
+                        <h2 className="font-semibold text-sm text-[#111b21] flex items-center gap-2">
+                            {contactName || phoneNumber}
+                            <ContactTypeBadge type={contactType} />
+                        </h2>
                         <p className="text-xs text-[#667781]">Online</p>
                     </div>
                 </div>

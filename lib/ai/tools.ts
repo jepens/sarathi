@@ -108,17 +108,17 @@ export const stockTools: ChatCompletionTool[] = [
         function: {
             name: 'save_lead_info',
             description:
-                'Save or update structured lead/contact details whenever the customer reveals them in conversation — their name, email, event interest, participant count, location, preferred date, goals, or budget. Idempotent: safe to call repeatedly with partial info; the server only updates the fields you provide and leaves the rest untouched. Call this AS SOON AS each piece of info appears — do not batch or wait until the end of the conversation.',
+                'Save or update structured contact details whenever they are revealed in conversation — name, email, event interest, participant count, location, preferred date, goals, budget, AND whether this contact is a client lead or a vendor (contact_type). Idempotent: safe to call repeatedly with partial info; the server only updates the fields you provide and leaves the rest untouched. Call this AS SOON AS each piece of info appears — do not batch or wait until the end of the conversation.',
             parameters: {
                 type: 'object',
                 properties: {
                     name: {
                         type: ['string', 'null'],
-                        description: 'Customer first name or full name as they introduced themselves.',
+                        description: 'Customer first/full name as they introduced themselves. A bare honorific or greeting ("kak", "kakak", "pak", "bu", "mas", "mbak") is NOT a name — pass null until they give a real name.',
                     },
                     email: {
                         type: ['string', 'null'],
-                        description: 'Customer email address (must look like a valid email).',
+                        description: "Customer's OWN email address (must look valid). NEVER pass Sailendra's own address info@sailendra.co.id — that is the company address Nindra hands to vendors, not the customer's.",
                     },
                     event_interest: {
                         type: ['string', 'null'],
@@ -152,11 +152,27 @@ export const stockTools: ChatCompletionTool[] = [
                         type: ['string', 'null'],
                         description: 'Free-form note worth remembering for follow-up — preferences, constraints, special requests.',
                     },
+                    contact_type: {
+                        type: ['string', 'null'],
+                        description:
+                            'Who is this contact? "lead" = a prospective CLIENT wanting an event. "vendor" = a supplier/sales pitching THEIR services to Sailendra (catering, transport, souvenirs, partnership offers, etc.). "other" = neither (spam, wrong number, generic inquiry). Set this as soon as it is clear; pass null if still unsure.',
+                    },
+                    vendor_category: {
+                        type: ['string', 'null'],
+                        description:
+                            'ONLY when contact_type="vendor": the supplier category. One of: "catering", "venue", "transport", "entertainment", "photography", "decoration", "mc", "other". Pass null if not a vendor or category unclear.',
+                    },
+                    vendor_offering: {
+                        type: ['string', 'null'],
+                        description:
+                            'ONLY when contact_type="vendor": short description of what they offer — e.g. "standby ambulance", "souvenir keramik ekspor", "seragam konveksi". Pass null otherwise.',
+                    },
                 },
                 required: [
                     'name', 'email', 'event_interest', 'participant_count',
                     'location_pref', 'event_date_pref', 'event_goals',
                     'budget_range', 'source', 'notes',
+                    'contact_type', 'vendor_category', 'vendor_offering',
                 ],
                 additionalProperties: false,
             },
@@ -294,7 +310,82 @@ export interface SaveLeadInfoArgs {
     budget_range?: string | null;
     source?: string | null;
     notes?: string | null;
+    contact_type?: string | null;
+    vendor_category?: string | null;
+    vendor_offering?: string | null;
 }
+
+// --- Lead-field sanitisers (defense-in-depth) --------------------------------
+// The model occasionally mis-attributes Sailendra's OWN contact details to the
+// customer — most commonly the email info@sailendra.co.id (the address Nindra
+// hands to vendors) — or treats a greeting like "kak"/"pak" as a name. These
+// run server-side so a bad save_lead_info call can never write that junk,
+// regardless of what the model passes. (Same guardrails as the history
+// backfill in scripts/backfill-contacts.mjs.)
+
+// Tokens the model sometimes emits instead of leaving a field null.
+const LEAD_JUNK_STRINGS = new Set([
+    'null', 'undefined', 'tidak ada', 'tidak disebutkan', 'tidak diketahui',
+    'n/a', 'na', '-', '—', 'unknown', 'none',
+]);
+// Single-word honorifics — greetings, not names.
+const NAME_HONORIFICS = new Set([
+    'kak', 'kakak', 'kk', 'pak', 'bapak', 'bu', 'ibu', 'mas', 'mbak',
+    'sis', 'bro', 'mister', 'mr', 'mrs', 'ms',
+]);
+
+function cleanLeadStr(v: unknown): string | null {
+    if (typeof v !== 'string') return null;
+    const t = v.trim();
+    if (!t) return null;
+    if (LEAD_JUNK_STRINGS.has(t.toLowerCase())) return null;
+    return t;
+}
+
+function cleanLeadName(v: unknown): string | null {
+    const n = cleanLeadStr(v);
+    if (!n) return null;
+    if (n.length < 2) return null; // reject single letters like "P"
+    if (NAME_HONORIFICS.has(n.toLowerCase())) return null;
+    return n;
+}
+
+function cleanLeadEmail(v: unknown): string | null {
+    const e = cleanLeadStr(v);
+    if (!e) return null;
+    const low = e.toLowerCase();
+    if (low.endsWith('@sailendra.co.id')) return null; // company's own address
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(low)) return null; // basic shape
+    return e;
+}
+
+// Contact classification + vendor category. Kept in sync with the CHECK
+// constraints on whatsapp_chats (migration 0017) and public.vendors.category.
+const CONTACT_TYPES = new Set(['lead', 'vendor', 'other']);
+const VENDOR_CATEGORIES = new Set([
+    'catering', 'venue', 'transport', 'entertainment',
+    'photography', 'decoration', 'mc', 'other',
+]);
+
+function cleanContactType(v: unknown): 'lead' | 'vendor' | 'other' | null {
+    const t = cleanLeadStr(v);
+    if (!t) return null;
+    const low = t.toLowerCase();
+    return CONTACT_TYPES.has(low) ? (low as 'lead' | 'vendor' | 'other') : null;
+}
+
+function cleanVendorCategory(v: unknown): string | null {
+    const t = cleanLeadStr(v);
+    if (!t) return null;
+    const low = t.toLowerCase();
+    return VENDOR_CATEGORIES.has(low) ? low : null;
+}
+
+// Internal Sailendra staff numbers — never recorded as a customer lead/vendor.
+const INTERNAL_NUMBERS = new Set([
+    '6281281958110', // MJ / Mang Jajang (Lead Consultant)
+]);
+const normalizePhone = (p: string) => (p ?? '').replace(/\D/g, '');
 
 /**
  * Persist whatever lead fields the AI extracted from the conversation.
@@ -313,29 +404,74 @@ export async function saveLeadInfo(
     args: SaveLeadInfoArgs
 ): Promise<string> {
     try {
+        // Internal staff (e.g. MJ) are not customers — skip lead capture so we
+        // never tag their own number as a lead/vendor.
+        if (INTERNAL_NUMBERS.has(normalizePhone(phoneNumber))) {
+            return JSON.stringify({ ok: true, updated: 0, note: 'internal number — lead capture skipped' });
+        }
+
         // service-role-or-server: called from WhatsApp webhook context (no
         // user cookies) — anon role can no longer touch whatsapp_chats.
         const supabase = await createServiceOrServerClient();
 
         const patch: Record<string, unknown> = {};
-        const clean = (v: unknown) =>
-            typeof v === 'string' ? v.trim() : v;
 
         const maybeSet = (key: string, value: unknown) => {
-            const v = clean(value);
-            if (v === null || v === undefined) return;
-            if (typeof v === 'string' && v === '') return;
+            const v = cleanLeadStr(value);
+            if (v === null) return;
             patch[key] = v;
         };
 
-        // contact_name is the legacy column the Contacts UI reads — keep it
-        // in sync with the new lead-shaped `name` field.
-        if (args.name && args.name.trim()) {
-            patch.contact_name = args.name.trim();
+        const cleanedName = cleanLeadName(args.name);
+        const incomingType = cleanContactType(args.contact_type);
+
+        // Single read of the existing row when we need its current state:
+        //  - contact_name_locked → don't let the AI clobber a manual name.
+        //  - contact_type        → don't let the AI downgrade a vendor/other
+        //                          classification back to "lead".
+        let existing: { contact_name_locked?: boolean; contact_type?: string | null } | null = null;
+        if (cleanedName || incomingType) {
+            const { data } = await supabase
+                .from('whatsapp_chats')
+                .select('contact_name_locked, contact_type')
+                .eq('phone_number', phoneNumber)
+                .maybeSingle();
+            existing = data;
         }
-        maybeSet('email', args.email);
+
+        // contact_name — honorific/junk filtered (cleanLeadName) + lock check.
+        if (cleanedName && !existing?.contact_name_locked) {
+            patch.contact_name = cleanedName;
+        }
+
+        // contact_type — apply vendor/other freely; only set "lead" when the
+        // row isn't already classified, so the AI can't flip a vendor back.
+        if (incomingType) {
+            const current = existing?.contact_type ?? 'lead';
+            if (incomingType !== 'lead' || current === 'lead') {
+                patch.contact_type = incomingType;
+            }
+        }
+
+        // email: reject Sailendra's own address + malformed values.
+        const cleanedEmail = cleanLeadEmail(args.email);
+        if (cleanedEmail) patch.email = cleanedEmail;
+
+        // vendor detail (only meaningful when contact_type = "vendor").
+        const cleanedVendorCategory = cleanVendorCategory(args.vendor_category);
+        if (cleanedVendorCategory) patch.vendor_category = cleanedVendorCategory;
+        maybeSet('vendor_offering', args.vendor_offering);
+
+        // participant_count: keep only a positive integer.
+        if (
+            typeof args.participant_count === 'number' &&
+            Number.isFinite(args.participant_count) &&
+            args.participant_count > 0
+        ) {
+            patch.participant_count = Math.round(args.participant_count);
+        }
+
         maybeSet('event_interest', args.event_interest);
-        maybeSet('participant_count', args.participant_count);
         maybeSet('location_pref', args.location_pref);
         maybeSet('event_date_pref', args.event_date_pref);
         maybeSet('event_goals', args.event_goals);

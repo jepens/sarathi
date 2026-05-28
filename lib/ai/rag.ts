@@ -29,7 +29,7 @@ interface Document {
     id: string;
     content: string;
     metadata: {
-        filename?: string;
+        file_name?: string;
         source?: string;
         [key: string]: unknown;
     };
@@ -329,7 +329,7 @@ export async function generateRAGResponse(
         if (typedDocuments && typedDocuments.length > 0) {
             contextText += "--- INFORMASI DOKUMEN ---\n";
             contextText += typedDocuments.map((doc) => {
-                const source = doc.metadata?.filename || doc.metadata?.source || 'Unknown';
+                const source = doc.metadata?.file_name || doc.metadata?.source || 'Unknown';
                 return `Sumber: ${source}\nKonten: ${doc.content}`;
             }).join('\n\n');
         }
@@ -357,6 +357,21 @@ save_lead_info with the new field(s):
   • Budget indication → budget_range
   • Channel they came from, if mentioned → source
   • Any other useful detail for follow-up → notes
+
+CONTACT TYPE (classify every conversation):
+Also set contact_type via save_lead_info as soon as it is clear who you are
+talking to:
+  • "lead"   → a prospective CLIENT who wants to run an event (the normal case).
+  • "vendor" → a supplier/sales pitching THEIR OWN services to Sailendra
+               (catering, transport, ambulance, souvenirs, seragam, partnership
+               offers, etc.). When contact_type="vendor", ALSO set:
+                 - vendor_category → one of: catering, venue, transport,
+                   entertainment, photography, decoration, mc, other
+                 - vendor_offering → short text of what they offer
+                   ("standby ambulance", "souvenir keramik ekspor")
+  • "other"  → neither (spam, wrong number, generic question).
+For a vendor, do NOT run the client sales flow or advance lead_stage — follow
+the vendor escalation in your persona (direct them to the vendor email).
 
 Call save_lead_info AS SOON AS each piece appears, not in a batch. Pass NULL
 for fields you have nothing new to say about — partial updates are safe and
@@ -722,7 +737,7 @@ ${contextText}
         // tool calls in the loop above — no in-band tag parsing here.
 
         // Extract unique sources
-        const docSources = typedDocuments?.map((doc) => doc.metadata?.filename || doc.metadata?.source).filter(Boolean) as string[] || [];
+        const docSources = typedDocuments?.map((doc) => doc.metadata?.file_name || doc.metadata?.source).filter(Boolean) as string[] || [];
         const prodSources = typedProducts?.map((p) => `Produk: ${p.name}`) || [];
         const sources = Array.from(new Set([...docSources, ...prodSources]));
 
