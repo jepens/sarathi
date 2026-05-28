@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { verifyWhatsAppSignature } from '@/lib/whatsapp/security';
 import { checkRateLimit } from '@/lib/whatsapp/rate-limiter-db';
 import { enqueueMessage, processQueue } from '@/lib/whatsapp/queue-db';
@@ -8,6 +8,31 @@ import { whatsappLogger } from '@/lib/utils/logger';
 import { logSystemMessage } from '@/lib/whatsapp/history';
 
 import { checkVerifyToken } from '@/lib/settings/app-settings';
+
+// Resolve the canonical contact key for the whatsapp_chats PK.
+//
+// Meta is migrating to business-scoped user IDs (BSUIDs). Today `from` is a
+// phone number, but from June 2026 it may be a BSUID instead. We key the CRM
+// on phone_number (hybrid strategy), so when a returning customer arrives
+// with a BSUID we've seen before, re-thread them into their existing
+// conversation by reusing the phone_number we already have. Otherwise fall
+// back to `from` (a phone today, possibly a BSUID later — either works as a
+// key, and Meta accepts a BSUID as the `to` for replies from June 2026).
+async function resolveContactKey(
+    supabase: SupabaseClient,
+    from: string,
+    bsuid: string | null
+): Promise<string> {
+    if (bsuid) {
+        const { data } = await supabase
+            .from('whatsapp_chats')
+            .select('phone_number')
+            .eq('bsuid', bsuid)
+            .maybeSingle<{ phone_number: string }>();
+        if (data?.phone_number) return data.phone_number;
+    }
+    return from;
+}
 
 export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
@@ -134,6 +159,23 @@ export async function POST(request: Request) {
                             else if (typeof err?.message === 'string') patch.error_detail = err.message;
                         }
 
+                        // Enrichment: status callbacks carry recipient_id
+                        // (phone) + recipient_user_id (BSUID). Backfill the
+                        // contact's bsuid if we have both and it isn't set yet
+                        // — best-effort, never blocks the status update.
+                        const recipientPhone: string | undefined = statusEntry?.recipient_id;
+                        const recipientBsuid: string | undefined = statusEntry?.recipient_user_id;
+                        if (recipientPhone && recipientBsuid) {
+                            const { error: bsuidErr } = await supabase
+                                .from('whatsapp_chats')
+                                .update({ bsuid: recipientBsuid })
+                                .eq('phone_number', recipientPhone)
+                                .is('bsuid', null);
+                            if (bsuidErr) {
+                                whatsappLogger.error(`Failed to backfill bsuid for ${recipientPhone}`, bsuidErr);
+                            }
+                        }
+
                         const { error: updateErr } = await supabase
                             .from('whatsapp_messages')
                             .update(patch)
@@ -160,30 +202,42 @@ export async function POST(request: Request) {
 
             // ========== HANDLE NINDRA MESSAGES ==========
             if (body.entry && body.entry[0].changes && body.entry[0].changes[0].value.messages && body.entry[0].changes[0].value.messages[0]) {
-                const message = body.entry[0].changes[0].value.messages[0];
-                const from = message.from; // Sender's phone number
+                const value = body.entry[0].changes[0].value;
+                const message = value.messages[0];
+                const from = message.from; // phone today; may be a BSUID from June 2026
                 const messageType = message.type;
 
-                whatsappLogger.info(`Message details - From: ${from}, Type: ${messageType}`);
+                // BSUID (business-scoped user ID). Present in contacts[].user_id
+                // and/or messages[].from_user_id. Used as a secondary identity
+                // so returning customers re-thread even if they arrive without
+                // a phone number once usernames roll out.
+                const bsuid: string | null =
+                    value.contacts?.[0]?.user_id ?? message.from_user_id ?? null;
+
+                // Canonical CRM key — reuse an existing contact's phone_number
+                // when we recognise the BSUID; otherwise use `from`.
+                const contactKey = await resolveContactKey(supabase, from, bsuid);
+
+                whatsappLogger.info(`Message details - From: ${from}, BSUID: ${bsuid ?? 'none'}, Key: ${contactKey}, Type: ${messageType}`);
 
                 if (messageType === 'text') {
                     const messageBody = message.text.body;
-                    whatsappLogger.info(`Received message from ${from}: ${messageBody}`);
+                    whatsappLogger.info(`Received message from ${contactKey}: ${messageBody}`);
 
                     // Rate limiting (database-based)
                     // Pass service role client to bypass RLS
-                    const allowed = await checkRateLimit(from, supabase);
+                    const allowed = await checkRateLimit(contactKey, supabase);
                     if (!allowed) {
-                        whatsappLogger.warn(`Rate limit exceeded for ${from}`);
+                        whatsappLogger.warn(`Rate limit exceeded for ${contactKey}`);
                         await sendWhatsAppMessage(from, 'Mohon tunggu sebentar sebelum mengirim pesan lagi.');
-                        await logSystemMessage(from, 'Rate limit exceeded. User warned.');
+                        await logSystemMessage(contactKey, 'Rate limit exceeded. User warned.');
                         return new NextResponse('EVENT_RECEIVED', { status: 200 });
                     }
 
                     // Add to database queue
                     // Pass service role client to bypass RLS
-                    await enqueueMessage(from, messageBody, supabase);
-                    whatsappLogger.info(`Message from ${from} added to queue`);
+                    await enqueueMessage(contactKey, messageBody, supabase);
+                    whatsappLogger.info(`Message from ${contactKey} added to queue`);
 
                     // Trigger queue processing immediately (fire and forget)
                     // Pass the service role client so it can access settings
@@ -196,29 +250,32 @@ export async function POST(request: Request) {
                             // (and ONLY here, on the inbound path) because the
                             // 24-hour customer service window resets every time
                             // the customer messages us. Outbound sends must not
-                            // touch it.
+                            // touch it. bsuid is recorded so we can re-thread
+                            // this contact later even if they arrive phone-less.
                             const inboundNow = new Date().toISOString();
+                            const chatPatch: Record<string, unknown> = {
+                                phone_number: contactKey,
+                                last_message: messageBody,
+                                last_message_at: inboundNow,
+                                last_inbound_at: inboundNow,
+                                updated_at: inboundNow,
+                            };
+                            if (bsuid) chatPatch.bsuid = bsuid;
                             const { error: chatError } = await supabase
                                 .from('whatsapp_chats')
-                                .upsert({
-                                    phone_number: from,
-                                    last_message: messageBody,
-                                    last_message_at: inboundNow,
-                                    last_inbound_at: inboundNow,
-                                    updated_at: inboundNow
-                                }, { onConflict: 'phone_number' });
+                                .upsert(chatPatch, { onConflict: 'phone_number' });
 
                             if (chatError) {
                                 whatsappLogger.error('Error updating chat summary', chatError);
                             } else {
-                                whatsappLogger.info(`Chat summary updated for ${from}`);
+                                whatsappLogger.info(`Chat summary updated for ${contactKey}`);
                             }
 
                             // Insert message
                             const { error: msgError } = await supabase
                                 .from('whatsapp_messages')
                                 .insert({
-                                    phone_number: from,
+                                    phone_number: contactKey,
                                     role: 'user',
                                     content: messageBody
                                 });
@@ -226,7 +283,7 @@ export async function POST(request: Request) {
                             if (msgError) {
                                 whatsappLogger.error('Error inserting message', msgError);
                             } else {
-                                whatsappLogger.info(`User message inserted for ${from}`);
+                                whatsappLogger.info(`User message inserted for ${contactKey}`);
                             }
 
                         } catch (err) {
