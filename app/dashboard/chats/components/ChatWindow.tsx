@@ -4,11 +4,41 @@ import { useEffect, useState, useRef, useCallback } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Send, MoreVertical, Phone, Video, Check, CheckCheck, AlertCircle, FileText, Store } from 'lucide-react';
+import { Send, MoreVertical, Check, CheckCheck, AlertCircle, FileText, Store, Clock } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { SendTemplateDialog } from './SendTemplateDialog';
 import { ContactTypeBadge } from '@/components/dashboard/ContactTypeBadge';
+import { Switch } from '@/components/ui/switch';
+
+const STAGE_LABELS: Record<string, string> = {
+    new: 'Baru',
+    qualifying: 'Kualifikasi',
+    quoted: 'Penawaran',
+    scheduled: 'Meeting',
+    booked: 'Booked',
+    won: 'Closing',
+    lost: 'Lost',
+};
+
+const WINDOW_MS = 24 * 60 * 60 * 1000; // Meta 24-hour customer service window
+
+// >24h since the customer last messaged (or they never did) → free-form replies
+// are blocked by Meta (131047); the admin must use a template.
+function isWindowExpired(lastInboundAt: string | null): boolean {
+    if (!lastInboundAt) return true;
+    return Date.now() - new Date(lastInboundAt).getTime() > WINDOW_MS;
+}
+
+function formatLastActive(d: string | null): string {
+    if (!d) return '';
+    const date = new Date(d);
+    if (Number.isNaN(date.getTime())) return '';
+    return (
+        'Aktif terakhir ' +
+        date.toLocaleString('id-ID', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+    );
+}
 
 type MessageStatus = 'sent' | 'delivered' | 'read' | 'failed' | null;
 
@@ -53,6 +83,25 @@ export function ChatWindow({ phoneNumber }: ChatWindowProps) {
     const [sending, setSending] = useState(false);
     const [contactName, setContactName] = useState<string | null>(null);
     const [contactType, setContactType] = useState<string | null>(null);
+    const [lastMessageAt, setLastMessageAt] = useState<string | null>(null);
+    const [lastInboundAt, setLastInboundAt] = useState<string | null>(null);
+    const [crm, setCrm] = useState<{
+        lead_stage: string | null;
+        event_interest: string | null;
+        participant_count: number | null;
+        location_pref: string | null;
+        vendor_category: string | null;
+        vendor_offering: string | null;
+        ai_enabled: boolean;
+    }>({
+        lead_stage: null,
+        event_interest: null,
+        participant_count: null,
+        location_pref: null,
+        vendor_category: null,
+        vendor_offering: null,
+        ai_enabled: true,
+    });
     const [templateDialogOpen, setTemplateDialogOpen] = useState(false);
     const scrollRef = useRef<HTMLDivElement>(null);
     const supabase = createClient();
@@ -61,13 +110,24 @@ export function ChatWindow({ phoneNumber }: ChatWindowProps) {
         // Fetch contact info
         const { data: contactData } = await supabase
             .from('whatsapp_chats')
-            .select('contact_name, contact_type')
+            .select('contact_name, contact_type, last_message_at, last_inbound_at, lead_stage, event_interest, participant_count, location_pref, vendor_category, vendor_offering, ai_enabled')
             .eq('phone_number', phoneNumber)
             .single();
 
         if (contactData) {
             setContactName(contactData.contact_name);
             setContactType(contactData.contact_type);
+            setLastMessageAt(contactData.last_message_at);
+            setLastInboundAt(contactData.last_inbound_at);
+            setCrm({
+                lead_stage: contactData.lead_stage,
+                event_interest: contactData.event_interest,
+                participant_count: contactData.participant_count,
+                location_pref: contactData.location_pref,
+                vendor_category: contactData.vendor_category,
+                vendor_offering: contactData.vendor_offering,
+                ai_enabled: contactData.ai_enabled ?? true,
+            });
         }
 
         const { data, error } = await supabase
@@ -125,9 +185,32 @@ export function ChatWindow({ phoneNumber }: ChatWindowProps) {
                 table: 'whatsapp_chats',
                 filter: `phone_number=eq.${phoneNumber}`
             }, (payload) => {
-                const row = payload.new as { contact_name: string | null; contact_type: string | null };
+                const row = payload.new as {
+                    contact_name: string | null;
+                    contact_type: string | null;
+                    last_message_at: string | null;
+                    last_inbound_at: string | null;
+                    lead_stage: string | null;
+                    event_interest: string | null;
+                    participant_count: number | null;
+                    location_pref: string | null;
+                    vendor_category: string | null;
+                    vendor_offering: string | null;
+                    ai_enabled: boolean | null;
+                };
                 setContactName(row.contact_name);
                 setContactType(row.contact_type);
+                setLastMessageAt(row.last_message_at);
+                setLastInboundAt(row.last_inbound_at);
+                setCrm({
+                    lead_stage: row.lead_stage,
+                    event_interest: row.event_interest,
+                    participant_count: row.participant_count,
+                    location_pref: row.location_pref,
+                    vendor_category: row.vendor_category,
+                    vendor_offering: row.vendor_offering,
+                    ai_enabled: row.ai_enabled ?? true,
+                });
             })
             .subscribe();
 
@@ -206,6 +289,22 @@ export function ChatWindow({ phoneNumber }: ChatWindowProps) {
         return acc;
     }, {} as Record<string, Message[]>);
 
+    const toggleAi = async (next: boolean) => {
+        setCrm((c) => ({ ...c, ai_enabled: next })); // optimistic
+        const { error } = await supabase
+            .from('whatsapp_chats')
+            .update({ ai_enabled: next })
+            .eq('phone_number', phoneNumber);
+        if (error) {
+            setCrm((c) => ({ ...c, ai_enabled: !next })); // revert
+            toast.error('Gagal mengubah mode AI');
+        } else {
+            toast.success(next ? 'AI aktif — balasan otomatis menyala' : 'Mode manual — AI berhenti membalas otomatis');
+        }
+    };
+
+    const windowExpired = isWindowExpired(lastInboundAt);
+
     return (
         <div className="flex flex-col h-full bg-[#efeae2]">
             <div className="p-3 border-b flex justify-between items-center bg-[#f0f2f5] shadow-sm flex-shrink-0">
@@ -224,13 +323,51 @@ export function ChatWindow({ phoneNumber }: ChatWindowProps) {
                             {contactName || phoneNumber}
                             <ContactTypeBadge type={contactType} />
                         </h2>
-                        <p className="text-xs text-[#667781]">Online</p>
+                        <p className="text-xs text-[#667781]">{formatLastActive(lastMessageAt) || phoneNumber}</p>
                     </div>
                 </div>
                 <div className="flex gap-4 text-[#54656f]">
-                    <Video className="h-5 w-5 cursor-pointer hover:text-[#111b21]" />
-                    <Phone className="h-5 w-5 cursor-pointer hover:text-[#111b21]" />
                     <MoreVertical className="h-5 w-5 cursor-pointer hover:text-[#111b21]" />
+                </div>
+            </div>
+
+            {/* CRM context + AI/Manual takeover toggle */}
+            <div className="px-3 py-1.5 bg-[#f7f8fa] border-b flex items-center justify-between gap-3">
+                <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-0.5 text-[12px] text-[#667781]">
+                    {contactType === 'vendor' ? (
+                        crm.vendor_category || crm.vendor_offering ? (
+                            <>
+                                {crm.vendor_category && (
+                                    <span className="capitalize">Kategori: <span className="text-[#111b21]">{crm.vendor_category}</span></span>
+                                )}
+                                {crm.vendor_offering && (
+                                    <span className="truncate">Tawaran: <span className="text-[#111b21]">{crm.vendor_offering}</span></span>
+                                )}
+                            </>
+                        ) : (
+                            <span className="italic">Belum ada detail vendor</span>
+                        )
+                    ) : crm.lead_stage || crm.event_interest || crm.participant_count || crm.location_pref ? (
+                        <>
+                            {crm.lead_stage && (
+                                <span>Tahap: <span className="font-medium text-[#111b21]">{STAGE_LABELS[crm.lead_stage] ?? crm.lead_stage}</span></span>
+                            )}
+                            {crm.event_interest && <span>Acara: <span className="text-[#111b21]">{crm.event_interest}</span></span>}
+                            {crm.participant_count ? <span><span className="text-[#111b21]">{crm.participant_count}</span> pax</span> : null}
+                            {crm.location_pref && <span className="truncate">{crm.location_pref}</span>}
+                        </>
+                    ) : (
+                        <span className="italic">Belum ada detail lead</span>
+                    )}
+                </div>
+                <div
+                    className="flex shrink-0 items-center gap-1.5 select-none"
+                    title="Saat Manual, AI berhenti membalas otomatis dan Anda menangani chat ini sendiri."
+                >
+                    <span className={cn('text-[12px] font-medium', crm.ai_enabled ? 'text-emerald-600' : 'text-zinc-500')}>
+                        {crm.ai_enabled ? 'AI aktif' : 'Manual'}
+                    </span>
+                    <Switch checked={crm.ai_enabled} onCheckedChange={toggleAi} aria-label="Toggle balasan otomatis AI" />
                 </div>
             </div>
 
@@ -305,41 +442,56 @@ export function ChatWindow({ phoneNumber }: ChatWindowProps) {
                 </div>
             </div>
 
-            <div className="p-3 bg-[#f0f2f5] flex items-center gap-2 flex-shrink-0">
-                <Button
-                    type="button"
-                    size="icon"
-                    variant="ghost"
-                    onClick={() => setTemplateDialogOpen(true)}
-                    title="Kirim template message (re-engage di luar 24-jam window)"
-                    aria-label="Send template message"
-                    className="h-12 w-12 rounded-lg shrink-0 text-[#54656f] hover:text-[#111b21] hover:bg-[#e5e7eb]"
-                >
-                    <FileText className="h-5 w-5" />
-                </Button>
-                <form
-                    onSubmit={(e) => { e.preventDefault(); handleSend(); }}
-                    className="flex gap-2 w-full"
-                >
-                    <Input
-                        value={newMessage}
-                        onChange={(e) => setNewMessage(e.target.value)}
-                        placeholder="Type a message"
-                        disabled={sending}
-                        className="bg-white border-none focus-visible:ring-0 rounded-lg py-6 text-black"
-                    />
+            <div className="p-3 bg-[#f0f2f5] flex flex-col gap-2 flex-shrink-0">
+                {windowExpired && (
+                    <div className="flex items-center gap-2 rounded-md border border-amber-300 bg-amber-100 px-2.5 py-1.5 text-[12px] text-amber-800">
+                        <Clock className="h-3.5 w-3.5 shrink-0" />
+                        <span>
+                            Lebih dari 24 jam sejak pesan terakhir customer — balasan biasa akan ditolak Meta. Gunakan <strong>template message</strong>.
+                        </span>
+                    </div>
+                )}
+                <div className="flex items-center gap-2">
                     <Button
-                        type="submit"
+                        type="button"
                         size="icon"
-                        disabled={sending || !newMessage.trim()}
+                        variant="ghost"
+                        onClick={() => setTemplateDialogOpen(true)}
+                        title="Kirim template message (re-engage di luar 24-jam window)"
+                        aria-label="Send template message"
                         className={cn(
-                            "h-12 w-12 rounded-lg shrink-0 transition-all",
-                            newMessage.trim() ? "bg-[#00a884] hover:bg-[#008f6f]" : "bg-transparent text-muted-foreground hover:bg-transparent"
+                            "h-12 w-12 rounded-lg shrink-0",
+                            windowExpired
+                                ? "bg-amber-100 text-amber-800 hover:bg-amber-200 ring-1 ring-amber-300"
+                                : "text-[#54656f] hover:text-[#111b21] hover:bg-[#e5e7eb]"
                         )}
                     >
-                        <Send className={cn("h-5 w-5", newMessage.trim() ? "text-white" : "text-muted-foreground")} />
+                        <FileText className="h-5 w-5" />
                     </Button>
-                </form>
+                    <form
+                        onSubmit={(e) => { e.preventDefault(); handleSend(); }}
+                        className="flex gap-2 w-full"
+                    >
+                        <Input
+                            value={newMessage}
+                            onChange={(e) => setNewMessage(e.target.value)}
+                            placeholder={windowExpired ? 'Window 24 jam habis — kirim template message' : 'Type a message'}
+                            disabled={sending || windowExpired}
+                            className="bg-white border-none focus-visible:ring-0 rounded-lg py-6 text-black disabled:opacity-60"
+                        />
+                        <Button
+                            type="submit"
+                            size="icon"
+                            disabled={sending || !newMessage.trim() || windowExpired}
+                            className={cn(
+                                "h-12 w-12 rounded-lg shrink-0 transition-all",
+                                newMessage.trim() && !windowExpired ? "bg-[#00a884] hover:bg-[#008f6f]" : "bg-transparent text-muted-foreground hover:bg-transparent"
+                            )}
+                        >
+                            <Send className={cn("h-5 w-5", newMessage.trim() && !windowExpired ? "text-white" : "text-muted-foreground")} />
+                        </Button>
+                    </form>
+                </div>
             </div>
 
             <SendTemplateDialog

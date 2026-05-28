@@ -73,7 +73,7 @@ export function Sidebar({ className }: SidebarProps) {
                         <Link href="/dashboard/chats">
                             <Button variant={pathname.startsWith("/dashboard/chats") ? "secondary" : "ghost"} className="w-full justify-start">
                                 <MessageCircle className="mr-2 h-4 w-4" />
-                                WhatsApp Monitor
+                                WhatsApp Inbox
                             </Button>
                         </Link>
                         <Link href="/dashboard/contacts">

@@ -1,4 +1,5 @@
 import { getWhatsAppAccessToken, getWhatsAppPhoneNumberId } from '@/lib/settings/app-settings';
+import { toWhatsAppText } from './format';
 
 const WHATSAPP_API_URL = 'https://graph.facebook.com/v21.0';
 
@@ -76,7 +77,10 @@ export async function sendWhatsAppMessage(to: string, text: string): Promise<Sen
         body: JSON.stringify({
             messaging_product: 'whatsapp',
             to: to,
-            text: { body: text },
+            // Normalise Markdown → WhatsApp formatting so customers never see
+            // stray "**bold**" / "# heading" syntax (the model leaks it even
+            // with the prompt rule in place).
+            text: { body: toWhatsAppText(text) },
         }),
     });
 

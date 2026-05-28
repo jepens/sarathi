@@ -105,6 +105,24 @@ async function processJob(job: QueueJob, supabase: SupabaseClient): Promise<void
 
         whatsappLogger.info(`Processing job ${job.id} from ${job.phone_number}`);
 
+        // Respect the per-chat AI switch. The webhook already skips enqueue when
+        // ai_enabled = false, but re-check here so ANY processQueue trigger
+        // (incl. the /api/queue/process drainer) honours a takeover that
+        // happened between enqueue and processing.
+        const { data: chatRow } = await supabase
+            .from('whatsapp_chats')
+            .select('ai_enabled')
+            .eq('phone_number', job.phone_number)
+            .maybeSingle();
+        if (chatRow?.ai_enabled === false) {
+            await supabase
+                .from('message_queue')
+                .update({ status: 'completed', processed_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+                .eq('id', job.id);
+            whatsappLogger.info(`Job ${job.id} skipped — AI disabled (manual mode) for ${job.phone_number}`);
+            return;
+        }
+
         // Fetch recent conversation history (last 30 messages). generateRAGResponse
         // keeps the last 12 verbatim and summarises anything older, so a deeper
         // fetch here gives long WhatsApp threads real memory without bloating

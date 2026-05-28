@@ -356,14 +356,27 @@ export async function POST(request: Request) {
                         return new NextResponse('EVENT_RECEIVED', { status: 200 });
                     }
 
-                    // Add to database queue
-                    // Pass service role client to bypass RLS
-                    await enqueueMessage(contactKey, messageBody, supabase);
-                    whatsappLogger.info(`Message from ${contactKey} added to queue`);
+                    // Per-chat AI switch: when an admin has taken over
+                    // (ai_enabled = false) skip the automatic AI reply entirely.
+                    // The inbound message is still stored below (so it shows in
+                    // the inbox + resets the 24h window) — only the auto-reply is
+                    // skipped. New contacts have no row yet → treated as enabled.
+                    const { data: aiRow } = await supabase
+                        .from('whatsapp_chats')
+                        .select('ai_enabled')
+                        .eq('phone_number', contactKey)
+                        .maybeSingle();
+                    const aiEnabled = aiRow?.ai_enabled !== false;
 
-                    // Trigger queue processing immediately (fire and forget)
-                    // Pass the service role client so it can access settings
-                    processQueue(supabase).catch(err => whatsappLogger.error('Error processing queue immediately', err));
+                    if (aiEnabled) {
+                        // Add to database queue (service role client bypasses RLS)
+                        await enqueueMessage(contactKey, messageBody, supabase);
+                        whatsappLogger.info(`Message from ${contactKey} added to queue`);
+                        // Trigger queue processing immediately (fire and forget)
+                        processQueue(supabase).catch(err => whatsappLogger.error('Error processing queue immediately', err));
+                    } else {
+                        whatsappLogger.info(`AI disabled for ${contactKey} — manual mode, skipping auto-reply`);
+                    }
 
                     // Store in chat history (Async - don't await to speed up webhook response)
                     (async () => {

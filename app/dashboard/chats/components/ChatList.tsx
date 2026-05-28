@@ -27,6 +27,15 @@ function isWindowExpired(lastInboundAt: string | null): boolean {
     return Date.now() - new Date(lastInboundAt).getTime() > WINDOW_MS;
 }
 
+// "Needs reply" = the last message in the thread was from the customer and we
+// haven't answered yet. The webhook stamps last_message_at == last_inbound_at on
+// every inbound; outbound sends advance last_message_at only. So if the two are
+// equal (last activity was inbound) the customer is waiting on us.
+function needsReply(chat: { last_message_at: string | null; last_inbound_at: string | null }): boolean {
+    if (!chat.last_inbound_at || !chat.last_message_at) return false;
+    return new Date(chat.last_message_at).getTime() <= new Date(chat.last_inbound_at).getTime();
+}
+
 interface ChatListProps {
     selectedPhone: string | null;
     onSelect: (phone: string) => void;
@@ -115,7 +124,9 @@ export function ChatList({ selectedPhone, onSelect }: ChatListProps) {
                     <div className="p-4 text-center text-sm text-muted-foreground">No chats found</div>
                 ) : (
                     <div>
-                        {filteredChats.map((chat) => (
+                        {filteredChats.map((chat) => {
+                            const reply = needsReply(chat);
+                            return (
                             <button
                                 key={chat.phone_number}
                                 onClick={() => onSelect(chat.phone_number)}
@@ -141,12 +152,15 @@ export function ChatList({ selectedPhone, onSelect }: ChatListProps) {
                                             </span>
                                             <ContactTypeBadge type={chat.contact_type} className="shrink-0" />
                                         </span>
-                                        <span className="text-[12px] text-[#667781] shrink-0">
-                                            {formatTime(chat.last_message_at)}
+                                        <span className="flex items-center gap-1 shrink-0">
+                                            {reply && <span className="h-2 w-2 rounded-full bg-emerald-500" aria-label="Belum dibalas" />}
+                                            <span className={cn("text-[12px]", reply ? "text-emerald-600 font-semibold" : "text-[#667781]")}>
+                                                {formatTime(chat.last_message_at)}
+                                            </span>
                                         </span>
                                     </div>
                                     <div className="flex items-center justify-between gap-2">
-                                        <p className="text-[13px] text-[#667781] truncate leading-5">
+                                        <p className={cn("text-[13px] truncate leading-5", reply ? "text-[#111b21] font-medium" : "text-[#667781]")}>
                                             {chat.last_message}
                                         </p>
                                         {isWindowExpired(chat.last_inbound_at) && (
@@ -161,7 +175,8 @@ export function ChatList({ selectedPhone, onSelect }: ChatListProps) {
                                     </div>
                                 </div>
                             </button>
-                        ))}
+                            );
+                        })}
                     </div>
                 )}
             </div>
