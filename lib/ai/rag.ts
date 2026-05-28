@@ -1,4 +1,4 @@
-import { createClient } from '@/lib/supabase/server';
+import { createServiceOrServerClient } from '@/lib/supabase/service';
 import OpenAI from 'openai';
 import { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
 import { getActiveSystemMessage } from './system-message';
@@ -83,6 +83,43 @@ async function generateEmbedding(text: string): Promise<number[]> {
     return response.data[0].embedding;
 }
 
+// Summarise older conversation turns into a compact context block. Uses a
+// cheap fast model — this runs only when a conversation exceeds KEEP_LAST
+// turns, and the result is fed back as a system note so the assistant keeps
+// continuity (customer name, event details already discussed, decisions,
+// open questions) without re-sending the full transcript every turn.
+async function summarizeConversation(
+    openai: OpenAI,
+    older: ChatMessage[]
+): Promise<string> {
+    if (older.length === 0) return '';
+    const transcript = older
+        .map((m) => `${m.role === 'user' ? 'Customer' : m.role === 'assistant' ? 'Nindra' : 'System'}: ${m.content}`)
+        .join('\n');
+    try {
+        const res = await openai.chat.completions.create({
+            model: 'gpt-4o-mini',
+            temperature: 0.2,
+            max_tokens: 300,
+            messages: [
+                {
+                    role: 'system',
+                    content:
+                        'Ringkas percakapan event organizer berikut dalam Bahasa Indonesia, padat (maks 8 poin). ' +
+                        'Fokus pada: identitas & kontak customer, jenis acara, jumlah peserta, lokasi, tanggal, budget, ' +
+                        'keputusan/kesepakatan, dan pertanyaan yang masih terbuka. Hanya fakta, tanpa basa-basi.',
+                },
+                { role: 'user', content: transcript },
+            ],
+        });
+        return res.choices[0]?.message?.content?.trim() ?? '';
+    } catch (err) {
+        // Non-fatal: if summarisation fails we just proceed with recent turns.
+        console.error('summarizeConversation failed (continuing without summary):', err);
+        return '';
+    }
+}
+
 /**
  * Helper to create order in database
  *
@@ -110,7 +147,6 @@ export async function createOrder(
         // service-role-or-server: webhook path has no user session, and
         // whatsapp_chats / orders are no longer reachable from anon after the
         // public RLS policies were dropped.
-        const { createServiceOrServerClient } = await import('@/lib/supabase/service');
         const supabase = await createServiceOrServerClient();
 
         // STEP 1: Reprice items against the authoritative DB.
@@ -234,24 +270,39 @@ export async function generateRAGResponse(
         // 1. Generate embedding for the user's message
         const queryEmbedding = await generateEmbedding(message);
 
-        const supabase = await createClient();
+        // IMPORTANT: use the service-role-or-server client. In the WhatsApp
+        // webhook path there is no user session, so a cookie-based client
+        // authenticates as `anon` — and documents/products are authenticated-
+        // only under RLS. With the cookie client, match_documents/match_products
+        // (SECURITY INVOKER) would return ZERO rows, leaving the AI ungrounded.
+        // The service-role client bypasses RLS for these read-only RPCs.
+        const supabase = await createServiceOrServerClient();
 
-        // 2a. Retrieve relevant documents (increased from 3 to 5 for better context)
+        // Retrieval tuned for a small, curated knowledge base: a low threshold
+        // + generous cap effectively injects the whole KB (no relevant chunk
+        // silently dropped, which the old 0.5/top-5 setting did) while still
+        // degrading gracefully — the cap bounds token cost if the KB grows.
+        const DOC_MATCH_THRESHOLD = 0.1;
+        const DOC_MATCH_COUNT = 25;
+        const PRODUCT_MATCH_THRESHOLD = 0.1;
+        const PRODUCT_MATCH_COUNT = 25;
+
+        // 2a. Retrieve relevant documents
         const { data: documents, error: docError } = await supabase.rpc('match_documents', {
             query_embedding: queryEmbedding,
-            match_threshold: 0.5,
-            match_count: 5,
+            match_threshold: DOC_MATCH_THRESHOLD,
+            match_count: DOC_MATCH_COUNT,
         });
 
         if (docError) {
             console.error('Error searching documents:', docError);
         }
 
-        // 2b. Retrieve relevant products (increased from 3 to 5 for better coverage)
+        // 2b. Retrieve relevant products
         const { data: products, error: prodError } = await supabase.rpc('match_products', {
             query_embedding: queryEmbedding,
-            match_threshold: 0.5,
-            match_count: 5,
+            match_threshold: PRODUCT_MATCH_THRESHOLD,
+            match_count: PRODUCT_MATCH_COUNT,
         });
 
         if (prodError) {
@@ -394,12 +445,29 @@ ${contextText}
             apiKey: apiKey,
         });
 
-
-        // Limit history to avoid token limits
-        const recentHistory = history.slice(-4);
+        // Conversation memory. Keep the last KEEP_LAST turns verbatim; if the
+        // conversation is longer, summarise everything before that into a
+        // single compact block (OpenAI cookbook pattern: keep-last-N +
+        // summarise-older). This preserves long-running context (negotiation,
+        // earlier-stated event details) that the old slice(-4) dropped, while
+        // bounding token cost.
+        const KEEP_LAST = 12;
+        let recentHistory = history;
+        let conversationSummary = '';
+        if (history.length > KEEP_LAST) {
+            const older = history.slice(0, history.length - KEEP_LAST);
+            recentHistory = history.slice(-KEEP_LAST);
+            conversationSummary = await summarizeConversation(openai, older);
+        }
 
         const apiMessages: ChatCompletionMessageParam[] = [
             { role: 'system', content: systemPrompt },
+            ...(conversationSummary
+                ? [{
+                      role: 'system' as const,
+                      content: `RINGKASAN PERCAKAPAN SEBELUMNYA (untuk konteks, jangan diulang ke customer):\n${conversationSummary}`,
+                  }]
+                : []),
             ...recentHistory.map((msg) => ({
                 role: msg.role,
                 content: msg.content

@@ -105,13 +105,16 @@ async function processJob(job: QueueJob, supabase: SupabaseClient): Promise<void
 
         whatsappLogger.info(`Processing job ${job.id} from ${job.phone_number}`);
 
-        // Fetch recent conversation history (last 10 messages)
+        // Fetch recent conversation history (last 30 messages). generateRAGResponse
+        // keeps the last 12 verbatim and summarises anything older, so a deeper
+        // fetch here gives long WhatsApp threads real memory without bloating
+        // every prompt.
         const { data: historyData } = await supabase
             .from('whatsapp_messages')
             .select('role, content')
             .eq('phone_number', job.phone_number)
             .order('created_at', { ascending: false })
-            .limit(10);
+            .limit(30);
 
         // Reverse to get chronological order (oldest first)
         const history = (historyData || []).reverse().map(msg => ({
