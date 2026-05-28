@@ -1,11 +1,13 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { UploadZone } from '@/components/knowledge/upload-zone';
 import { DocumentList } from '@/components/dashboard/DocumentList';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
 import { IntegrationInfoBanner } from '@/components/dashboard/IntegrationInfoBanner';
-import { FileText, Database, Zap, Loader2 } from 'lucide-react';
+import { FileText, Database, Zap, Loader2, PenLine } from 'lucide-react';
 
 interface DocumentStats {
     total: number;
@@ -62,6 +64,12 @@ export default function KnowledgePage() {
                         Manage your business data and AI knowledge sources.
                     </p>
                 </div>
+                <Link href="/dashboard/knowledge/editor">
+                    <Button>
+                        <PenLine className="mr-2 h-4 w-4" />
+                        Tulis / Edit Konten
+                    </Button>
+                </Link>
             </div>
 
             {/* AI Integration Info */}

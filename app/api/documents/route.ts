@@ -157,6 +157,17 @@ export async function DELETE(request: Request) {
             // The database record is already deleted
         }
 
+        // If this document was authored in the dashboard editor, also drop its
+        // canonical source row so it doesn't linger in the editor list.
+        // Best-effort — editor-authored docs use file_name === source === title.
+        const { error: kbSourceError } = await supabase
+            .from('kb_sources')
+            .delete()
+            .eq('title', fileName);
+        if (kbSourceError) {
+            console.error('Error deleting kb_source (non-fatal):', kbSourceError);
+        }
+
         return NextResponse.json({
             success: true,
             message: 'Document deleted successfully',
