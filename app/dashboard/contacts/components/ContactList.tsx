@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { stripAuditLines } from '@/lib/proposals/notes';
 import {
     Select,
     SelectContent,
@@ -281,7 +282,7 @@ export function ContactList() {
             category: c.vendor_category || '',
             contact_person: c.contact_name || '',
             email: c.email || '',
-            notes: c.vendor_offering || c.notes || '',
+            notes: c.vendor_offering || stripAuditLines(c.notes) || '',
         });
         setDetailPhone(null);
         setPromoteOpen(true);
@@ -517,12 +518,12 @@ export function ContactList() {
                                     </>
                                 )}
                                 <Field icon={Sparkles} label="Sumber" value={detailContact.source} />
-                                {detailContact.notes && (
+                                {stripAuditLines(detailContact.notes) && (
                                     <div className="flex gap-2">
                                         <StickyNote className="h-4 w-4 flex-shrink-0 text-muted-foreground mt-0.5" />
                                         <div className="min-w-0">
                                             <div className="text-xs text-muted-foreground">Catatan</div>
-                                            <p className="whitespace-pre-wrap break-words text-gray-700">{detailContact.notes}</p>
+                                            <p className="whitespace-pre-wrap break-words text-gray-700">{stripAuditLines(detailContact.notes)}</p>
                                         </div>
                                     </div>
                                 )}

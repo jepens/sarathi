@@ -1,5 +1,7 @@
 import { createClient } from '@/lib/supabase/server';
 import { generateProposalRef, shouldBumpToQuoted } from './ref';
+import { stripAuditLines, extractAuditLines } from './notes';
+import type { FnaSnapshot } from './fna';
 
 // Proposal generation + send pipeline. Supports two sources:
 //   - 'generated' — rendered on demand from ProposalDocument template
@@ -252,6 +254,7 @@ export interface SendParams {
     phoneNumber: string;
     proposalId?: string | null;  // if present, send the uploaded PDF
     introNote?: string | null;
+    fnaSnapshot?: FnaSnapshot | null;  // client-needs snapshot frozen onto the row
 }
 
 export async function sendProposalEmail(
@@ -330,8 +333,9 @@ export async function sendProposalEmail(
             sentToEmail,
             emailProviderId: null,
             skippedReason,
+            fnaSnapshot: params.fnaSnapshot ?? null,
         });
-        await markQuoted(supabase, params.phoneNumber, proposalRef, false);
+        await markQuoted(supabase, params.phoneNumber, proposalRef, false, params.fnaSnapshot ?? null);
         return {
             ok: true,
             sent: false,
@@ -376,8 +380,9 @@ export async function sendProposalEmail(
             sentToEmail,
             emailProviderId: data?.id ?? null,
             skippedReason: null,
+            fnaSnapshot: params.fnaSnapshot ?? null,
         });
-        await markQuoted(supabase, params.phoneNumber, proposalRef, true);
+        await markQuoted(supabase, params.phoneNumber, proposalRef, true, params.fnaSnapshot ?? null);
 
         return {
             ok: true,
@@ -403,6 +408,7 @@ async function upsertSentRecord(args: {
     sentToEmail: string;
     emailProviderId: string | null;
     skippedReason: string | null;
+    fnaSnapshot: FnaSnapshot | null;
 }): Promise<string | undefined> {
     const stamp = new Date().toISOString();
 
@@ -415,6 +421,7 @@ async function upsertSentRecord(args: {
                 sent_to_email: args.sentToEmail,
                 email_provider_id: args.emailProviderId,
                 skipped_reason: args.skippedReason,
+                fna_snapshot: args.fnaSnapshot,
             })
             .eq('id', args.proposalRow.id)
             .select('id')
@@ -438,6 +445,7 @@ async function upsertSentRecord(args: {
             sent_to_email: args.sentToEmail,
             email_provider_id: args.emailProviderId,
             skipped_reason: args.skippedReason,
+            fna_snapshot: args.fnaSnapshot,
         })
         .select('id')
         .single();
@@ -452,7 +460,8 @@ async function markQuoted(
     supabase: SupabaseServer,
     phoneNumber: string,
     proposalRef: string,
-    emailSent: boolean
+    emailSent: boolean,
+    fnaSnapshot: FnaSnapshot | null
 ) {
     // Read current notes + stage so we can (1) append an audit line and
     // (2) decide whether to bump the stage. Sending a follow-up proposal to a
@@ -464,7 +473,19 @@ async function markQuoted(
         .maybeSingle<{ notes: string | null; lead_stage: string | null }>();
     const stamp = new Date().toISOString();
     const line = `[${stamp}] proposal ${proposalRef} ${emailSent ? 'sent' : 'generated (email skipped)'}`;
-    const newNotes = row?.notes ? `${row.notes}\n${line}` : line;
+
+    // notes = human note + proposal audit trail. The FNA editor only ever sends
+    // the human portion (audit lines are hidden from it), so use the admin's
+    // edited note as the human part — falling back to the existing human note if
+    // they left it blank — then re-attach the preserved audit trail plus this
+    // send's line. This keeps history intact without ever surfacing audit lines
+    // back into the editor.
+    const humanNote =
+        fnaSnapshot?.notes != null
+            ? stripAuditLines(fnaSnapshot.notes)
+            : stripAuditLines(row?.notes);
+    const auditLines = [...extractAuditLines(row?.notes), line];
+    const newNotes = [humanNote, ...auditLines].filter(Boolean).join('\n');
 
     const patch: Record<string, unknown> = {
         notes: newNotes,
@@ -472,6 +493,18 @@ async function markQuoted(
     };
     if (shouldBumpToQuoted(row?.lead_stage ?? null)) {
         patch.lead_stage = 'quoted';
+    }
+
+    // Sync edited FNA fields back to the CRM record. Fill-don't-clear: only
+    // non-null values are written, mirroring the saveLeadInfo convention — so
+    // an empty field in the dialog never wipes existing CRM data.
+    if (fnaSnapshot) {
+        if (fnaSnapshot.event_interest !== null) patch.event_interest = fnaSnapshot.event_interest;
+        if (fnaSnapshot.participant_count !== null) patch.participant_count = fnaSnapshot.participant_count;
+        if (fnaSnapshot.location_pref !== null) patch.location_pref = fnaSnapshot.location_pref;
+        if (fnaSnapshot.event_date_pref !== null) patch.event_date_pref = fnaSnapshot.event_date_pref;
+        if (fnaSnapshot.event_goals !== null) patch.event_goals = fnaSnapshot.event_goals;
+        if (fnaSnapshot.budget_range !== null) patch.budget_range = fnaSnapshot.budget_range;
     }
 
     await supabase

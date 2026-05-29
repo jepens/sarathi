@@ -13,6 +13,7 @@ import {
     MoreVertical,
     Send,
     UserCheck,
+    History,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -24,6 +25,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
 import { SendProposalDialog } from './SendProposalDialog';
+import { ProposalHistoryDialog } from './ProposalHistoryDialog';
 
 // Pipeline stages — must match the CHECK constraint on whatsapp_chats.lead_stage
 // and the LEAD_STAGES export in lib/ai/tools.ts. Order in this array is the
@@ -50,6 +52,8 @@ interface Lead {
     event_date_pref: string | null;
     event_goals: string | null;
     budget_range: string | null;
+    notes: string | null;
+    source: string | null;
     lead_stage: StageId | null;
     last_message: string | null;
     last_message_at: string | null;
@@ -61,6 +65,7 @@ export function PipelineBoard() {
     const [draggedPhone, setDraggedPhone] = useState<string | null>(null);
     const [dragOverStage, setDragOverStage] = useState<StageId | null>(null);
     const [proposalDialogLead, setProposalDialogLead] = useState<Lead | null>(null);
+    const [historyLead, setHistoryLead] = useState<Lead | null>(null);
 
     const fetchLeads = useCallback(async () => {
         try {
@@ -239,6 +244,7 @@ export function PipelineBoard() {
                                             onDragStart={(e) => handleDragStart(e, lead.phone_number)}
                                             onDragEnd={handleDragEnd}
                                             onSendProposal={() => openProposalDialog(lead.phone_number)}
+                                            onViewHistory={() => setHistoryLead(lead)}
                                             onHandoff={() => handoffToMJ(lead.phone_number)}
                                             onMoveStage={(stage) => moveLead(lead.phone_number, stage)}
                                         />
@@ -252,6 +258,7 @@ export function PipelineBoard() {
 
             {proposalDialogLead && (
                 <SendProposalDialog
+                    key={proposalDialogLead.phone_number}
                     open={true}
                     onOpenChange={(o) => {
                         if (!o) setProposalDialogLead(null);
@@ -262,7 +269,24 @@ export function PipelineBoard() {
                     eventInterest={proposalDialogLead.event_interest}
                     participantCount={proposalDialogLead.participant_count}
                     locationPref={proposalDialogLead.location_pref}
+                    eventDatePref={proposalDialogLead.event_date_pref}
+                    eventGoals={proposalDialogLead.event_goals}
+                    budgetRange={proposalDialogLead.budget_range}
+                    notes={proposalDialogLead.notes}
+                    source={proposalDialogLead.source}
                     onSent={handleProposalSent}
+                />
+            )}
+
+            {historyLead && (
+                <ProposalHistoryDialog
+                    key={historyLead.phone_number}
+                    open={true}
+                    onOpenChange={(o) => {
+                        if (!o) setHistoryLead(null);
+                    }}
+                    phoneNumber={historyLead.phone_number}
+                    contactName={historyLead.contact_name}
                 />
             )}
         </div>
@@ -275,6 +299,7 @@ function LeadCard({
     onDragStart,
     onDragEnd,
     onSendProposal,
+    onViewHistory,
     onHandoff,
     onMoveStage,
 }: {
@@ -283,6 +308,7 @@ function LeadCard({
     onDragStart: (e: DragEvent<HTMLDivElement>) => void;
     onDragEnd: () => void;
     onSendProposal: () => void;
+    onViewHistory: () => void;
     onHandoff: () => void;
     onMoveStage: (stage: StageId) => void;
 }) {
@@ -323,6 +349,10 @@ function LeadCard({
                         <DropdownMenuItem onClick={onSendProposal} disabled={!lead.email}>
                             <Send className="mr-2 h-3.5 w-3.5" />
                             Send Proposal{!lead.email && ' (no email)'}
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={onViewHistory}>
+                            <History className="mr-2 h-3.5 w-3.5" />
+                            Riwayat proposal
                         </DropdownMenuItem>
                         <DropdownMenuItem onClick={onHandoff}>
                             <UserCheck className="mr-2 h-3.5 w-3.5" />
