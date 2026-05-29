@@ -155,7 +155,7 @@ export const stockTools: ChatCompletionTool[] = [
                     contact_type: {
                         type: ['string', 'null'],
                         description:
-                            'Who is this contact? "lead" = a prospective CLIENT wanting an event. "vendor" = a supplier/sales pitching THEIR services to Sailendra (catering, transport, souvenirs, partnership offers, etc.). "other" = neither (spam, wrong number, generic inquiry). Set this as soon as it is clear; pass null if still unsure.',
+                            'Who is this contact? DEFAULT IS "lead". Anyone asking about, planning, pricing, or booking an event for themselves/their company is a "lead" (a CLIENT) — even if they mention vendors or budgets. Only use "vendor" when the person is clearly SELLING/OFFERING their OWN goods or services TO Sailendra (e.g. "saya supplier catering, mau menawarkan paket", a sales rep pitching transport/souvenirs/partnership). "other" = clearly neither (spam, wrong number). If there is ANY doubt between lead and vendor, choose "lead". Pass null if you truly cannot tell yet — do NOT guess "vendor".',
                     },
                     vendor_category: {
                         type: ['string', 'null'],
@@ -424,16 +424,26 @@ export async function saveLeadInfo(
 
         const cleanedName = cleanLeadName(args.name);
         const incomingType = cleanContactType(args.contact_type);
+        const cleanedVendorCategory = cleanVendorCategory(args.vendor_category);
+        const cleanedVendorOffering = cleanLeadStr(args.vendor_offering);
+        const hasVendorDetail = !!(cleanedVendorCategory || cleanedVendorOffering);
 
         // Single read of the existing row when we need its current state:
-        //  - contact_name_locked → don't let the AI clobber a manual name.
-        //  - contact_type        → don't let the AI downgrade a vendor/other
-        //                          classification back to "lead".
-        let existing: { contact_name_locked?: boolean; contact_type?: string | null } | null = null;
-        if (cleanedName || incomingType) {
+        //  - contact_name_locked  → don't let the AI clobber a manual name.
+        //  - contact_type         → don't let the AI downgrade a vendor/other
+        //                           classification back to "lead".
+        //  - contact_type_locked  → don't let the AI override a human's manual
+        //                           classification, nor stamp vendor detail onto
+        //                           a contact a human confirmed as non-vendor.
+        let existing: {
+            contact_name_locked?: boolean;
+            contact_type?: string | null;
+            contact_type_locked?: boolean;
+        } | null = null;
+        if (cleanedName || incomingType || hasVendorDetail) {
             const { data } = await supabase
                 .from('whatsapp_chats')
-                .select('contact_name_locked, contact_type')
+                .select('contact_name_locked, contact_type, contact_type_locked')
                 .eq('phone_number', phoneNumber)
                 .maybeSingle();
             existing = data;
@@ -444,9 +454,11 @@ export async function saveLeadInfo(
             patch.contact_name = cleanedName;
         }
 
-        // contact_type — apply vendor/other freely; only set "lead" when the
-        // row isn't already classified, so the AI can't flip a vendor back.
-        if (incomingType) {
+        // contact_type — respect a manual lock first (a human classified this
+        // contact; never let the AI override). Otherwise apply vendor/other
+        // freely; only set "lead" when the row isn't already classified, so the
+        // AI can't flip a vendor back.
+        if (incomingType && !existing?.contact_type_locked) {
             const current = existing?.contact_type ?? 'lead';
             if (incomingType !== 'lead' || current === 'lead') {
                 patch.contact_type = incomingType;
@@ -457,10 +469,15 @@ export async function saveLeadInfo(
         const cleanedEmail = cleanLeadEmail(args.email);
         if (cleanedEmail) patch.email = cleanedEmail;
 
-        // vendor detail (only meaningful when contact_type = "vendor").
-        const cleanedVendorCategory = cleanVendorCategory(args.vendor_category);
-        if (cleanedVendorCategory) patch.vendor_category = cleanedVendorCategory;
-        maybeSet('vendor_offering', args.vendor_offering);
+        // vendor detail — only meaningful for vendors. Skip when a human has
+        // locked this contact to a non-vendor type, so we never stamp vendor
+        // metadata onto a confirmed client.
+        const lockedNonVendor =
+            !!existing?.contact_type_locked && existing?.contact_type !== 'vendor';
+        if (!lockedNonVendor) {
+            if (cleanedVendorCategory) patch.vendor_category = cleanedVendorCategory;
+            if (cleanedVendorOffering) patch.vendor_offering = cleanedVendorOffering;
+        }
 
         // participant_count: keep only a positive integer.
         if (

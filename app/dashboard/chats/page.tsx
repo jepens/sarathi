@@ -1,11 +1,17 @@
 'use client';
 
-import { useState } from 'react';
+import { Suspense, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { ChatList } from './components/ChatList';
 import { ChatWindow } from './components/ChatWindow';
 
-export default function ChatsPage() {
-    const [selectedPhone, setSelectedPhone] = useState<string | null>(null);
+function ChatsInbox() {
+    const searchParams = useSearchParams();
+    // Deep link from other pages (e.g. Vendors "Buka chat"): /dashboard/chats?phone=...
+    // Derived once during render (lazy init) so we never setState in an effect.
+    const [selectedPhone, setSelectedPhone] = useState<string | null>(
+        () => searchParams.get('phone')
+    );
 
     return (
         <div className="flex h-[calc(100vh-8rem)] border rounded-lg overflow-hidden bg-background shadow-sm">
@@ -26,5 +32,13 @@ export default function ChatsPage() {
                 )}
             </div>
         </div>
+    );
+}
+
+export default function ChatsPage() {
+    return (
+        <Suspense fallback={null}>
+            <ChatsInbox />
+        </Suspense>
     );
 }

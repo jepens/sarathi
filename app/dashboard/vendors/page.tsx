@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { VendorList } from '@/components/dashboard/VendorList';
 import {
     VendorDialog,
@@ -22,12 +23,15 @@ import { Building2, Plus, Loader2, Search } from 'lucide-react';
 
 type CategoryFilter = 'all' | VendorCategory;
 
-export default function VendorsPage() {
+function VendorsDirectory() {
+    const searchParams = useSearchParams();
     const [vendors, setVendors] = useState<Vendor[]>([]);
     const [loading, setLoading] = useState(true);
     const [dialogOpen, setDialogOpen] = useState(false);
     const [vendorToEdit, setVendorToEdit] = useState<Vendor | null>(null);
-    const [searchQuery, setSearchQuery] = useState('');
+    // Deep link from Contacts "Buka di direktori": /dashboard/vendors?q=<vendor name>
+    // Derived once during render so we never setState in an effect.
+    const [searchQuery, setSearchQuery] = useState(() => searchParams.get('q') ?? '');
     const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>('all');
 
     const fetchVendors = async () => {
@@ -165,7 +169,7 @@ export default function VendorsPage() {
                 ) : (
                     <VendorList
                         vendors={filtered}
-                        onVendorDeleted={fetchVendors}
+                        onRefresh={fetchVendors}
                         onEditVendor={handleEdit}
                     />
                 )}
@@ -178,5 +182,13 @@ export default function VendorsPage() {
                 onSuccess={fetchVendors}
             />
         </div>
+    );
+}
+
+export default function VendorsPage() {
+    return (
+        <Suspense fallback={null}>
+            <VendorsDirectory />
+        </Suspense>
     );
 }

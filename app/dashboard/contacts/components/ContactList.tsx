@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback, useRef } from 'react';
+import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -124,7 +125,33 @@ export function ContactList() {
         notes: '',
     });
 
+    // chat_phone → linked vendor directory row. Lets us show "already in
+    // directory" and switch the promote button to "open in directory".
+    const [vendorByPhone, setVendorByPhone] = useState<Map<string, { id: string; name: string }>>(
+        new Map()
+    );
+
     const supabase = createClient();
+    const router = useRouter();
+
+    const fetchVendorLinks = useCallback(async () => {
+        try {
+            const res = await fetch('/api/vendors', { cache: 'no-store' });
+            if (!res.ok) return;
+            const data = await res.json();
+            const map = new Map<string, { id: string; name: string }>();
+            for (const v of (data.vendors ?? []) as Array<{
+                id: string;
+                name: string;
+                chat_phone: string | null;
+            }>) {
+                if (v.chat_phone) map.set(v.chat_phone, { id: v.id, name: v.name });
+            }
+            setVendorByPhone(map);
+        } catch {
+            /* non-fatal — link badges just won't show */
+        }
+    }, []);
 
     const sortByRecency = (rows: Contact[]) =>
         [...rows].sort(
@@ -150,7 +177,8 @@ export function ContactList() {
 
     useEffect(() => {
         fetchContacts();
-    }, [fetchContacts]);
+        fetchVendorLinks();
+    }, [fetchContacts, fetchVendorLinks]);
 
     // Realtime: the AI writes lead/vendor fields into whatsapp_chats from the
     // WhatsApp webhook (save_lead_info). Subscribe so Contacts fills in live —
@@ -254,11 +282,12 @@ export function ContactList() {
     };
 
     // Write a classification (no toast) — shared by the manual control and the
-    // promote-to-vendor flow so we don't stack two toasts.
+    // promote-to-vendor flow so we don't stack two toasts. Locks contact_type so
+    // the AI can't override this human decision on the next message.
     const setContactTypeSilent = async (phone: string, type: ContactType) => {
         const { error } = await supabase
             .from('whatsapp_chats')
-            .update({ contact_type: type })
+            .update({ contact_type: type, contact_type_locked: true })
             .eq('phone_number', phone);
         if (error) throw error;
         patchLocal(phone, { contact_type: type });
@@ -309,6 +338,7 @@ export function ContactList() {
                     phone: promote.phone,
                     email: promote.email.trim() || null,
                     notes: promote.notes.trim() || null,
+                    chat_phone: promote.phone,
                 }),
             });
             const data = await res.json().catch(() => ({}));
@@ -323,6 +353,7 @@ export function ContactList() {
                 }
             }
             setPromoteOpen(false);
+            fetchVendorLinks();
             toast.success('Tersimpan ke Vendor Management');
         } catch (e) {
             toast.error(e instanceof Error ? e.message : 'Gagal menyimpan vendor');
@@ -530,12 +561,31 @@ export function ContactList() {
                             </div>
 
                             <DialogFooter className="gap-2 sm:gap-2">
+                                {vendorByPhone.has(detailContact.phone_number) && (
+                                    <Badge
+                                        variant="outline"
+                                        className="mr-auto self-center gap-1 border-emerald-200 bg-emerald-50 text-emerald-700"
+                                    >
+                                        <Store className="h-3 w-3" /> Di direktori
+                                    </Badge>
+                                )}
                                 <Button variant="outline" onClick={() => { const c = detailContact; setDetailPhone(null); openEditDialog(c); }}>
                                     <Edit2 className="mr-2 h-4 w-4" /> Edit Nama
                                 </Button>
-                                <Button onClick={() => openPromote(detailContact)}>
-                                    <Store className="mr-2 h-4 w-4" /> Simpan ke Vendor
-                                </Button>
+                                {vendorByPhone.has(detailContact.phone_number) ? (
+                                    <Button
+                                        onClick={() => {
+                                            const v = vendorByPhone.get(detailContact.phone_number)!;
+                                            router.push(`/dashboard/vendors?q=${encodeURIComponent(v.name)}`);
+                                        }}
+                                    >
+                                        <Store className="mr-2 h-4 w-4" /> Buka di direktori
+                                    </Button>
+                                ) : (
+                                    <Button onClick={() => openPromote(detailContact)}>
+                                        <Store className="mr-2 h-4 w-4" /> Simpan ke Vendor
+                                    </Button>
+                                )}
                             </DialogFooter>
                         </>
                     )}

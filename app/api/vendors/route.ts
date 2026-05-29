@@ -15,7 +15,16 @@ type VendorInput = {
     email?: unknown;
     address?: unknown;
     notes?: unknown;
+    chat_phone?: unknown;
 };
+
+// chat_phone links a vendor to its WhatsApp contact (whatsapp_chats.phone_number,
+// digits-only canonical key). Normalize to digits so it matches the FK target.
+function normalizeChatPhone(v: unknown): string | null {
+    if (typeof v !== 'string') return null;
+    const digits = v.replace(/\D/g, '');
+    return digits.length > 0 ? digits : null;
+}
 
 // Guard against `null`, arrays, primitives that would crash `.name` access.
 function isPlainObject(v: unknown): v is Record<string, unknown> {
@@ -108,7 +117,7 @@ export async function POST(request: Request) {
         );
     }
 
-    const insertRow = {
+    const fields = {
         name,
         category,
         contact_person: normalizeText(body.contact_person),
@@ -116,16 +125,62 @@ export async function POST(request: Request) {
         email: normalizeText(body.email),
         address: normalizeText(body.address),
         notes: normalizeText(body.notes),
-        created_by: user.id,
     };
+    const chatPhone = normalizeChatPhone(body.chat_phone);
+
+    // Promote-from-contact path: a contact maps to at most one directory row.
+    // If one already exists for this chat_phone, update it instead of inserting
+    // a duplicate (also guarded at the DB level by uq_vendors_chat_phone).
+    if (chatPhone) {
+        const { data: existing } = await supabase
+            .from('vendors')
+            .select('id')
+            .eq('chat_phone', chatPhone)
+            .maybeSingle();
+
+        if (existing) {
+            // Fill-don't-clear: only write fields the promote actually provided.
+            // The promote form omits `address` (and may leave optionals blank), so
+            // a blind update would wipe curated vendor data on a re-promote.
+            const updatePatch: Record<string, string> = {};
+            for (const [k, v] of Object.entries(fields)) {
+                if (v !== null) updatePatch[k] = v;
+            }
+            const { data, error } = await supabase
+                .from('vendors')
+                .update(updatePatch)
+                .eq('id', existing.id)
+                .select()
+                .single();
+            if (error) {
+                return NextResponse.json({ error: error.message }, { status: 500 });
+            }
+            return NextResponse.json(data);
+        }
+    }
 
     const { data, error } = await supabase
         .from('vendors')
-        .insert(insertRow)
+        .insert({ ...fields, chat_phone: chatPhone, created_by: user.id })
         .select()
         .single();
 
     if (error) {
+        // FK violation: chat_phone doesn't reference a real contact.
+        if (error.code === '23503') {
+            return NextResponse.json(
+                { error: 'chat_phone tidak cocok dengan kontak mana pun' },
+                { status: 400 }
+            );
+        }
+        // Unique violation: a directory row for this contact already exists
+        // (race with the check above).
+        if (error.code === '23505') {
+            return NextResponse.json(
+                { error: 'Kontak ini sudah ada di direktori vendor' },
+                { status: 409 }
+            );
+        }
         return NextResponse.json({ error: error.message }, { status: 500 });
     }
 

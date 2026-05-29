@@ -48,6 +48,8 @@ export interface Vendor {
     email: string | null;
     address: string | null;
     notes: string | null;
+    chat_phone: string | null;
+    verified: boolean;
     created_at: string;
     updated_at: string;
 }

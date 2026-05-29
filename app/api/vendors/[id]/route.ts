@@ -14,6 +14,7 @@ type VendorPatch = {
     email?: unknown;
     address?: unknown;
     notes?: unknown;
+    verified?: unknown;
 };
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
@@ -60,7 +61,11 @@ export async function PATCH(
     }
     const body = rawBody as VendorPatch;
 
-    const patch: Record<string, string | null> = {};
+    const patch: Record<string, string | boolean | null> = {};
+
+    if (typeof body.verified === 'boolean') {
+        patch.verified = body.verified;
+    }
 
     if (body.name !== undefined) {
         const v = normalizeOptional(body.name);
