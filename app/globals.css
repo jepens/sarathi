@@ -119,3 +119,34 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* ── Landing page (Run-of-Show hero) — app/page.tsx only ──────────────
+   The --font-display / --font-mono vars are set on the landing wrapper
+   via next/font, so these utilities are inert everywhere else (no effect
+   on the dashboard or other pages). Kept as plain CSS rather than
+   styled-jsx: styled-jsx's scoped hash classes caused an SSR/client
+   hydration mismatch under Turbopack + the React Compiler. */
+.font-display {
+  font-family: var(--font-display), sans-serif;
+}
+.font-rail {
+  font-family: var(--font-mono), monospace;
+  font-variant-numeric: tabular-nums;
+}
+@keyframes cuePulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+.cue-live {
+  animation: cuePulse 1.8s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .cue-live {
+    animation: none;
+  }
+}
