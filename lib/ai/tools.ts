@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server';
 import { createServiceOrServerClient } from '@/lib/supabase/service';
 import { ChatCompletionTool } from 'openai/resources/chat/completions';
+import { DEFAULT_BUSINESS_PROFILE } from '@/lib/settings/business-profile';
 
 // Lead pipeline stages — kept in sync with the CHECK constraint on
 // whatsapp_chats.lead_stage (see migration 0002_eo_pivot_schema.sql).
@@ -350,11 +351,16 @@ function cleanLeadName(v: unknown): string | null {
     return n;
 }
 
+// Domain of the business's own email — the address the assistant hands to
+// vendors, never a customer's. Sourced from the business profile default.
+const COMPANY_EMAIL_DOMAIN =
+    '@' + (DEFAULT_BUSINESS_PROFILE.businessEmail.split('@')[1] ?? '').toLowerCase();
+
 function cleanLeadEmail(v: unknown): string | null {
     const e = cleanLeadStr(v);
     if (!e) return null;
     const low = e.toLowerCase();
-    if (low.endsWith('@sailendra.co.id')) return null; // company's own address
+    if (COMPANY_EMAIL_DOMAIN.length > 1 && low.endsWith(COMPANY_EMAIL_DOMAIN)) return null; // company's own address
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(low)) return null; // basic shape
     return e;
 }
@@ -381,9 +387,10 @@ function cleanVendorCategory(v: unknown): string | null {
     return VENDOR_CATEGORIES.has(low) ? low : null;
 }
 
-// Internal Sailendra staff numbers — never recorded as a customer lead/vendor.
+// Internal hand-off number — never recorded as a customer lead/vendor.
+// Sourced from the business profile default (single source of truth).
 const INTERNAL_NUMBERS = new Set([
-    '6281281958110', // MJ / Mang Jajang (Lead Consultant)
+    DEFAULT_BUSINESS_PROFILE.handoffPhone.replace(/\D/g, ''),
 ]);
 const normalizePhone = (p: string) => (p ?? '').replace(/\D/g, '');
 

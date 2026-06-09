@@ -1,19 +1,24 @@
 'use client';
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { MessageSquare, Bot, Package, Settings } from "lucide-react";
+import { MessageSquare, Bot, Package, Settings, Building2 } from "lucide-react";
 
 interface SettingsTabsProps {
+    businessProfileTab: React.ReactNode;
     whatsappTab: React.ReactNode;
     aiTab: React.ReactNode;
     shippingTab: React.ReactNode;
     systemMessageTab: React.ReactNode;
 }
 
-export function SettingsTabs({ whatsappTab, aiTab, shippingTab, systemMessageTab }: SettingsTabsProps) {
+export function SettingsTabs({ businessProfileTab, whatsappTab, aiTab, shippingTab, systemMessageTab }: SettingsTabsProps) {
     return (
-        <Tabs defaultValue="whatsapp" className="w-full">
-            <TabsList className="grid w-full grid-cols-4">
+        <Tabs defaultValue="business" className="w-full">
+            <TabsList className="grid w-full grid-cols-5">
+                <TabsTrigger value="business" className="flex items-center gap-2">
+                    <Building2 className="w-4 h-4" />
+                    <span className="hidden sm:inline">Profil Bisnis</span>
+                </TabsTrigger>
                 <TabsTrigger value="whatsapp" className="flex items-center gap-2">
                     <MessageSquare className="w-4 h-4" />
                     <span className="hidden sm:inline">WhatsApp</span>
@@ -31,6 +36,10 @@ export function SettingsTabs({ whatsappTab, aiTab, shippingTab, systemMessageTab
                     <span className="hidden sm:inline">System</span>
                 </TabsTrigger>
             </TabsList>
+
+            <TabsContent value="business" className="mt-6">
+                {businessProfileTab}
+            </TabsContent>
 
             <TabsContent value="whatsapp" className="mt-6">
                 {whatsappTab}

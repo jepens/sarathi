@@ -250,7 +250,8 @@ export function SystemMessageEditor() {
             <CardHeader>
                 <CardTitle>AI System Message</CardTitle>
                 <CardDescription>
-                    Configure the AI persona and behavior for Sailendra Assistant
+                    Atur persona & perilaku asisten AI. Default-nya dibangun otomatis
+                    dari Profil Bisnis; edit di sini untuk override penuh.
                 </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">

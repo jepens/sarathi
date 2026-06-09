@@ -7,8 +7,8 @@ import { Toaster } from "@/components/ui/sonner";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Sailendra Assistant",
-  description: "AI-Powered Assistant for Event Organizer",
+  title: "Helat — Asisten Event Organizer di WhatsApp",
+  description: "Dari chat WhatsApp, jadi acara ter-booking. Asisten AI untuk Event Organizer.",
 };
 
 export default function RootLayout({

@@ -8,11 +8,14 @@ import {
 import { SystemMessageEditor } from "./components/SystemMessageEditor";
 import { TestChatPreview } from "./components/TestChatPreview";
 import { KnowledgeCoverageSummary } from "./components/KnowledgeCoverageSummary";
+import { BusinessProfileEditor } from "./components/BusinessProfileEditor";
+import { getBusinessProfile } from "@/lib/settings/business-profile";
 
 export default async function SettingsPage() {
     // Fetch all settings
     const webhookUrl = await getWebhookUrl();
     const verifyToken = await getVerifyToken();
+    const businessProfile = await getBusinessProfile();
 
     // Check configuration status
     const whatsappConfigured = await isWhatsAppConfigured();
@@ -28,6 +31,7 @@ export default async function SettingsPage() {
             <KnowledgeCoverageSummary />
 
             <SettingsTabs
+                businessProfileTab={<BusinessProfileEditor initial={businessProfile} />}
                 whatsappTab={
                     <WebhookSettings
                         initialWebhookUrl={webhookUrl}

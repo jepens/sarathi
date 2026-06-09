@@ -91,7 +91,7 @@ export default function DashboardPage() {
             <div>
                 <h2 className="text-3xl font-bold tracking-tight">Dashboard Overview</h2>
                 <p className="text-muted-foreground">
-                    Selamat datang di Sailendra Assistant — AI untuk Event Organizer
+                    Selamat datang di Helat — AI untuk Event Organizer
                 </p>
             </div>
 

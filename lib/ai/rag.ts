@@ -2,6 +2,7 @@ import { createServiceOrServerClient } from '@/lib/supabase/service';
 import OpenAI from 'openai';
 import { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
 import { getActiveSystemMessage } from './system-message';
+import { DEFAULT_BUSINESS_PROFILE } from '@/lib/settings/business-profile';
 import {
     stockTools,
     checkAvailability,
@@ -94,7 +95,7 @@ async function summarizeConversation(
 ): Promise<string> {
     if (older.length === 0) return '';
     const transcript = older
-        .map((m) => `${m.role === 'user' ? 'Customer' : m.role === 'assistant' ? 'Nindra' : 'System'}: ${m.content}`)
+        .map((m) => `${m.role === 'user' ? 'Customer' : m.role === 'assistant' ? DEFAULT_BUSINESS_PROFILE.assistantName : 'System'}: ${m.content}`)
         .join('\n');
     try {
         const res = await openai.chat.completions.create({
@@ -364,7 +365,7 @@ Set contact_type via save_lead_info only once it is genuinely clear:
                themselves or their company. This is the normal case — mentioning
                vendors, venues, or budgets does NOT make them a vendor.
   • "vendor" → ONLY when the person is clearly SELLING/OFFERING their OWN goods
-               or services TO Sailendra (e.g. "saya supplier catering mau
+               or services TO the company (e.g. "saya supplier catering mau
                menawarkan", a sales rep pitching transport/ambulance/souvenirs/
                seragam/partnership). When contact_type="vendor", ALSO set:
                  - vendor_category → one of: catering, venue, transport,

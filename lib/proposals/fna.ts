@@ -1,4 +1,5 @@
 import { getOpenAIApiKey } from '@/lib/settings/app-settings';
+import { getBusinessProfile } from '@/lib/settings/business-profile';
 import { SupabaseClient } from '@supabase/supabase-js';
 
 // FNA = Form Need Analysis. The structured client requirements the admin
@@ -80,6 +81,7 @@ export async function generateFnaSummary(
     phoneNumber: string,
     supabase: SupabaseClient
 ): Promise<FnaSummaryResult> {
+    const profile = await getBusinessProfile(supabase);
     const { data: crm } = await supabase
         .from('whatsapp_chats')
         .select(
@@ -103,7 +105,7 @@ export async function generateFnaSummary(
     const transcript = history
         .map(
             (m) =>
-                `${m.role === 'user' ? 'Customer' : m.role === 'assistant' ? 'Nindra' : 'System'}: ${m.content}`
+                `${m.role === 'user' ? 'Customer' : m.role === 'assistant' ? profile.assistantName : 'System'}: ${m.content}`
         )
         .join('\n');
 
@@ -136,7 +138,7 @@ export async function generateFnaSummary(
                 {
                     role: 'system',
                     content:
-                        'Anda asisten event organizer Sailendra. Buat ringkasan "Form Need Analysis" (analisa kebutuhan klien) ' +
+                        `Anda asisten event organizer ${profile.businessName}. Buat ringkasan "Form Need Analysis" (analisa kebutuhan klien) ` +
                         'dalam Bahasa Indonesia berdasarkan percakapan WhatsApp dan data yang sudah tercatat. ' +
                         'Tulis 4-7 poin bullet padat (pakai tanda "-") yang mencakup: jenis & tujuan acara, jumlah peserta, ' +
                         'lokasi & tanggal, indikasi budget, kebutuhan/preferensi khusus, dan hal yang masih perlu dikonfirmasi. ' +
