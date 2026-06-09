@@ -1,5 +1,6 @@
 import { createClient } from '@/lib/supabase/server';
 import { sendWhatsAppMessage } from './client';
+import { getWhatsAppSendCreds } from './credentials';
 import { generateRAGResponse } from '@/lib/ai/rag';
 import { whatsappLogger } from '@/lib/utils/logger';
 import { logSystemMessage } from '@/lib/whatsapp/history';
@@ -13,6 +14,7 @@ import { SupabaseClient } from '@supabase/supabase-js';
 
 export interface QueueJob {
     id: string;
+    org_id: string;
     phone_number: string;
     message_text: string;
     status: 'pending' | 'processing' | 'completed' | 'failed';
@@ -25,13 +27,14 @@ export interface QueueJob {
 /**
  * Add message to queue
  */
-export async function enqueueMessage(phoneNumber: string, messageText: string, client?: SupabaseClient): Promise<string> {
+export async function enqueueMessage(orgId: string, phoneNumber: string, messageText: string, client?: SupabaseClient): Promise<string> {
     try {
         const supabase = client || await createClient();
 
         const { data, error } = await supabase
             .from('message_queue')
             .insert({
+                org_id: orgId,
                 phone_number: phoneNumber,
                 message_text: messageText,
                 status: 'pending'
@@ -96,6 +99,9 @@ export async function processQueue(client?: SupabaseClient): Promise<void> {
  * Process a single job
  */
 async function processJob(job: QueueJob, supabase: SupabaseClient): Promise<void> {
+    // Per-tenant send credentials (env fallback). Resolved up-front so the catch
+    // block's fallback message can use them too.
+    const creds = await getWhatsAppSendCreds(supabase, job.org_id);
     try {
         // Mark as processing
         await supabase
@@ -140,15 +146,15 @@ async function processJob(job: QueueJob, supabase: SupabaseClient): Promise<void
             content: msg.content
         }));
 
-        // Generate AI response with conversation history
-        const aiResponse = await generateRAGResponse(job.message_text, history, job.phone_number);
+        // Generate AI response with conversation history, scoped to the job's org.
+        const aiResponse = await generateRAGResponse(job.message_text, history, job.phone_number, { orgId: job.org_id });
 
-        // Send WhatsApp message
-        // Pass the supabase client (which might have Service Role) to access settings
-        const sendResult = await sendWhatsAppMessage(job.phone_number, aiResponse.message);
+        // Send WhatsApp message with the org's credentials.
+        const sendResult = await sendWhatsAppMessage(job.phone_number, aiResponse.message, creds);
 
         // Store in chat history
         await supabase.from('whatsapp_chats').upsert({
+            org_id: job.org_id,
             phone_number: job.phone_number,
             last_message: aiResponse.message,
             last_message_at: new Date().toISOString(),
@@ -156,6 +162,7 @@ async function processJob(job: QueueJob, supabase: SupabaseClient): Promise<void
         }, { onConflict: 'phone_number' });
 
         await supabase.from('whatsapp_messages').insert({
+            org_id: job.org_id,
             phone_number: job.phone_number,
             role: 'assistant',
             content: aiResponse.message,
@@ -200,7 +207,7 @@ async function processJob(job: QueueJob, supabase: SupabaseClient): Promise<void
 
             // Send fallback message
             try {
-                await sendWhatsAppMessage(job.phone_number, 'Maaf, terjadi kesalahan saat memproses pesan Anda.');
+                await sendWhatsAppMessage(job.phone_number, 'Maaf, terjadi kesalahan saat memproses pesan Anda.', creds);
             } catch (fallbackError) {
                 whatsappLogger.error('Failed to send fallback message', fallbackError);
             }

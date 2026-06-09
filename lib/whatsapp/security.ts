@@ -20,14 +20,21 @@ import { whatsappLogger } from '@/lib/utils/logger';
  */
 export async function verifyWhatsAppSignature(
     payload: string,
-    signature: string | null
+    signature: string | null,
+    appSecretOverride?: string | null
 ): Promise<boolean> {
     if (!signature) {
         whatsappLogger.warn('Webhook signature header missing');
         return false;
     }
 
-    const appSecret = await getWhatsAppAppSecret();
+    // `undefined` → fall back to the env app secret (legacy/single-tenant
+    // callers). An explicit `null` means "this org has no app_secret configured"
+    // → we can't verify, so reject. A string is the resolved per-tenant secret.
+    const appSecret =
+        appSecretOverride === undefined
+            ? await getWhatsAppAppSecret()
+            : appSecretOverride;
     if (!appSecret) {
         whatsappLogger.warn(
             'WHATSAPP_APP_SECRET env var is not set — cannot verify webhook. ' +

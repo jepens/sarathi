@@ -60,9 +60,15 @@ export interface SendWhatsAppResult {
     raw: unknown;                // Full Meta response for debugging
 }
 
-export async function sendWhatsAppMessage(to: string, text: string): Promise<SendWhatsAppResult> {
-    const phoneNumberId = await getWhatsAppPhoneNumberId();
-    const accessToken = await getWhatsAppAccessToken();
+export async function sendWhatsAppMessage(
+    to: string,
+    text: string,
+    creds?: { phoneNumberId: string; accessToken: string },
+): Promise<SendWhatsAppResult> {
+    // Per-tenant credentials when provided (webhook/queue), else fall back to
+    // the env credentials (manual/legacy callers, single-tenant Sailendra).
+    const phoneNumberId = creds?.phoneNumberId || (await getWhatsAppPhoneNumberId());
+    const accessToken = creds?.accessToken || (await getWhatsAppAccessToken());
 
     if (!phoneNumberId || !accessToken) {
         throw new Error('WhatsApp not configured. Please configure in /dashboard/settings');

@@ -4,6 +4,7 @@ import { verifyWhatsAppSignature } from '@/lib/whatsapp/security';
 import { checkRateLimit } from '@/lib/whatsapp/rate-limiter-db';
 import { enqueueMessage, processQueue } from '@/lib/whatsapp/queue-db';
 import { sendWhatsAppMessage } from '@/lib/whatsapp/client';
+import { resolveWhatsAppContext } from '@/lib/whatsapp/credentials';
 import { whatsappLogger } from '@/lib/utils/logger';
 import { logSystemMessage } from '@/lib/whatsapp/history';
 
@@ -125,19 +126,10 @@ export async function POST(request: Request) {
         const skipSignatureVerification =
             process.env.WHATSAPP_WEBHOOK_SKIP_SIGNATURE === 'true';
 
-        if (skipSignatureVerification) {
-            whatsappLogger.warn(
-                '⚠️  Webhook signature verification SKIPPED via WHATSAPP_WEBHOOK_SKIP_SIGNATURE=true. ' +
-                    'This is INSECURE and must NEVER be set in production.'
-            );
-        } else {
-            const valid = await verifyWhatsAppSignature(rawBody, signature);
-            if (!valid) {
-                whatsappLogger.warn('Rejected webhook with invalid/missing signature');
-                return new NextResponse('Forbidden', { status: 403 });
-            }
-        }
-
+        // Parse BEFORE verifying: multi-tenant signatures use the sending org's
+        // app_secret, which we only know after reading phone_number_id from the
+        // body. Parsing is side-effect-free; nothing acts on the payload until
+        // the signature is verified below (right after we resolve the org).
         const body = JSON.parse(rawBody);
 
         // Enhanced logging for debugging
@@ -162,6 +154,26 @@ export async function POST(request: Request) {
             const phoneNumberId = metadata?.phone_number_id;
 
             whatsappLogger.info(`Webhook from phone_number_id: ${phoneNumberId}`);
+
+            // Resolve the org + credentials that own this number (env fallback =
+            // the original single-tenant number, e.g. Sailendra).
+            const waCtx = await resolveWhatsAppContext(supabase, phoneNumberId);
+
+            // Verify the signature with THIS org's app_secret now that we know
+            // which org the payload claims to come from. Nothing above acted on
+            // the body, so this is still a pre-action gate.
+            if (skipSignatureVerification) {
+                whatsappLogger.warn(
+                    '⚠️  Webhook signature verification SKIPPED via WHATSAPP_WEBHOOK_SKIP_SIGNATURE=true. ' +
+                        'This is INSECURE and must NEVER be set in production.'
+                );
+            } else {
+                const valid = await verifyWhatsAppSignature(rawBody, signature, waCtx.appSecret);
+                if (!valid) {
+                    whatsappLogger.warn('Rejected webhook with invalid/missing signature');
+                    return new NextResponse('Forbidden', { status: 403 });
+                }
+            }
 
             // ========== HANDLE user_id_update (Phase B) ==========
             // Fires when a customer changes their phone number → BSUID
@@ -326,6 +338,7 @@ export async function POST(request: Request) {
                         // be the first event we see for this key, and we don't
                         // want to silently drop the recovered phone.
                         const patch: Record<string, unknown> = {
+                            org_id: waCtx.orgId,
                             phone_number: contactKey,
                             verified_phone: recovered,
                             updated_at: nowIso,
@@ -351,7 +364,7 @@ export async function POST(request: Request) {
                     const allowed = await checkRateLimit(contactKey, supabase);
                     if (!allowed) {
                         whatsappLogger.warn(`Rate limit exceeded for ${contactKey}`);
-                        await sendWhatsAppMessage(from, 'Mohon tunggu sebentar sebelum mengirim pesan lagi.');
+                        await sendWhatsAppMessage(from, 'Mohon tunggu sebentar sebelum mengirim pesan lagi.', { phoneNumberId: waCtx.phoneNumberId, accessToken: waCtx.accessToken });
                         await logSystemMessage(contactKey, 'Rate limit exceeded. User warned.');
                         return new NextResponse('EVENT_RECEIVED', { status: 200 });
                     }
@@ -370,7 +383,7 @@ export async function POST(request: Request) {
 
                     if (aiEnabled) {
                         // Add to database queue (service role client bypasses RLS)
-                        await enqueueMessage(contactKey, messageBody, supabase);
+                        await enqueueMessage(waCtx.orgId, contactKey, messageBody, supabase);
                         whatsappLogger.info(`Message from ${contactKey} added to queue`);
                         // Trigger queue processing immediately (fire and forget)
                         processQueue(supabase).catch(err => whatsappLogger.error('Error processing queue immediately', err));
@@ -389,6 +402,7 @@ export async function POST(request: Request) {
                             // this contact later even if they arrive phone-less.
                             const inboundNow = new Date().toISOString();
                             const chatPatch: Record<string, unknown> = {
+                                org_id: waCtx.orgId,
                                 phone_number: contactKey,
                                 last_message: messageBody,
                                 last_message_at: inboundNow,
@@ -413,6 +427,7 @@ export async function POST(request: Request) {
                             const { error: msgError } = await supabase
                                 .from('whatsapp_messages')
                                 .insert({
+                                    org_id: waCtx.orgId,
                                     phone_number: contactKey,
                                     role: 'user',
                                     content: messageBody
