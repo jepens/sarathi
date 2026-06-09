@@ -10,12 +10,15 @@ import { TestChatPreview } from "./components/TestChatPreview";
 import { KnowledgeCoverageSummary } from "./components/KnowledgeCoverageSummary";
 import { BusinessProfileEditor } from "./components/BusinessProfileEditor";
 import { getBusinessProfile } from "@/lib/settings/business-profile";
+import { WhatsAppCredentials } from "./components/WhatsAppCredentials";
+import { getMyWhatsAppIntegration } from "@/lib/whatsapp/integration";
 
 export default async function SettingsPage() {
     // Fetch all settings
     const webhookUrl = await getWebhookUrl();
     const verifyToken = await getVerifyToken();
     const businessProfile = await getBusinessProfile();
+    const waIntegration = await getMyWhatsAppIntegration();
 
     // Check configuration status
     const whatsappConfigured = await isWhatsAppConfigured();
@@ -33,11 +36,14 @@ export default async function SettingsPage() {
             <SettingsTabs
                 businessProfileTab={<BusinessProfileEditor initial={businessProfile} />}
                 whatsappTab={
-                    <WebhookSettings
-                        initialWebhookUrl={webhookUrl}
-                        initialVerifyToken={verifyToken}
-                        isConfigured={whatsappConfigured}
-                    />
+                    <div className="space-y-6">
+                        <WhatsAppCredentials initial={waIntegration} />
+                        <WebhookSettings
+                            initialWebhookUrl={webhookUrl}
+                            initialVerifyToken={verifyToken}
+                            isConfigured={whatsappConfigured}
+                        />
+                    </div>
                 }
                 aiTab={
                     <div className="p-4 text-center text-muted-foreground">
