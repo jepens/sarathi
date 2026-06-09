@@ -3,6 +3,7 @@ import OpenAI from 'openai';
 import { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
 import { getActiveSystemMessage } from './system-message';
 import { DEFAULT_BUSINESS_PROFILE } from '@/lib/settings/business-profile';
+import { getDefaultOrgId } from '@/lib/settings/org-context';
 import {
     stockTools,
     checkAvailability,
@@ -259,6 +260,12 @@ export interface RAGStreamOpts {
      * generating (and we keep paying for) tokens nobody will read.
      */
     signal?: AbortSignal;
+    /**
+     * Org whose Knowledge Base + products to retrieve. Fase 1: omit → the single
+     * default org. Fase 2: the webhook passes the org resolved from the receiving
+     * WhatsApp number, isolating each tenant's retrieval.
+     */
+    orgId?: string;
 }
 
 export async function generateRAGResponse(
@@ -279,6 +286,11 @@ export async function generateRAGResponse(
         // The service-role client bypasses RLS for these read-only RPCs.
         const supabase = await createServiceOrServerClient();
 
+        // Scope retrieval to the message's org so a tenant's AI can never pull
+        // another tenant's Knowledge Base/products. Fase 1: the single default
+        // org; Fase 2: opts.orgId resolved from the receiving WhatsApp number.
+        const orgId = opts?.orgId ?? (await getDefaultOrgId(supabase));
+
         // Retrieval tuned for a small, curated knowledge base: a low threshold
         // + generous cap effectively injects the whole KB (no relevant chunk
         // silently dropped, which the old 0.5/top-5 setting did) while still
@@ -293,6 +305,7 @@ export async function generateRAGResponse(
             query_embedding: queryEmbedding,
             match_threshold: DOC_MATCH_THRESHOLD,
             match_count: DOC_MATCH_COUNT,
+            filter_org_id: orgId,
         });
 
         if (docError) {
@@ -304,6 +317,7 @@ export async function generateRAGResponse(
             query_embedding: queryEmbedding,
             match_threshold: PRODUCT_MATCH_THRESHOLD,
             match_count: PRODUCT_MATCH_COUNT,
+            filter_org_id: orgId,
         });
 
         if (prodError) {
