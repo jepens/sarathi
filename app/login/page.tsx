@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -46,9 +47,9 @@ export default function LoginPage() {
             <span className="text-2xl font-bold tracking-tight">Helat</span>
             <Card className="w-full max-w-md">
                 <CardHeader className="space-y-1">
-                    <CardTitle className="text-2xl font-bold text-center">Admin Login</CardTitle>
+                    <CardTitle className="text-2xl font-bold text-center">Masuk</CardTitle>
                     <CardDescription className="text-center">
-                        Enter your credentials to access the dashboard
+                        Masuk ke dashboard Helat Anda.
                     </CardDescription>
                 </CardHeader>
                 <form onSubmit={handleLogin}>
@@ -80,17 +81,26 @@ export default function LoginPage() {
                             />
                         </div>
                     </CardContent>
-                    <CardFooter>
+                    <CardFooter className="flex flex-col gap-3">
                         <Button className="w-full" type="submit" disabled={loading}>
                             {loading ? (
                                 <>
                                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                    Signing in...
+                                    Memproses...
                                 </>
                             ) : (
-                                "Sign In"
+                                "Masuk"
                             )}
                         </Button>
+                        <p className="text-sm text-muted-foreground">
+                            Belum punya akun?{" "}
+                            <Link
+                                href="/signup"
+                                className="font-medium text-foreground underline underline-offset-4"
+                            >
+                                Daftar
+                            </Link>
+                        </p>
                     </CardFooter>
                 </form>
             </Card>
