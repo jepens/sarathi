@@ -109,10 +109,12 @@ export async function DELETE(request: Request) {
         }
 
         // Find document chunks that match the filename in metadata
-        // We check both file_name and source fields for backward compatibility
+        // We check both file_name and source fields for backward compatibility.
+        // Fetch metadata too so we can delete the underlying storage object by
+        // its real path (metadata.source is org-prefixed, e.g. "<org_id>/<ts>_<name>").
         const { data: matchingDocs, error: fetchError } = await supabase
             .from('documents')
-            .select('id')
+            .select('id, metadata')
             .or(`metadata->>file_name.eq.${fileName},metadata->>source.eq.${fileName}`);
 
         if (fetchError) {
@@ -124,6 +126,16 @@ export async function DELETE(request: Request) {
         }
 
         const idsToDelete = matchingDocs?.map((doc) => doc.id) || [];
+        // Distinct storage paths for these chunks. Editor-authored docs have no
+        // bucket object (source === title) — removing a nonexistent key is a
+        // harmless no-op.
+        const storagePaths = Array.from(
+            new Set(
+                (matchingDocs ?? [])
+                    .map((doc) => (doc.metadata as DocumentMetadata | null)?.source)
+                    .filter((s): s is string => typeof s === 'string' && s.length > 0)
+            )
+        );
 
         if (idsToDelete.length === 0) {
             return NextResponse.json(
@@ -146,15 +158,17 @@ export async function DELETE(request: Request) {
             );
         }
 
-        // Delete file from storage
-        const { error: storageError } = await supabase.storage
-            .from('documents')
-            .remove([fileName]);
+        // Delete the underlying file(s) from storage by their real path.
+        if (storagePaths.length > 0) {
+            const { error: storageError } = await supabase.storage
+                .from('documents')
+                .remove(storagePaths);
 
-        if (storageError) {
-            console.error('Error deleting from storage:', storageError);
-            // Don't fail the request if storage deletion fails
-            // The database record is already deleted
+            if (storageError) {
+                console.error('Error deleting from storage:', storageError);
+                // Don't fail the request if storage deletion fails
+                // The database record is already deleted
+            }
         }
 
         // If this document was authored in the dashboard editor, also drop its

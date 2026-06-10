@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server';
 import { generateEmbedding } from '@/lib/ai/embedding';
 import { chunkText } from '@/lib/ai/parsing';
+import { getCurrentOrgId } from '@/lib/settings/org-context';
 import { NextResponse } from 'next/server';
 
 // In-dashboard knowledge editor backend.
@@ -54,6 +55,13 @@ export async function POST(request: Request) {
     } = await supabase.auth.getUser();
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
+    // Editor-authored KB belongs to the user's org. Required: kb_sources + the
+    // derived documents rows have org_id NOT NULL with an is_org_member RLS
+    // with_check, so without an explicit org_id a non-Sailendra tenant's save
+    // would be rejected (and the seed default would mis-attribute it).
+    const orgId = await getCurrentOrgId(supabase);
+    if (!orgId) return NextResponse.json({ error: 'No organization for current user' }, { status: 403 });
+
     let body: { title?: unknown; content?: unknown };
     try {
         body = await request.json();
@@ -89,7 +97,7 @@ export async function POST(request: Request) {
     // 1. Upsert the canonical editable source.
     const { error: upsertErr } = await supabase
         .from('kb_sources')
-        .upsert({ title, content, created_by: user.id, updated_at: new Date().toISOString() }, { onConflict: 'title' });
+        .upsert({ org_id: orgId, title, content, created_by: user.id, updated_at: new Date().toISOString() }, { onConflict: 'org_id,title' });
     if (upsertErr) {
         return NextResponse.json({ error: `Gagal menyimpan sumber: ${upsertErr.message}` }, { status: 500 });
     }
@@ -106,6 +114,7 @@ export async function POST(request: Request) {
 
     const nowIso = new Date().toISOString();
     const rows = chunks.map((chunk, i) => ({
+        org_id: orgId,
         content: chunk,
         metadata: {
             file_name: title,

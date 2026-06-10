@@ -31,8 +31,21 @@ export function UploadZone({ onUploadComplete }: UploadZoneProps = {}) {
         const supabase = createClient()
 
         try {
-            // 1. Upload to Supabase Storage
-            const filePath = `${Date.now()}_${file.name}`
+            // Resolve the uploader's org so KB files land under "<org_id>/..." —
+            // the documents-bucket RLS policy authorises only members of that
+            // org. RLS limits this query to the user's own membership.
+            const { data: membership } = await supabase
+                .from('organization_members')
+                .select('org_id')
+                .limit(1)
+                .maybeSingle()
+            const orgId = membership?.org_id
+            if (!orgId) {
+                throw new Error('Tidak menemukan organisasi untuk akun ini.')
+            }
+
+            // 1. Upload to Supabase Storage (org-scoped path)
+            const filePath = `${orgId}/${Date.now()}_${file.name}`
             const { error: uploadError } = await supabase.storage
                 .from('documents')
                 .upload(filePath, file)
