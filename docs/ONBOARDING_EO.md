@@ -53,10 +53,17 @@ checklist onboarding di dashboard otomatis hilang.
 ---
 
 ### Catatan operasional (deploy Easypanel/VPS)
-- Penguras antrian: `vercel.json` cron (`/api/queue/process` tiap menit) **tidak
-  aktif** di luar Vercel. Saat ini antrian dikuras inline oleh webhook
-  (fire-and-forget) tiap pesan masuk. Untuk menjamin job gagal/retry tetap
-  diproses, tambahkan scheduled task di Easypanel yang memanggil
-  `POST /api/queue/process` tiap menit.
+- **Penguras antrian (cron).** `vercel.json` cron tidak aktif di luar Vercel.
+  Antrian dikuras inline oleh webhook tiap pesan masuk, tapi job yang **di-retry**
+  atau **nyangkut di `processing`** (worker restart) butuh pemicu berkala.
+  Solusi: jalankan service cron mandiri dari `deploy/cron/` (lihat
+  `deploy/cron/README.md`) — service Alpine kecil yang `GET /api/queue/process`
+  tiap menit. Endpoint-nya **GET** dan dilindungi `CRON_SECRET` (header
+  `Authorization: Bearer <CRON_SECRET>`); set `CRON_SECRET` yang sama di service
+  app dan service cron. Alternatif: scheduler eksternal (cron-job.org) ke URL +
+  header yang sama.
+- Pengambilan job sudah **atomik** (`claim_queue_jobs`, `FOR UPDATE SKIP LOCKED`),
+  jadi cron + drainer inline tidak akan membalas dobel, dan job yang stranded
+  otomatis di-reclaim.
 - Kredensial OpenAI & verify-token webhook bersifat global (env/app_settings),
   bukan per-org.

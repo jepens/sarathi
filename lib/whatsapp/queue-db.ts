@@ -73,13 +73,14 @@ export async function processQueue(client?: SupabaseClient): Promise<void> {
             }
         }
 
-        // Get pending messages (oldest first)
-        const { data: jobs, error } = await supabase
-            .from('message_queue')
-            .select('*')
-            .eq('status', 'pending')
-            .order('created_at', { ascending: true })
-            .limit(10); // Process 10 at a time
+        // Atomically claim a batch (also reclaims jobs stranded in 'processing'
+        // by a crashed worker). FOR UPDATE SKIP LOCKED inside claim_queue_jobs
+        // means the inline webhook drainer and the per-minute cron take disjoint
+        // rows — a customer never gets a double reply, and no job is stranded.
+        const { data: jobs, error } = await supabase.rpc('claim_queue_jobs', {
+            p_limit: 10,
+            p_stale_seconds: 180,
+        });
 
         if (error) throw error;
         if (!jobs || jobs.length === 0) return;
@@ -103,12 +104,8 @@ async function processJob(job: QueueJob, supabase: SupabaseClient): Promise<void
     // block's fallback message can use them too.
     const creds = await getWhatsAppSendCreds(supabase, job.org_id);
     try {
-        // Mark as processing
-        await supabase
-            .from('message_queue')
-            .update({ status: 'processing', updated_at: new Date().toISOString() })
-            .eq('id', job.id);
-
+        // The job arrives already marked 'processing' (claim_queue_jobs did that
+        // atomically), so no need to re-mark it here.
         whatsappLogger.info(`Processing job ${job.id} from ${job.phone_number}`);
 
         // Respect the per-chat AI switch. The webhook already skips enqueue when
