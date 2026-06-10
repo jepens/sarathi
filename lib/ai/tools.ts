@@ -407,6 +407,7 @@ const normalizePhone = (p: string) => (p ?? '').replace(/\D/g, '');
  *    Contacts UI keeps working without UI changes.
  */
 export async function saveLeadInfo(
+    orgId: string,
     phoneNumber: string,
     args: SaveLeadInfoArgs
 ): Promise<string> {
@@ -451,6 +452,7 @@ export async function saveLeadInfo(
             const { data } = await supabase
                 .from('whatsapp_chats')
                 .select('contact_name_locked, contact_type, contact_type_locked')
+                .eq('org_id', orgId)
                 .eq('phone_number', phoneNumber)
                 .maybeSingle();
             existing = data;
@@ -507,20 +509,21 @@ export async function saveLeadInfo(
             return JSON.stringify({ ok: true, updated: 0, note: 'no fields to update' });
         }
 
+        patch.org_id = orgId;
         patch.phone_number = phoneNumber;
         patch.updated_at = new Date().toISOString();
 
         const { error } = await supabase
             .from('whatsapp_chats')
-            .upsert(patch, { onConflict: 'phone_number' });
+            .upsert(patch, { onConflict: 'org_id,phone_number' });
 
         if (error) throw error;
 
         return JSON.stringify({
             ok: true,
-            updated: Object.keys(patch).length - 2, // minus phone_number + updated_at
+            updated: Object.keys(patch).length - 3, // minus org_id + phone_number + updated_at
             fields: Object.keys(patch).filter(
-                (k) => k !== 'phone_number' && k !== 'updated_at'
+                (k) => k !== 'org_id' && k !== 'phone_number' && k !== 'updated_at'
             ),
         });
     } catch (error) {
@@ -531,6 +534,7 @@ export async function saveLeadInfo(
 }
 
 export async function updateLeadStage(
+    orgId: string,
     phoneNumber: string,
     stage: LeadStage,
     reason?: string | null
@@ -539,6 +543,7 @@ export async function updateLeadStage(
         const supabase = await createServiceOrServerClient();
 
         const patch: Record<string, unknown> = {
+            org_id: orgId,
             phone_number: phoneNumber,
             lead_stage: stage,
             updated_at: new Date().toISOString(),
@@ -549,6 +554,7 @@ export async function updateLeadStage(
             const { data: row } = await supabase
                 .from('whatsapp_chats')
                 .select('notes')
+                .eq('org_id', orgId)
                 .eq('phone_number', phoneNumber)
                 .maybeSingle();
             const stamp = new Date().toISOString();
@@ -558,7 +564,7 @@ export async function updateLeadStage(
 
         const { error } = await supabase
             .from('whatsapp_chats')
-            .upsert(patch, { onConflict: 'phone_number' });
+            .upsert(patch, { onConflict: 'org_id,phone_number' });
 
         if (error) throw error;
 
@@ -573,6 +579,7 @@ export async function updateLeadStage(
 // --- Meeting / handoff / proposal executors ---------------------------------
 
 export async function scheduleMeeting(
+    orgId: string,
     phoneNumber: string,
     meetingAtIso: string,
     notes: string | null
@@ -602,6 +609,7 @@ export async function scheduleMeeting(
         const { data: chat } = await supabase
             .from('whatsapp_chats')
             .select('contact_name, notes')
+            .eq('org_id', orgId)
             .eq('phone_number', phoneNumber)
             .maybeSingle();
 
@@ -613,6 +621,7 @@ export async function scheduleMeeting(
         const { data: inserted, error: insertErr } = await supabase
             .from('orders')
             .insert({
+                org_id: orgId,
                 customer_phone: phoneNumber,
                 customer_name: customerName,
                 items: [],
@@ -642,6 +651,7 @@ export async function scheduleMeeting(
                 notes: chat?.notes ? `${chat.notes}\n${line}` : line,
                 updated_at: stamp,
             })
+            .eq('org_id', orgId)
             .eq('phone_number', phoneNumber);
 
         return JSON.stringify({
@@ -658,6 +668,7 @@ export async function scheduleMeeting(
 }
 
 export async function handoffToHuman(
+    orgId: string,
     phoneNumber: string,
     reason: string
 ): Promise<string> {
@@ -667,6 +678,7 @@ export async function handoffToHuman(
         const { data: chat } = await supabase
             .from('whatsapp_chats')
             .select('notes')
+            .eq('org_id', orgId)
             .eq('phone_number', phoneNumber)
             .maybeSingle();
 
@@ -679,6 +691,7 @@ export async function handoffToHuman(
                 notes: chat?.notes ? `${chat.notes}\n${line}` : line,
                 updated_at: stamp,
             })
+            .eq('org_id', orgId)
             .eq('phone_number', phoneNumber);
 
         if (error) throw error;

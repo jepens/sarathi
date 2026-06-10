@@ -21,13 +21,18 @@ import { checkVerifyToken } from '@/lib/settings/app-settings';
 // key, and Meta accepts a BSUID as the `to` for replies from June 2026).
 async function resolveContactKey(
     supabase: SupabaseClient,
+    orgId: string,
     from: string,
     bsuid: string | null
 ): Promise<string> {
     if (bsuid) {
+        // Scope the bsuid lookup to this org: the webhook uses a service-role
+        // client (RLS bypassed), so without org_id a bsuid that two tenants
+        // happen to share would re-thread the customer into the wrong org.
         const { data } = await supabase
             .from('whatsapp_chats')
             .select('phone_number')
+            .eq('org_id', orgId)
             .eq('bsuid', bsuid)
             .maybeSingle<{ phone_number: string }>();
         if (data?.phone_number) return data.phone_number;
@@ -52,6 +57,7 @@ function looksLikePhone(value: unknown): value is string {
 // when we can't find a pair.
 async function handleUserIdUpdate(
     supabase: SupabaseClient,
+    orgId: string,
     value: Record<string, unknown>
 ): Promise<void> {
     // Candidate containers: value.user_id_updates[] (most likely) or a single
@@ -84,6 +90,7 @@ async function handleUserIdUpdate(
         const { data, error } = await supabase
             .from('whatsapp_chats')
             .update({ bsuid: newId, updated_at: new Date().toISOString() })
+            .eq('org_id', orgId)
             .eq('bsuid', oldId)
             .select('phone_number');
 
@@ -186,7 +193,7 @@ export async function POST(request: Request) {
                 'user_id_updates' in changeValue ||
                 'user_id_update' in changeValue;
             if (isUserIdUpdate) {
-                await handleUserIdUpdate(supabase, changeValue);
+                await handleUserIdUpdate(supabase, waCtx.orgId, changeValue);
                 return new NextResponse('EVENT_RECEIVED', { status: 200 });
             }
 
@@ -257,6 +264,7 @@ export async function POST(request: Request) {
                             const { error: bsuidErr } = await supabase
                                 .from('whatsapp_chats')
                                 .update({ bsuid: recipientBsuid })
+                                .eq('org_id', waCtx.orgId)
                                 .eq('phone_number', recipientPhone)
                                 .is('bsuid', null);
                             if (bsuidErr) {
@@ -313,7 +321,7 @@ export async function POST(request: Request) {
 
                 // Canonical CRM key — reuse an existing contact's phone_number
                 // when we recognise the BSUID; otherwise use `from`.
-                const contactKey = await resolveContactKey(supabase, from, bsuid);
+                const contactKey = await resolveContactKey(supabase, waCtx.orgId, from, bsuid);
 
                 whatsappLogger.info(`Message details - From: ${from}, BSUID: ${bsuid ?? 'none'}, Key: ${contactKey}, Type: ${messageType}`);
 
@@ -346,8 +354,8 @@ export async function POST(request: Request) {
                         if (bsuid) patch.bsuid = bsuid;
                         await supabase
                             .from('whatsapp_chats')
-                            .upsert(patch, { onConflict: 'phone_number' });
-                        await logSystemMessage(contactKey, `Customer shared contact info — phone tersimpan: ${recovered}`);
+                            .upsert(patch, { onConflict: 'org_id,phone_number' });
+                        await logSystemMessage(waCtx.orgId, contactKey, `Customer shared contact info — phone tersimpan: ${recovered}`);
                         whatsappLogger.info(`Contact share captured for ${contactKey}: ${recovered}`);
                     } else {
                         whatsappLogger.warn(`Contact share from ${contactKey} had no usable phone`);
@@ -359,13 +367,15 @@ export async function POST(request: Request) {
                     const messageBody = message.text.body;
                     whatsappLogger.info(`Received message from ${contactKey}: ${messageBody}`);
 
-                    // Rate limiting (database-based)
-                    // Pass service role client to bypass RLS
-                    const allowed = await checkRateLimit(contactKey, supabase);
+                    // Rate limiting (database-based). Namespace the identifier by
+                    // org so two tenants who share a customer don't share a rate
+                    // bucket (one tenant could otherwise exhaust the other's quota
+                    // for that number). Pass service role client to bypass RLS.
+                    const allowed = await checkRateLimit(`${waCtx.orgId}:${contactKey}`, supabase);
                     if (!allowed) {
                         whatsappLogger.warn(`Rate limit exceeded for ${contactKey}`);
                         await sendWhatsAppMessage(from, 'Mohon tunggu sebentar sebelum mengirim pesan lagi.', { phoneNumberId: waCtx.phoneNumberId, accessToken: waCtx.accessToken });
-                        await logSystemMessage(contactKey, 'Rate limit exceeded. User warned.');
+                        await logSystemMessage(waCtx.orgId, contactKey, 'Rate limit exceeded. User warned.');
                         return new NextResponse('EVENT_RECEIVED', { status: 200 });
                     }
 
@@ -377,6 +387,7 @@ export async function POST(request: Request) {
                     const { data: aiRow } = await supabase
                         .from('whatsapp_chats')
                         .select('ai_enabled')
+                        .eq('org_id', waCtx.orgId)
                         .eq('phone_number', contactKey)
                         .maybeSingle();
                     const aiEnabled = aiRow?.ai_enabled !== false;
@@ -415,7 +426,7 @@ export async function POST(request: Request) {
                             if (waId) chatPatch.verified_phone = waId;
                             const { error: chatError } = await supabase
                                 .from('whatsapp_chats')
-                                .upsert(chatPatch, { onConflict: 'phone_number' });
+                                .upsert(chatPatch, { onConflict: 'org_id,phone_number' });
 
                             if (chatError) {
                                 whatsappLogger.error('Error updating chat summary', chatError);

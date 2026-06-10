@@ -142,6 +142,7 @@ export interface CreateOrderResult {
 }
 
 export async function createOrder(
+    orgId: string,
     phoneNumber: string,
     orderData: OrderData
 ): Promise<CreateOrderResult> {
@@ -176,10 +177,13 @@ export async function createOrder(
             throw new Error(stockValidation.message || 'Stok tidak mencukupi');
         }
 
-        // Check if contact exists
+        // Check if contact exists (scoped to this order's org — service-role
+        // bypasses RLS, so without org_id a shared phone would read another
+        // tenant's contact).
         const { data: chat } = await supabase
             .from('whatsapp_chats')
             .select('contact_name')
+            .eq('org_id', orgId)
             .eq('phone_number', phoneNumber)
             .single();
 
@@ -190,6 +194,7 @@ export async function createOrder(
             const { error: createChatError } = await supabase
                 .from('whatsapp_chats')
                 .insert({
+                    org_id: orgId,
                     phone_number: phoneNumber,
                     contact_name: 'New Customer',
                     unread_count: 0,
@@ -210,6 +215,7 @@ export async function createOrder(
         const { data: inserted, error } = await supabase
             .from('orders')
             .insert({
+                org_id: orgId,
                 customer_phone: phoneNumber,
                 customer_name: customerName,
                 items: repriced.items,
@@ -600,7 +606,7 @@ ${contextText}
                         });
                         toolOk = false;
                     } else {
-                        toolResult = await saveLeadInfo(phoneNumber, functionArgs);
+                        toolResult = await saveLeadInfo(orgId, phoneNumber, functionArgs);
                         try {
                             toolOk = JSON.parse(toolResult).ok !== false;
                         } catch {
@@ -627,6 +633,7 @@ ${contextText}
                             toolOk = false;
                         } else {
                             toolResult = await updateLeadStage(
+                                orgId,
                                 phoneNumber,
                                 stage,
                                 functionArgs.reason ?? null
@@ -647,6 +654,7 @@ ${contextText}
                         toolOk = false;
                     } else {
                         toolResult = await scheduleMeeting(
+                            orgId,
                             phoneNumber,
                             functionArgs.meeting_at,
                             functionArgs.notes ?? null
@@ -666,6 +674,7 @@ ${contextText}
                         toolOk = false;
                     } else {
                         toolResult = await handoffToHuman(
+                            orgId,
                             phoneNumber,
                             functionArgs.reason
                         );
@@ -686,7 +695,7 @@ ${contextText}
                         });
                     } else {
                         try {
-                            const result = await createOrder(phoneNumber, {
+                            const result = await createOrder(orgId, phoneNumber, {
                                 type: functionArgs.type,
                                 items: functionArgs.items,
                                 delivery_info: functionArgs.delivery_info,

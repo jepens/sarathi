@@ -8,6 +8,7 @@ import {
 } from '@/lib/whatsapp/templates';
 import { describeWhatsAppError, type WhatsAppApiError } from '@/lib/whatsapp/client';
 import { whatsappLogger } from '@/lib/utils/logger';
+import { getCurrentOrgId } from '@/lib/settings/org-context';
 
 // POST /api/chat/send-template
 // Body: { phone_number, template_name, language, variables?: string[] }
@@ -37,6 +38,12 @@ export async function POST(request: Request) {
     } = await supabase.auth.getUser();
     if (!user) {
         return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    // Explicit org for the composite (org_id, phone_number) key — see send/route.ts.
+    const orgId = await getCurrentOrgId(supabase);
+    if (!orgId) {
+        return NextResponse.json({ error: 'No organization for current user' }, { status: 403 });
     }
 
     let body: SendTemplateBody;
@@ -108,18 +115,20 @@ export async function POST(request: Request) {
             .from('whatsapp_chats')
             .upsert(
                 {
+                    org_id: orgId,
                     phone_number: phoneNumber,
                     last_message: renderedBody,
                     last_message_at: nowIso,
                     updated_at: nowIso,
                 },
-                { onConflict: 'phone_number' }
+                { onConflict: 'org_id,phone_number' }
             );
         if (chatError) throw chatError;
 
         const { error: msgError } = await supabase
             .from('whatsapp_messages')
             .insert({
+                org_id: orgId,
                 phone_number: phoneNumber,
                 role: 'assistant',
                 content: renderedBody,

@@ -118,6 +118,7 @@ async function processJob(job: QueueJob, supabase: SupabaseClient): Promise<void
         const { data: chatRow } = await supabase
             .from('whatsapp_chats')
             .select('ai_enabled')
+            .eq('org_id', job.org_id)
             .eq('phone_number', job.phone_number)
             .maybeSingle();
         if (chatRow?.ai_enabled === false) {
@@ -136,6 +137,7 @@ async function processJob(job: QueueJob, supabase: SupabaseClient): Promise<void
         const { data: historyData } = await supabase
             .from('whatsapp_messages')
             .select('role, content')
+            .eq('org_id', job.org_id)
             .eq('phone_number', job.phone_number)
             .order('created_at', { ascending: false })
             .limit(30);
@@ -159,7 +161,7 @@ async function processJob(job: QueueJob, supabase: SupabaseClient): Promise<void
             last_message: aiResponse.message,
             last_message_at: new Date().toISOString(),
             updated_at: new Date().toISOString()
-        }, { onConflict: 'phone_number' });
+        }, { onConflict: 'org_id,phone_number' });
 
         await supabase.from('whatsapp_messages').insert({
             org_id: job.org_id,
@@ -203,7 +205,7 @@ async function processJob(job: QueueJob, supabase: SupabaseClient): Promise<void
                 .eq('id', job.id);
 
             whatsappLogger.error(`Job ${job.id} permanently failed after ${newRetries} retries`);
-            await logSystemMessage(job.phone_number, `Error: Failed to process message after ${newRetries} retries. Reason: ${errorMessage}`);
+            await logSystemMessage(job.org_id, job.phone_number, `Error: Failed to process message after ${newRetries} retries. Reason: ${errorMessage}`);
 
             // Send fallback message
             try {
