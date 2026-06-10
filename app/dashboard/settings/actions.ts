@@ -35,8 +35,11 @@ export async function updateBusinessProfile(
     } = await supabase.auth.getUser();
     if (!user) return { ok: false, error: 'Tidak terautentikasi.' };
 
+    const orgId = await getCurrentOrgId(supabase);
+    if (!orgId) return { ok: false, error: 'Organisasi tidak ditemukan.' };
+
     try {
-        await saveBusinessProfile(input, supabase);
+        await saveBusinessProfile(input, supabase, orgId);
         revalidatePath('/dashboard/settings');
         return { ok: true };
     } catch (e) {

@@ -1,6 +1,8 @@
 import { createClient } from '@/lib/supabase/server';
 import { NextResponse } from 'next/server';
-import { getDefaultSystemMessage } from '@/lib/ai/system-message';
+import { buildSystemMessage, getDefaultSystemMessage } from '@/lib/ai/system-message';
+import { getBusinessProfile } from '@/lib/settings/business-profile';
+import { getCurrentOrgId } from '@/lib/settings/org-context';
 
 export const dynamic = 'force-dynamic';
 
@@ -31,12 +33,17 @@ export async function GET(request: Request) {
         const { data, error } = await query.single();
 
         if (error) {
-            // If no active message found, return default
+            // If no active message found, return a default built from this org's
+            // business profile (brand-less generic if the org isn't resolved).
             if (error.code === 'PGRST116') {
+                const orgId = await getCurrentOrgId(supabase);
+                const content = orgId
+                    ? buildSystemMessage(await getBusinessProfile(supabase, orgId))
+                    : getDefaultSystemMessage();
                 return NextResponse.json({
                     id: 'default',
                     name: 'Default System Message',
-                    content: getDefaultSystemMessage(),
+                    content,
                     is_active: true,
                     description: 'Default system message (not saved in DB)',
                     created_at: new Date().toISOString(),
@@ -207,10 +214,19 @@ export async function POST(request: Request) {
             return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
         }
 
+        // system_message.org_id is NOT NULL with an is_org_member with_check —
+        // set it explicitly so a non-Sailendra tenant's persona isn't rejected
+        // (and isn't mis-attributed via the column DEFAULT).
+        const orgId = await getCurrentOrgId(supabase);
+        if (!orgId) {
+            return NextResponse.json({ error: 'No organization for current user' }, { status: 403 });
+        }
+
         const { data, error } = await supabase
             .from('system_message')
             .insert([
                 {
+                    org_id: orgId,
                     name,
                     content: content.trim(),
                     description: description || null,

@@ -1,7 +1,7 @@
 import { createClient } from '@/lib/supabase/server';
 import { createServiceOrServerClient } from '@/lib/supabase/service';
 import { ChatCompletionTool } from 'openai/resources/chat/completions';
-import { DEFAULT_BUSINESS_PROFILE } from '@/lib/settings/business-profile';
+import { type BusinessProfile } from '@/lib/settings/business-profile';
 
 // Lead pipeline stages — kept in sync with the CHECK constraint on
 // whatsapp_chats.lead_stage (see migration 0002_eo_pivot_schema.sql).
@@ -18,7 +18,13 @@ export type LeadStage = (typeof LEAD_STAGES)[number];
 
 // --- Tool Definitions (JSON Schema for OpenAI) ---
 
-export const stockTools: ChatCompletionTool[] = [
+// Built per-tenant: the tool DESCRIPTIONS (what the model reads) are templated
+// from the org's business profile, so a tenant's bot references its own
+// hand-off contact / company email / assistant name — never Sailendra's. The
+// parameter SCHEMAS are identical for every tenant (strict mode only constrains
+// `parameters`, not `description`).
+export function buildTools(p: BusinessProfile): ChatCompletionTool[] {
+    return [
     {
         type: 'function',
         function: {
@@ -119,7 +125,7 @@ export const stockTools: ChatCompletionTool[] = [
                     },
                     email: {
                         type: ['string', 'null'],
-                        description: "Customer's OWN email address (must look valid). NEVER pass Sailendra's own address info@sailendra.co.id — that is the company address Nindra hands to vendors, not the customer's.",
+                        description: `Customer's OWN email address (must look valid).${p.businessEmail ? ` NEVER pass ${p.businessName}'s own address ${p.businessEmail} — that is the company address ${p.assistantName} hands to vendors, not the customer's.` : ''}`,
                     },
                     event_interest: {
                         type: ['string', 'null'],
@@ -210,7 +216,7 @@ export const stockTools: ChatCompletionTool[] = [
         function: {
             name: 'schedule_meeting',
             description:
-                'Book an online consultation meeting with the human sales lead (MJ). Call this AFTER you have confirmed a specific date/time with the customer AND collected their email. The meeting is added to the company calendar; an actual meeting link is provisioned by the admin after the booking. On success, also call update_lead_stage with stage="scheduled".',
+                `Book an online consultation meeting with the human sales lead (${p.handoffName}). Call this AFTER you have confirmed a specific date/time with the customer AND collected their email. The meeting is added to the company calendar; an actual meeting link is provisioned by the admin after the booking. On success, also call update_lead_stage with stage="scheduled".`,
             parameters: {
                 type: 'object',
                 properties: {
@@ -236,7 +242,7 @@ export const stockTools: ChatCompletionTool[] = [
         function: {
             name: 'handoff_to_human',
             description:
-                'Escalate this conversation to MJ (Mang Jajang, the human Lead Consultant) when: (1) the customer asks to speak with someone directly, (2) negotiation requires authority you do not have (heavy discount, custom scope), (3) technical questions outside your knowledge, or (4) the customer is frustrated. This sets assigned_to="MJ" on the lead and adds a note. After calling this tool, share MJ\'s WhatsApp number (+62 812-8195-8110) in your reply and stop trying to close the sale yourself.',
+                `Escalate this conversation to ${p.handoffName} (the human Lead Consultant) when: (1) the customer asks to speak with someone directly, (2) negotiation requires authority you do not have (heavy discount, custom scope), (3) technical questions outside your knowledge, or (4) the customer is frustrated. This assigns the lead to the human team and adds a note.${p.handoffPhone ? ` After calling this tool, share ${p.handoffName}'s WhatsApp number (${p.handoffPhone}) in your reply and stop trying to close the sale yourself.` : ' After calling this tool, tell the customer a team member will follow up, and stop trying to close the sale yourself.'}`,
             parameters: {
                 type: 'object',
                 properties: {
@@ -252,7 +258,8 @@ export const stockTools: ChatCompletionTool[] = [
             strict: true,
         },
     },
-];
+    ];
+}
 
 // --- Tool Execution Logic ---
 
@@ -351,16 +358,14 @@ function cleanLeadName(v: unknown): string | null {
     return n;
 }
 
-// Domain of the business's own email — the address the assistant hands to
-// vendors, never a customer's. Sourced from the business profile default.
-const COMPANY_EMAIL_DOMAIN =
-    '@' + (DEFAULT_BUSINESS_PROFILE.businessEmail.split('@')[1] ?? '').toLowerCase();
-
-function cleanLeadEmail(v: unknown): string | null {
+// Reject the business's OWN email — the address the assistant hands to vendors,
+// never a customer's. The company domain comes from the tenant's profile, so
+// each tenant guards against its own address (not a hardcoded one).
+function cleanLeadEmail(v: unknown, companyDomain: string): string | null {
     const e = cleanLeadStr(v);
     if (!e) return null;
     const low = e.toLowerCase();
-    if (COMPANY_EMAIL_DOMAIN.length > 1 && low.endsWith(COMPANY_EMAIL_DOMAIN)) return null; // company's own address
+    if (companyDomain.length > 1 && low.endsWith(companyDomain)) return null; // company's own address
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(low)) return null; // basic shape
     return e;
 }
@@ -387,11 +392,6 @@ function cleanVendorCategory(v: unknown): string | null {
     return VENDOR_CATEGORIES.has(low) ? low : null;
 }
 
-// Internal hand-off number — never recorded as a customer lead/vendor.
-// Sourced from the business profile default (single source of truth).
-const INTERNAL_NUMBERS = new Set([
-    DEFAULT_BUSINESS_PROFILE.handoffPhone.replace(/\D/g, ''),
-]);
 const normalizePhone = (p: string) => (p ?? '').replace(/\D/g, '');
 
 /**
@@ -409,12 +409,14 @@ const normalizePhone = (p: string) => (p ?? '').replace(/\D/g, '');
 export async function saveLeadInfo(
     orgId: string,
     phoneNumber: string,
-    args: SaveLeadInfoArgs
+    args: SaveLeadInfoArgs,
+    profile: BusinessProfile
 ): Promise<string> {
     try {
-        // Internal staff (e.g. MJ) are not customers — skip lead capture so we
-        // never tag their own number as a lead/vendor.
-        if (INTERNAL_NUMBERS.has(normalizePhone(phoneNumber))) {
+        // The tenant's own hand-off staff is not a customer — skip lead capture
+        // so we never tag their number as a lead/vendor.
+        const internalNumber = normalizePhone(profile.handoffPhone);
+        if (internalNumber && normalizePhone(phoneNumber) === internalNumber) {
             return JSON.stringify({ ok: true, updated: 0, note: 'internal number — lead capture skipped' });
         }
 
@@ -474,8 +476,9 @@ export async function saveLeadInfo(
             }
         }
 
-        // email: reject Sailendra's own address + malformed values.
-        const cleanedEmail = cleanLeadEmail(args.email);
+        // email: reject the tenant's own company address + malformed values.
+        const companyDomain = '@' + (profile.businessEmail.split('@')[1] ?? '').toLowerCase();
+        const cleanedEmail = cleanLeadEmail(args.email, companyDomain);
         if (cleanedEmail) patch.email = cleanedEmail;
 
         // vendor detail — only meaningful for vendors. Skip when a human has
@@ -670,7 +673,8 @@ export async function scheduleMeeting(
 export async function handoffToHuman(
     orgId: string,
     phoneNumber: string,
-    reason: string
+    reason: string,
+    profile: BusinessProfile
 ): Promise<string> {
     try {
         const supabase = await createServiceOrServerClient();
@@ -683,11 +687,11 @@ export async function handoffToHuman(
             .maybeSingle();
 
         const stamp = new Date().toISOString();
-        const line = `[${stamp}] HANDOFF to MJ: ${reason}`;
+        const line = `[${stamp}] HANDOFF to ${profile.handoffName}: ${reason}`;
         const { error } = await supabase
             .from('whatsapp_chats')
             .update({
-                assigned_to: 'MJ',
+                assigned_to: profile.handoffName,
                 notes: chat?.notes ? `${chat.notes}\n${line}` : line,
                 updated_at: stamp,
             })
@@ -698,8 +702,8 @@ export async function handoffToHuman(
 
         return JSON.stringify({
             ok: true,
-            assigned_to: 'MJ',
-            mj_whatsapp: '+62 812-8195-8110',
+            assigned_to: profile.handoffName,
+            handoff_whatsapp: profile.handoffPhone || null,
         });
     } catch (error) {
         console.error('Error in handoffToHuman:', error);

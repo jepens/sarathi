@@ -9,15 +9,21 @@ import { SystemMessageEditor } from "./components/SystemMessageEditor";
 import { TestChatPreview } from "./components/TestChatPreview";
 import { KnowledgeCoverageSummary } from "./components/KnowledgeCoverageSummary";
 import { BusinessProfileEditor } from "./components/BusinessProfileEditor";
-import { getBusinessProfile } from "@/lib/settings/business-profile";
+import { GENERIC_BUSINESS_PROFILE, getBusinessProfile } from "@/lib/settings/business-profile";
+import { getCurrentOrgId } from "@/lib/settings/org-context";
+import { createClient } from "@/lib/supabase/server";
 import { WhatsAppCredentials } from "./components/WhatsAppCredentials";
 import { getMyWhatsAppIntegration } from "@/lib/whatsapp/integration";
 
 export default async function SettingsPage() {
     // Fetch all settings
+    const supabase = await createClient();
+    const orgId = await getCurrentOrgId(supabase);
     const webhookUrl = await getWebhookUrl();
     const verifyToken = await getVerifyToken();
-    const businessProfile = await getBusinessProfile();
+    const businessProfile = orgId
+        ? await getBusinessProfile(supabase, orgId)
+        : { ...GENERIC_BUSINESS_PROFILE };
     const waIntegration = await getMyWhatsAppIntegration();
 
     // Check configuration status

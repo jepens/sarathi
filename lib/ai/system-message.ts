@@ -1,44 +1,46 @@
-import { createClient } from '@/lib/supabase/server';
+import { SupabaseClient } from '@supabase/supabase-js';
 import {
     type BusinessProfile,
-    DEFAULT_BUSINESS_PROFILE,
+    GENERIC_BUSINESS_PROFILE,
     getBusinessProfile,
 } from '@/lib/settings/business-profile';
 
 /**
- * Get the active system message from database.
- * Falls back to a profile-derived persona if none is found.
+ * Get a tenant's active system message. Pass the org's client + id explicitly:
+ * the webhook/queue path uses a service-role client (RLS bypassed) and must read
+ * the RIGHT org's row, and there can be one active message per org. Falls back
+ * to a persona built from the org's business profile when none is saved.
  */
-export async function getActiveSystemMessage(): Promise<string> {
+export async function getActiveSystemMessage(
+    client: SupabaseClient,
+    orgId: string,
+): Promise<string> {
     try {
-        const supabase = await createClient();
-
-        const { data, error } = await supabase
+        const { data } = await client
             .from('system_message')
             .select('content')
+            .eq('org_id', orgId)
             .eq('is_active', true)
-            .single();
+            .maybeSingle();
 
-        if (error || !data) {
-            // No saved persona yet → build a generic one from the business
-            // profile (configurable per tenant), not a hardcoded brand.
-            const profile = await getBusinessProfile(supabase);
-            return buildSystemMessage(profile);
-        }
+        if (data?.content) return data.content;
 
-        return data.content;
+        // No saved persona for this org → build a generic one from its business
+        // profile (configurable per tenant), never a hardcoded brand.
+        const profile = await getBusinessProfile(client, orgId);
+        return buildSystemMessage(profile);
     } catch (error) {
         console.error('Error fetching active system message:', error);
-        return buildSystemMessage(DEFAULT_BUSINESS_PROFILE);
+        return buildSystemMessage(GENERIC_BUSINESS_PROFILE);
     }
 }
 
 /**
- * Sync default — generic persona built from the default profile constant.
- * Kept sync for callers that need a non-async fallback.
+ * Sync default — generic, brand-less persona. Used where an org-scoped build
+ * isn't available; callers with an org should prefer getActiveSystemMessage.
  */
 export function getDefaultSystemMessage(): string {
-    return buildSystemMessage(DEFAULT_BUSINESS_PROFILE);
+    return buildSystemMessage(GENERIC_BUSINESS_PROFILE);
 }
 
 /**
@@ -48,6 +50,11 @@ export function getDefaultSystemMessage(): string {
  */
 export function buildSystemMessage(p: BusinessProfile): string {
     const since = p.establishedYear ? ` sejak ${p.establishedYear}` : '';
+    // Phone is optional (an unconfigured tenant has none) — don't render "()".
+    const handoff = p.handoffPhone ? `${p.handoffName} (${p.handoffPhone})` : p.handoffName;
+    const handoffLine = p.handoffPhone
+        ? `Hand-off ke ${p.handoffName}: **${p.handoffPhone}** bila klien tidak tertarik online meeting.`
+        : `Hand-off ke ${p.handoffName} bila klien tidak tertarik online meeting.`;
     return `Anda adalah **${p.assistantName}**, asisten dari **${p.businessName}** — Event Organizer profesional yang spesialisasi di **${p.specialties}**${since}.
 
 ## Tujuan
@@ -55,7 +62,7 @@ export function buildSystemMessage(p: BusinessProfile): string {
 - Memberikan informasi paket acara berdasarkan Knowledge Base (jangan mengarang).
 - Mengumpulkan info kontak (nama, email) dan detail acara (jumlah peserta, lokasi, tanggal, goals, budget).
 - Menawarkan **online meeting** dengan tim sales untuk diskusi detail.
-- Hand-off ke ${p.handoffName} (${p.handoffPhone}) bila klien lebih nyaman ngobrol langsung.
+- Hand-off ke ${handoff} bila klien lebih nyaman ngobrol langsung.
 
 ## Gaya Komunikasi
 - Sapa dengan "kakak" untuk user berbahasa Indonesia. Hangat, ringkas, konversasional.
@@ -74,7 +81,7 @@ export function buildSystemMessage(p: BusinessProfile): string {
 
 ## Informasi Penting
 ${p.establishedYear ? `- ${p.businessName} berpengalaman sejak **${p.establishedYear}**.\n` : ''}- Area layanan: ${p.serviceAreas}.
-- Hand-off ke ${p.handoffName}: **${p.handoffPhone}** bila klien tidak tertarik online meeting.
+- ${handoffLine}
 
 ## Aturan Penggunaan Knowledge Base
 - Untuk detail program/paket, **gunakan konteks (Knowledge Base & Produk) yang diberikan**.

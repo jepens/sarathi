@@ -2,10 +2,10 @@ import { createServiceOrServerClient } from '@/lib/supabase/service';
 import OpenAI from 'openai';
 import { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
 import { getActiveSystemMessage } from './system-message';
-import { DEFAULT_BUSINESS_PROFILE } from '@/lib/settings/business-profile';
+import { getBusinessProfile } from '@/lib/settings/business-profile';
 import { getDefaultOrgId } from '@/lib/settings/org-context';
 import {
-    stockTools,
+    buildTools,
     checkAvailability,
     listProducts,
     saveLeadInfo,
@@ -92,11 +92,12 @@ async function generateEmbedding(text: string): Promise<number[]> {
 // open questions) without re-sending the full transcript every turn.
 async function summarizeConversation(
     openai: OpenAI,
-    older: ChatMessage[]
+    older: ChatMessage[],
+    assistantName: string
 ): Promise<string> {
     if (older.length === 0) return '';
     const transcript = older
-        .map((m) => `${m.role === 'user' ? 'Customer' : m.role === 'assistant' ? DEFAULT_BUSINESS_PROFILE.assistantName : 'System'}: ${m.content}`)
+        .map((m) => `${m.role === 'user' ? 'Customer' : m.role === 'assistant' ? assistantName : 'System'}: ${m.content}`)
         .join('\n');
     try {
         const res = await openai.chat.completions.create({
@@ -297,6 +298,11 @@ export async function generateRAGResponse(
         // org; Fase 2: opts.orgId resolved from the receiving WhatsApp number.
         const orgId = opts?.orgId ?? (await getDefaultOrgId(supabase));
 
+        // The tenant's identity (persona name, hand-off contact, company email)
+        // drives the system prompt, the tool descriptions, and the lead guards —
+        // so each org's bot speaks as itself, never as Sailendra.
+        const profile = await getBusinessProfile(supabase, orgId);
+
         // Retrieval tuned for a small, curated knowledge base: a low threshold
         // + generous cap effectively injects the whole KB (no relevant chunk
         // silently dropped, which the old 0.5/top-5 setting did) while still
@@ -360,7 +366,7 @@ export async function generateRAGResponse(
         }
 
         // 4. Get system message from database
-        const baseSystemMessage = await getActiveSystemMessage();
+        const baseSystemMessage = await getActiveSystemMessage(supabase, orgId);
 
         // Prepare the system prompt with context
         const leadCaptureInstruction = `
@@ -424,8 +430,7 @@ ADVANCED ACTIONS:
 • handoff_to_human — call when the customer (1) explicitly asks to talk to
   someone, (2) is negotiating beyond your authority (heavy discount, custom
   scope), (3) asks technical questions you cannot answer from the Knowledge
-  Base, or (4) is frustrated. After this tool runs, share MJ's WhatsApp
-  number +62 812-8195-8110 in your reply and stop pushing the sale.
+  Base, or (4) is frustrated. After this tool runs, ${profile.handoffPhone ? `share ${profile.handoffName}'s WhatsApp number ${profile.handoffPhone} in your reply` : `let the customer know ${profile.handoffName} will follow up`} and stop pushing the sale.
 
 PROPOSAL POLICY (IMPORTANT):
 You do NOT have a tool to send proposals. Proposals are reviewed and sent by
@@ -496,7 +501,7 @@ ${contextText}
         if (history.length > KEEP_LAST) {
             const older = history.slice(0, history.length - KEEP_LAST);
             recentHistory = history.slice(-KEEP_LAST);
-            conversationSummary = await summarizeConversation(openai, older);
+            conversationSummary = await summarizeConversation(openai, older, profile.assistantName);
         }
 
         const apiMessages: ChatCompletionMessageParam[] = [
@@ -526,9 +531,10 @@ ${contextText}
             'schedule_meeting',
             'handoff_to_human',
         ]);
+        const allTools = buildTools(profile);
         const tools = phoneNumber
-            ? stockTools
-            : stockTools.filter(
+            ? allTools
+            : allTools.filter(
                   (t) =>
                       t.type !== 'function' ||
                       !phoneScopedTools.has(t.function.name)
@@ -606,7 +612,7 @@ ${contextText}
                         });
                         toolOk = false;
                     } else {
-                        toolResult = await saveLeadInfo(orgId, phoneNumber, functionArgs);
+                        toolResult = await saveLeadInfo(orgId, phoneNumber, functionArgs, profile);
                         try {
                             toolOk = JSON.parse(toolResult).ok !== false;
                         } catch {
@@ -676,7 +682,8 @@ ${contextText}
                         toolResult = await handoffToHuman(
                             orgId,
                             phoneNumber,
-                            functionArgs.reason
+                            functionArgs.reason,
+                            profile
                         );
                         try {
                             toolOk = JSON.parse(toolResult).ok !== false;
