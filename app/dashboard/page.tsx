@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
+import { OnboardingChecklist } from './OnboardingChecklist';
 
 const STAGE_LABELS: Record<string, { label: string; color: string }> = {
     unstaged: { label: 'Unstaged', color: 'bg-slate-500/15 text-slate-400' },
@@ -94,6 +95,9 @@ export default function DashboardPage() {
                     Selamat datang di Helat — AI untuk Event Organizer
                 </p>
             </div>
+
+            {/* Onboarding checklist — auto-hides once the org has started operating */}
+            <OnboardingChecklist />
 
             {/* Top stats */}
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
