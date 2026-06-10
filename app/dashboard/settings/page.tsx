@@ -3,7 +3,6 @@ import { SettingsTabs } from "./components/SettingsTabs";
 import {
     getWebhookUrl,
     getVerifyToken,
-    isWhatsAppConfigured,
 } from "@/lib/settings/app-settings";
 import { SystemMessageEditor } from "./components/SystemMessageEditor";
 import { TestChatPreview } from "./components/TestChatPreview";
@@ -12,22 +11,33 @@ import { BusinessProfileEditor } from "./components/BusinessProfileEditor";
 import { GENERIC_BUSINESS_PROFILE, getBusinessProfile } from "@/lib/settings/business-profile";
 import { getCurrentOrgId } from "@/lib/settings/org-context";
 import { createClient } from "@/lib/supabase/server";
+import { createServiceOrServerClient } from "@/lib/supabase/service";
 import { WhatsAppCredentials } from "./components/WhatsAppCredentials";
 import { getMyWhatsAppIntegration } from "@/lib/whatsapp/integration";
+import { headers } from "next/headers";
 
 export default async function SettingsPage() {
     // Fetch all settings
     const supabase = await createClient();
     const orgId = await getCurrentOrgId(supabase);
-    const webhookUrl = await getWebhookUrl();
-    const verifyToken = await getVerifyToken();
+
+    // Callback URL + Verify Token are platform-global (the webhook routes by
+    // phone_number_id). Resolve them platform-wide so every tenant — not just the
+    // platform owner whose org owns the app_settings row — sees the real values:
+    // the URL from the request host, the verify token via a service-role client.
+    const h = await headers();
+    const host = h.get("host");
+    const proto = h.get("x-forwarded-proto") ?? "https";
+    const svc = await createServiceOrServerClient();
+    const webhookUrl = host
+        ? `${proto}://${host}/api/webhook/whatsapp`
+        : await getWebhookUrl(svc);
+    const verifyToken = await getVerifyToken(svc);
+
     const businessProfile = orgId
         ? await getBusinessProfile(supabase, orgId)
         : { ...GENERIC_BUSINESS_PROFILE };
     const waIntegration = await getMyWhatsAppIntegration();
-
-    // Check configuration status
-    const whatsappConfigured = await isWhatsAppConfigured();
 
     return (
         <div className="space-y-6">
@@ -45,9 +55,8 @@ export default async function SettingsPage() {
                     <div className="space-y-6">
                         <WhatsAppCredentials initial={waIntegration} />
                         <WebhookSettings
-                            initialWebhookUrl={webhookUrl}
-                            initialVerifyToken={verifyToken}
-                            isConfigured={whatsappConfigured}
+                            webhookUrl={webhookUrl}
+                            verifyToken={verifyToken}
                         />
                     </div>
                 }

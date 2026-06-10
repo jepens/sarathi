@@ -118,7 +118,7 @@ export function WhatsAppCredentials({
                         />
                     </div>
                     <div className="space-y-2 sm:col-span-2">
-                        <Label htmlFor="appSecret">App Secret (opsional)</Label>
+                        <Label htmlFor="appSecret">App Secret</Label>
                         <Input
                             id="appSecret"
                             type="password"
@@ -127,10 +127,14 @@ export function WhatsAppCredentials({
                             placeholder={
                                 initial?.hasAppSecret
                                     ? '•••••••• (tersimpan — isi untuk ganti)'
-                                    : 'Untuk verifikasi signature webhook'
+                                    : 'Meta App → Settings → Basic → App Secret'
                             }
                             className="font-mono text-sm"
                         />
+                        <p className="text-xs text-muted-foreground">
+                            Wajib: dipakai memverifikasi signature webhook. Tanpa ini,
+                            pesan masuk ditolak dan bot tidak akan membalas.
+                        </p>
                     </div>
                 </div>
                 <div className="flex border-t pt-4">

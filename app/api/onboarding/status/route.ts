@@ -1,4 +1,5 @@
 import { createClient } from '@/lib/supabase/server';
+import { createServiceOrServerClient } from '@/lib/supabase/service';
 import { getCurrentOrgId } from '@/lib/settings/org-context';
 import { getWebhookUrl, getVerifyToken } from '@/lib/settings/app-settings';
 import { NextResponse } from 'next/server';
@@ -9,7 +10,7 @@ export const dynamic = 'force-dynamic';
 // caller's org. `show` is false once the org has started operating (any chat
 // exists) so the checklist disappears for established tenants (e.g. Sailendra,
 // which runs on env WhatsApp creds and would otherwise look "not connected").
-export async function GET() {
+export async function GET(request: Request) {
     const supabase = await createClient();
     const {
         data: { user },
@@ -42,10 +43,25 @@ export async function GET() {
         knowledge: (docCountQ.count ?? 0) > 0,
     };
 
+    // Callback URL + Verify Token are PLATFORM-GLOBAL — the webhook routes by
+    // phone_number_id, so every tenant points Meta at the same endpoint with the
+    // same verify token. The canonical values live in the platform owner's
+    // org-scoped app_settings row, which a *different* tenant's RLS client can't
+    // read (it would fall back to localhost/'123456'). Resolve them platform-wide
+    // instead: the callback URL from the request host, the verify token via a
+    // service-role client.
+    const proto = request.headers.get('x-forwarded-proto') ?? 'https';
+    const host = request.headers.get('host');
+    const svc = await createServiceOrServerClient();
+    const webhookUrl = host
+        ? `${proto}://${host}/api/webhook/whatsapp`
+        : await getWebhookUrl(svc);
+    const verifyToken = await getVerifyToken(svc);
+
     return NextResponse.json({
         show: (chatCountQ.count ?? 0) === 0,
         steps,
-        webhookUrl: await getWebhookUrl(),
-        verifyToken: await getVerifyToken(),
+        webhookUrl,
+        verifyToken,
     });
 }

@@ -1,6 +1,5 @@
 'use server';
 
-import { updateAppSetting } from '@/lib/settings/app-settings';
 import { createClient } from '@/lib/supabase/server';
 import {
     type BusinessProfile,
@@ -8,22 +7,6 @@ import {
 } from '@/lib/settings/business-profile';
 import { getCurrentOrgId } from '@/lib/settings/org-context';
 import { revalidatePath } from 'next/cache';
-
-export async function updateWebhookSettings(formData: FormData) {
-    const webhookUrl = formData.get('webhookUrl') as string;
-    const verifyToken = formData.get('verifyToken') as string;
-
-    if (webhookUrl) {
-        await updateAppSetting('whatsapp_webhook_url', webhookUrl);
-    }
-
-    if (verifyToken) {
-        await updateAppSetting('whatsapp_verify_token', verifyToken);
-    }
-
-    revalidatePath('/dashboard/settings');
-    return { success: true };
-}
 
 export async function updateBusinessProfile(
     input: BusinessProfile,
@@ -83,6 +66,17 @@ export async function saveWhatsAppIntegration(
         return {
             ok: false,
             error: 'Access Token wajib diisi saat menghubungkan pertama kali.',
+        };
+    }
+
+    // App Secret is NOT optional: the webhook verifies every inbound message's
+    // signature with this org's app_secret. Without it, verifyWhatsAppSignature
+    // returns false and every message is rejected (403) — the bot silently never
+    // replies. Require it on first connect so a tenant can't trip that trap.
+    if (!existing && !input.appSecret.trim()) {
+        return {
+            ok: false,
+            error: 'App Secret wajib diisi — tanpa itu webhook menolak semua pesan masuk (verifikasi signature gagal). Ambil di Meta App → Settings → Basic.',
         };
     }
 
