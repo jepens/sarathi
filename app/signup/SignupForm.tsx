@@ -7,15 +7,15 @@ import { createClient } from '@/lib/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Loader2, Eye, EyeOff, Check, X, ArrowRight, ShieldCheck } from 'lucide-react';
+import { Loader2, Check, X, ArrowRight, Lock } from 'lucide-react';
 import { Turnstile, TURNSTILE_ENABLED } from '@/components/auth/turnstile';
+import { FIELD, CTA, FormAlert, PasswordInput } from '@/components/auth/form-ui';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-// Core requirements mirror Supabase's recommended password policy (min 8 +
-// upper + lower + digit). Symbol is surfaced as a bonus toward "Sangat kuat"
-// but not required, matching the default server policy so the client never
-// promises something the server then rejects.
+// Core requirements mirror Supabase's recommended policy (min 8 + upper + lower
+// + digit). Symbol is a bonus toward "Sangat kuat" but not required, matching
+// the default server policy so the client never promises what the server rejects.
 function passwordChecks(pw: string) {
     return {
         length: pw.length >= 8,
@@ -27,11 +27,11 @@ function passwordChecks(pw: string) {
 }
 
 const STRENGTH = [
-    { label: 'Terlalu pendek', color: 'bg-muted', text: 'text-muted-foreground' },
-    { label: 'Lemah', color: 'bg-rose-500', text: 'text-rose-400' },
-    { label: 'Cukup', color: 'bg-amber-500', text: 'text-amber-400' },
-    { label: 'Kuat', color: 'bg-emerald-500', text: 'text-emerald-400' },
-    { label: 'Sangat kuat', color: 'bg-emerald-400', text: 'text-emerald-300' },
+    { label: 'Terlalu pendek', bar: 'bg-[#1F1F26]', text: 'text-[#8B8A94]' },
+    { label: 'Lemah', bar: 'bg-[#F87171]', text: 'text-[#F87171]' },
+    { label: 'Cukup', bar: 'bg-[#FBBF24]', text: 'text-[#FBBF24]' },
+    { label: 'Kuat', bar: 'bg-[#34D399]', text: 'text-[#34D399]' },
+    { label: 'Sangat kuat', bar: 'bg-[#34D399]', text: 'text-[#34D399]' },
 ] as const;
 
 export function SignupForm() {
@@ -39,8 +39,6 @@ export function SignupForm() {
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [confirm, setConfirm] = useState('');
-    const [showPw, setShowPw] = useState(false);
-    const [showConfirm, setShowConfirm] = useState(false);
     const [agree, setAgree] = useState(false);
     const [captchaToken, setCaptchaToken] = useState('');
     const [error, setError] = useState<string | null>(null);
@@ -78,15 +76,14 @@ export function SignupForm() {
         setLoading(true);
         setError(null);
         setInfo(null);
-
         try {
             const { data, error } = await supabase.auth.signUp({
                 email: email.trim().toLowerCase(),
                 password,
                 options: {
                     data: { org_name: orgName.trim() },
-                    // Land new EOs on the dashboard Overview (which shows the
-                    // onboarding checklist), not deep in Settings.
+                    // Land new EOs on the dashboard Overview (with the onboarding
+                    // checklist), not deep in Settings.
                     emailRedirectTo: `${window.location.origin}/dashboard`,
                     ...(captchaToken ? { captchaToken } : {}),
                 },
@@ -96,19 +93,15 @@ export function SignupForm() {
                 setError(error.message);
                 return;
             }
-
-            // Email confirmation ON + already-registered email returns an
-            // obfuscated success with an empty identities array.
             if (data.user && data.user.identities && data.user.identities.length === 0) {
                 setError('Email ini sudah terdaftar. Silakan masuk.');
                 return;
             }
-
             if (data.session) {
                 router.push('/dashboard');
                 router.refresh();
             } else {
-                setInfo('Akun dibuat! Cek email Anda untuk konfirmasi, lalu masuk.');
+                setInfo('Akun dibuat. Cek email Anda untuk konfirmasi, lalu masuk.');
             }
         } catch {
             setError('Terjadi kesalahan. Coba lagi.');
@@ -119,18 +112,8 @@ export function SignupForm() {
 
     return (
         <form onSubmit={handleSubmit} className="space-y-5" noValidate>
-            {error && (
-                <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
-                    <X className="mt-0.5 h-4 w-4 shrink-0" />
-                    <span>{error}</span>
-                </div>
-            )}
-            {info && (
-                <div className="flex items-start gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm text-emerald-400">
-                    <Check className="mt-0.5 h-4 w-4 shrink-0" />
-                    <span>{info}</span>
-                </div>
-            )}
+            {error && <FormAlert kind="error">{error}</FormAlert>}
+            {info && <FormAlert kind="success">{info}</FormAlert>}
 
             <div className="space-y-2">
                 <Label htmlFor="orgName">Nama bisnis / EO</Label>
@@ -140,6 +123,7 @@ export function SignupForm() {
                     value={orgName}
                     onChange={(e) => setOrgName(e.target.value)}
                     autoComplete="organization"
+                    className={FIELD}
                     required
                 />
             </div>
@@ -154,36 +138,17 @@ export function SignupForm() {
                     onChange={(e) => setEmail(e.target.value)}
                     autoComplete="email"
                     aria-invalid={email.length > 0 && !emailValid}
+                    className={FIELD}
                     required
                 />
                 {email.length > 0 && !emailValid && (
-                    <p className="text-xs text-rose-400">Format email belum valid.</p>
+                    <p className="text-xs text-[#F87171]">Format email belum valid.</p>
                 )}
             </div>
 
             <div className="space-y-2">
                 <Label htmlFor="password">Password</Label>
-                <div className="relative">
-                    <Input
-                        id="password"
-                        type={showPw ? 'text' : 'password'}
-                        value={password}
-                        onChange={(e) => setPassword(e.target.value)}
-                        autoComplete="new-password"
-                        className="pr-10"
-                        required
-                    />
-                    <button
-                        type="button"
-                        onClick={() => setShowPw((v) => !v)}
-                        className="absolute inset-y-0 right-0 flex w-10 items-center justify-center text-muted-foreground hover:text-foreground"
-                        aria-label={showPw ? 'Sembunyikan password' : 'Tampilkan password'}
-                        tabIndex={-1}
-                    >
-                        {showPw ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                    </button>
-                </div>
-
+                <PasswordInput id="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" />
                 {password.length > 0 && (
                     <div className="space-y-2 pt-1">
                         <div className="flex items-center gap-2">
@@ -192,12 +157,12 @@ export function SignupForm() {
                                     <div
                                         key={i}
                                         className={`h-full flex-1 rounded-full transition-colors ${
-                                            i < score ? STRENGTH[score].color : 'bg-muted'
+                                            i < score ? STRENGTH[score].bar : 'bg-[#1F1F26]'
                                         }`}
                                     />
                                 ))}
                             </div>
-                            <span className={`text-xs font-medium ${STRENGTH[score].text}`}>
+                            <span className={`font-rail text-[10px] tracking-[0.1em] uppercase ${STRENGTH[score].text}`}>
                                 {STRENGTH[score].label}
                             </span>
                         </div>
@@ -213,69 +178,52 @@ export function SignupForm() {
 
             <div className="space-y-2">
                 <Label htmlFor="confirm">Konfirmasi password</Label>
-                <div className="relative">
-                    <Input
-                        id="confirm"
-                        type={showConfirm ? 'text' : 'password'}
-                        value={confirm}
-                        onChange={(e) => setConfirm(e.target.value)}
-                        autoComplete="new-password"
-                        className="pr-10"
-                        aria-invalid={confirm.length > 0 && !confirmValid}
-                        required
-                    />
-                    <button
-                        type="button"
-                        onClick={() => setShowConfirm((v) => !v)}
-                        className="absolute inset-y-0 right-0 flex w-10 items-center justify-center text-muted-foreground hover:text-foreground"
-                        aria-label={showConfirm ? 'Sembunyikan password' : 'Tampilkan password'}
-                        tabIndex={-1}
-                    >
-                        {showConfirm ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                    </button>
-                </div>
+                <PasswordInput
+                    id="confirm"
+                    value={confirm}
+                    onChange={(e) => setConfirm(e.target.value)}
+                    autoComplete="new-password"
+                    invalid={confirm.length > 0 && !confirmValid}
+                />
                 {confirm.length > 0 && !confirmValid && (
-                    <p className="text-xs text-rose-400">Password tidak sama.</p>
+                    <p className="text-xs text-[#F87171]">Password tidak sama.</p>
                 )}
             </div>
 
-            <label className="flex cursor-pointer items-start gap-2.5 text-sm text-muted-foreground">
+            <label className="flex cursor-pointer items-start gap-2.5 text-sm text-[#8B8A94]">
                 <input
                     type="checkbox"
                     checked={agree}
                     onChange={(e) => setAgree(e.target.checked)}
-                    className="mt-0.5 h-4 w-4 shrink-0 rounded border-border accent-[#e7c16a]"
+                    className="mt-0.5 h-4 w-4 shrink-0 rounded border-[#B8862F]/40 accent-[#E6B450]"
                 />
                 <span>
-                    Saya setuju dengan <span className="font-medium text-foreground">Syarat &amp; Ketentuan</span> dan{' '}
-                    <span className="font-medium text-foreground">Kebijakan Privasi</span> Helat.
+                    Saya setuju dengan <span className="font-medium text-[#F4F1E9]">Syarat &amp; Ketentuan</span> dan{' '}
+                    <span className="font-medium text-[#F4F1E9]">Kebijakan Privasi</span> Helat.
                 </span>
             </label>
 
             {TURNSTILE_ENABLED && <Turnstile onToken={setCaptchaToken} />}
 
-            <Button type="submit" disabled={!canSubmit} className="w-full">
+            <Button type="submit" disabled={!canSubmit} className={CTA}>
                 {loading ? (
                     <>
                         <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Mendaftarkan...
                     </>
                 ) : (
                     <>
-                        Daftar <ArrowRight className="ml-1 h-4 w-4" />
+                        Buat akun <ArrowRight className="ml-1 h-4 w-4" />
                     </>
                 )}
             </Button>
 
-            <p className="flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
-                <ShieldCheck className="h-3.5 w-3.5" /> Koneksi terenkripsi · konfirmasi via email
+            <p className="font-rail flex items-center justify-center gap-1.5 text-[10px] tracking-[0.16em] text-[#8B8A94] uppercase">
+                <Lock className="h-3 w-3" /> Terenkripsi · konfirmasi via email
             </p>
 
-            <p className="text-center text-sm text-muted-foreground">
+            <p className="text-center text-sm text-[#8B8A94]">
                 Sudah punya akun?{' '}
-                <Link
-                    href="/login"
-                    className="font-medium text-foreground underline underline-offset-4 hover:text-[#e7c16a]"
-                >
+                <Link href="/login" className="font-medium text-[#F4F1E9] underline-offset-4 hover:text-[#E6B450] hover:underline">
                     Masuk
                 </Link>
             </p>
@@ -285,8 +233,8 @@ export function SignupForm() {
 
 function Req({ ok, label }: { ok: boolean; label: string }) {
     return (
-        <li className={`flex items-center gap-1.5 ${ok ? 'text-emerald-400' : 'text-muted-foreground'}`}>
-            {ok ? <Check className="h-3 w-3" /> : <X className="h-3 w-3 opacity-50" />}
+        <li className={`flex items-center gap-1.5 ${ok ? 'text-[#34D399]' : 'text-[#8B8A94]'}`}>
+            {ok ? <Check className="h-3 w-3" /> : <X className="h-3 w-3 opacity-40" />}
             {label}
         </li>
     );
