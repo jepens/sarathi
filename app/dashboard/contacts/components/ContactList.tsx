@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Skeleton } from '@/components/ui/skeleton';
 import { stripAuditLines } from '@/lib/proposals/notes';
 import {
     Select,
@@ -421,7 +422,26 @@ export function ContactList() {
 
             <div className="flex-1 overflow-y-auto">
                 {loading ? (
-                    <div className="p-8 text-center text-muted-foreground">Loading contacts...</div>
+                    <table className="w-full text-sm text-left">
+                        <thead className="text-xs text-gray-700 uppercase bg-gray-50 sticky top-0">
+                            <tr>
+                                {['Nama', 'Acara / Tawaran', 'Peserta', 'Stage', 'Last Active', 'Aksi'].map((h) => (
+                                    <th key={h} className="px-6 py-3">{h}</th>
+                                ))}
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {Array.from({ length: 8 }).map((_, i) => (
+                                <tr key={i} className="bg-white border-b">
+                                    {Array.from({ length: 6 }).map((_, j) => (
+                                        <td key={j} className="px-6 py-4">
+                                            <Skeleton className="h-4 w-full bg-gray-200" />
+                                        </td>
+                                    ))}
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
                 ) : filteredContacts.length === 0 ? (
                     <div className="p-8 text-center text-muted-foreground">No contacts found</div>
                 ) : (

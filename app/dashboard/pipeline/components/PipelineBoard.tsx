@@ -3,7 +3,6 @@
 import { useEffect, useState, useCallback, type DragEvent } from 'react';
 import { toast } from 'sonner';
 import {
-    Loader2,
     User,
     Mail,
     Users,
@@ -15,6 +14,7 @@ import {
     UserCheck,
     History,
 } from 'lucide-react';
+import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
 import {
     DropdownMenu,
@@ -194,8 +194,22 @@ export function PipelineBoard() {
 
     if (loading) {
         return (
-            <div className="flex items-center justify-center h-64">
-                <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+            <div className="h-full overflow-x-auto pb-4">
+                <div className="flex gap-4 h-full min-w-max">
+                    {Array.from({ length: 5 }).map((_, i) => (
+                        <div key={i} className="w-72 flex-shrink-0 rounded-lg border bg-card flex flex-col">
+                            <div className="px-3 py-2 border-b flex items-center justify-between">
+                                <Skeleton className="h-4 w-20" />
+                                <Skeleton className="h-4 w-6" />
+                            </div>
+                            <div className="p-2 space-y-2">
+                                {Array.from({ length: 3 }).map((_, j) => (
+                                    <Skeleton key={j} className="h-24 w-full rounded-md" />
+                                ))}
+                            </div>
+                        </div>
+                    ))}
+                </div>
             </div>
         );
     }

@@ -10,6 +10,7 @@ import { toast } from 'sonner';
 import { SendTemplateDialog } from './SendTemplateDialog';
 import { ContactTypeBadge } from '@/components/dashboard/ContactTypeBadge';
 import { Switch } from '@/components/ui/switch';
+import { Skeleton } from '@/components/ui/skeleton';
 
 const STAGE_LABELS: Record<string, string> = {
     new: 'Baru',
@@ -77,8 +78,31 @@ interface ChatWindowProps {
     phoneNumber: string;
 }
 
+// Placeholder bubbles shown while a chat's history loads — alternating sides
+// like a real conversation, in muted tones over the WhatsApp paper background.
+function MessagesSkeleton() {
+    const rows = [
+        { out: false, w: 'w-48' },
+        { out: true, w: 'w-56' },
+        { out: false, w: 'w-40' },
+        { out: true, w: 'w-44' },
+        { out: false, w: 'w-52' },
+    ];
+    return (
+        <div className="flex flex-col space-y-3">
+            {rows.map((r, i) => (
+                <Skeleton
+                    key={i}
+                    className={cn('h-10 rounded-lg bg-black/5', r.w, r.out ? 'self-end' : 'self-start')}
+                />
+            ))}
+        </div>
+    );
+}
+
 export function ChatWindow({ phoneNumber }: ChatWindowProps) {
     const [messages, setMessages] = useState<Message[]>([]);
+    const [loadingMsgs, setLoadingMsgs] = useState(true);
     const [newMessage, setNewMessage] = useState('');
     const [sending, setSending] = useState(false);
     const [contactName, setContactName] = useState<string | null>(null);
@@ -142,9 +166,14 @@ export function ChatWindow({ phoneNumber }: ChatWindowProps) {
         } else {
             setMessages(data || []);
         }
+        setLoadingMsgs(false);
     }, [phoneNumber, supabase]);
 
     useEffect(() => {
+        // New chat selected → show the message skeleton until its history loads,
+        // and drop the previous chat's messages so they don't flash here.
+        setLoadingMsgs(true);
+        setMessages([]);
         fetchMessages();
 
         // Subscribe to real-time changes. INSERT = new message; UPDATE =
@@ -373,6 +402,7 @@ export function ChatWindow({ phoneNumber }: ChatWindowProps) {
 
             <div className="flex-1 overflow-y-auto p-4">
                 <div className="flex flex-col space-y-4 pb-4">
+                    {loadingMsgs && messages.length === 0 && <MessagesSkeleton />}
                     {Object.entries(groupedMessages).map(([date, msgs]) => (
                         <div key={date} className="flex flex-col space-y-4">
                             <div className="flex justify-center sticky top-2">

@@ -157,7 +157,7 @@ export function SendTemplateDialog({
             return;
         }
         setSending(true);
-        try {
+        const promise = (async () => {
             const res = await fetch('/api/chat/send-template', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -172,15 +172,18 @@ export function SendTemplateDialog({
                 const j = (await res.json().catch(() => ({}))) as { error?: string };
                 throw new Error(j.error || `Failed (HTTP ${res.status})`);
             }
-            toast.success('Template message terkirim', { duration: 5_000 });
+        })();
+        toast.promise(promise, {
+            loading: 'Mengirim template…',
+            success: 'Template message terkirim',
+            error: (e) => (e instanceof Error ? e.message : 'Gagal mengirim template'),
+        });
+        try {
+            await promise;
             onSent();
             onOpenChange(false);
         } catch (err) {
             console.error('send-template error:', err);
-            toast.error(
-                err instanceof Error ? err.message : 'Failed to send template',
-                { duration: 10_000 }
-            );
         } finally {
             setSending(false);
         }

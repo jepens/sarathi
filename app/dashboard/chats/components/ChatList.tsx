@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Search, Clock, Store } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { ContactTypeBadge } from '@/components/dashboard/ContactTypeBadge';
+import { Skeleton } from '@/components/ui/skeleton';
 
 interface Chat {
     phone_number: string;
@@ -119,7 +120,17 @@ export function ChatList({ selectedPhone, onSelect }: ChatListProps) {
 
             <div className="flex-1 overflow-y-auto">
                 {loading ? (
-                    <div className="p-4 text-center text-sm text-muted-foreground">Loading chats...</div>
+                    <div className="divide-y divide-border/40">
+                        {Array.from({ length: 8 }).map((_, i) => (
+                            <div key={i} className="flex items-center gap-3 p-3">
+                                <Skeleton className="h-12 w-12 shrink-0 rounded-full bg-gray-200" />
+                                <div className="flex-1 space-y-2">
+                                    <Skeleton className="h-3.5 w-1/3 rounded bg-gray-200" />
+                                    <Skeleton className="h-3 w-2/3 rounded bg-gray-200" />
+                                </div>
+                            </div>
+                        ))}
+                    </div>
                 ) : filteredChats.length === 0 ? (
                     <div className="p-4 text-center text-sm text-muted-foreground">No chats found</div>
                 ) : (

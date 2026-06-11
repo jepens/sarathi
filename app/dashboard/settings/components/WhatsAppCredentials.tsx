@@ -33,20 +33,29 @@ export function WhatsAppCredentials({
 
     const handleSave = async () => {
         setSaving(true);
-        const res = await saveWhatsAppIntegration({
-            phoneNumberId,
-            wabaId,
-            displayPhone,
-            accessToken,
-            appSecret,
+        const promise = (async () => {
+            const res = await saveWhatsAppIntegration({
+                phoneNumberId,
+                wabaId,
+                displayPhone,
+                accessToken,
+                appSecret,
+            });
+            if (!res.ok) throw new Error(res.error ?? 'Gagal menyimpan kredensial');
+        })();
+        toast.promise(promise, {
+            loading: 'Menyimpan kredensial…',
+            success: 'Kredensial WhatsApp disimpan',
+            error: (e) => (e instanceof Error ? e.message : 'Gagal menyimpan kredensial'),
         });
-        setSaving(false);
-        if (res.ok) {
-            toast.success('Kredensial WhatsApp disimpan');
+        try {
+            await promise;
             setAccessToken('');
             setAppSecret('');
-        } else {
-            toast.error(res.error ?? 'Gagal menyimpan kredensial');
+        } catch {
+            /* error already surfaced by toast.promise */
+        } finally {
+            setSaving(false);
         }
     };
 

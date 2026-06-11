@@ -13,6 +13,7 @@ import {
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { OnboardingChecklist } from './OnboardingChecklist';
+import { Skeleton } from '@/components/ui/skeleton';
 
 const STAGE_LABELS: Record<string, { label: string; color: string }> = {
     unstaged: { label: 'Unstaged', color: 'bg-slate-500/15 text-slate-400' },
@@ -104,35 +105,45 @@ export default function DashboardPage() {
                 <KpiCard
                     title="Total Leads"
                     icon={<Users className="h-4 w-4 text-muted-foreground" />}
-                    primary={loading ? '...' : (stats?.totalLeads ?? 0).toString()}
+                    primary={loading ? <Skeleton className="h-7 w-24" /> : (stats?.totalLeads ?? 0).toString()}
                     secondary={
-                        loading
-                            ? ''
-                            : `${stats?.leadsThisMonth ?? 0} baru bulan ini`
+                        loading ? (
+                            <Skeleton className="mt-1 h-3 w-28" />
+                        ) : (
+                            `${stats?.leadsThisMonth ?? 0} baru bulan ini`
+                        )
                     }
                 />
                 <KpiCard
                     title="Conversion Rate"
                     icon={<TrendingUp className="h-4 w-4 text-muted-foreground" />}
                     primary={
-                        loading
-                            ? '...'
-                            : stats?.conversionRate === null
-                                ? '—'
-                                : `${stats!.conversionRate!.toFixed(0)}%`
+                        loading ? (
+                            <Skeleton className="h-7 w-24" />
+                        ) : stats?.conversionRate === null ? (
+                            '—'
+                        ) : (
+                            `${stats!.conversionRate!.toFixed(0)}%`
+                        )
                     }
                     secondary={
-                        loading
-                            ? ''
-                            : `${stats?.leadFunnel.won ?? 0} won / ${stats?.leadFunnel.lost ?? 0} lost`
+                        loading ? (
+                            <Skeleton className="mt-1 h-3 w-28" />
+                        ) : (
+                            `${stats?.leadFunnel.won ?? 0} won / ${stats?.leadFunnel.lost ?? 0} lost`
+                        )
                     }
                 />
                 <KpiCard
                     title="Revenue Bulan Ini"
                     icon={<Wallet className="h-4 w-4 text-muted-foreground" />}
-                    primary={loading ? '...' : formatRupiah(stats?.revenueThisMonth ?? 0)}
+                    primary={loading ? <Skeleton className="h-7 w-28" /> : formatRupiah(stats?.revenueThisMonth ?? 0)}
                     secondary={
-                        loading ? '' : `YTD: ${formatRupiah(stats?.revenueYTD ?? 0)}`
+                        loading ? (
+                            <Skeleton className="mt-1 h-3 w-24" />
+                        ) : (
+                            `YTD: ${formatRupiah(stats?.revenueYTD ?? 0)}`
+                        )
                     }
                 />
                 <KpiCard
@@ -164,7 +175,17 @@ export default function DashboardPage() {
                     </CardHeader>
                     <CardContent className="space-y-3">
                         {loading ? (
-                            <p className="text-sm text-muted-foreground">Loading...</p>
+                            <div className="space-y-3">
+                                {Array.from({ length: 6 }).map((_, i) => (
+                                    <div key={i} className="space-y-1">
+                                        <div className="flex items-center justify-between">
+                                            <Skeleton className="h-5 w-20 rounded" />
+                                            <Skeleton className="h-4 w-6 rounded" />
+                                        </div>
+                                        <Skeleton className="h-1.5 w-full rounded" />
+                                    </div>
+                                ))}
+                            </div>
                         ) : (
                             STAGE_ORDER.map((stage) => {
                                 const count = stats?.leadFunnel[stage] ?? 0;
@@ -209,7 +230,17 @@ export default function DashboardPage() {
                     </CardHeader>
                     <CardContent>
                         {loading ? (
-                            <p className="text-sm text-muted-foreground">Loading...</p>
+                            <ul className="divide-y">
+                                {Array.from({ length: 5 }).map((_, i) => (
+                                    <li key={i} className="flex items-center justify-between py-2">
+                                        <div className="space-y-1.5">
+                                            <Skeleton className="h-4 w-32" />
+                                            <Skeleton className="h-3 w-24" />
+                                        </div>
+                                        <Skeleton className="h-4 w-16" />
+                                    </li>
+                                ))}
+                            </ul>
                         ) : (stats?.upcomingEvents.length ?? 0) === 0 ? (
                             <div className="text-sm text-muted-foreground text-center py-8">
                                 <CalendarIcon className="h-8 w-8 mx-auto mb-2 opacity-30" />
@@ -271,7 +302,7 @@ function KpiCard({
             </CardHeader>
             <CardContent>
                 <div className="text-2xl font-bold">{primary}</div>
-                <p className="text-xs text-muted-foreground">{secondary}</p>
+                <div className="text-xs text-muted-foreground">{secondary}</div>
             </CardContent>
         </Card>
     );

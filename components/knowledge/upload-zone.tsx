@@ -28,6 +28,9 @@ export function UploadZone({ onUploadComplete }: UploadZoneProps = {}) {
 
     const processFile = async (file: File) => {
         setIsUploading(true)
+        // One evolving toast across the two phases (upload → embed) instead of
+        // separate info/success toasts.
+        const toastId = toast.loading("Mengunggah file…")
         const supabase = createClient()
 
         try {
@@ -52,7 +55,7 @@ export function UploadZone({ onUploadComplete }: UploadZoneProps = {}) {
 
             if (uploadError) throw uploadError
 
-            toast.info("File uploaded. Processing AI embeddings...")
+            toast.loading("Memproses embedding AI…", { id: toastId })
 
             // 2. Trigger Ingestion API
             const response = await fetch('/api/ingest', {
@@ -64,14 +67,14 @@ export function UploadZone({ onUploadComplete }: UploadZoneProps = {}) {
             if (!response.ok) throw new Error('Ingestion failed')
 
             const data = await response.json()
-            toast.success(`Success! Processed ${data.chunks} chunks.`)
+            toast.success(`Berhasil — ${data.chunks} potongan diproses.`, { id: toastId })
 
             // Notify parent to refresh the document list
             onUploadComplete?.()
         } catch (error) {
             console.error(error)
-            const errorMessage = error instanceof Error ? error.message : "Something went wrong"
-            toast.error(errorMessage)
+            const errorMessage = error instanceof Error ? error.message : "Terjadi kesalahan"
+            toast.error(errorMessage, { id: toastId })
         } finally {
             setIsUploading(false)
         }

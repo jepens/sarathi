@@ -150,3 +150,28 @@
     animation: none;
   }
 }
+
+/* ── Global navigation progress bar (app/dashboard) ──────────────────
+   One-shot bar restarted on each route change via key={pathname}. */
+@keyframes navProgress {
+  0% {
+    width: 0;
+    opacity: 1;
+  }
+  65% {
+    width: 85%;
+    opacity: 1;
+  }
+  100% {
+    width: 100%;
+    opacity: 0;
+  }
+}
+.nav-progress-bar {
+  animation: navProgress 0.6s ease-out forwards;
+}
+@media (prefers-reduced-motion: reduce) {
+  .nav-progress-bar {
+    animation: none;
+  }
+}

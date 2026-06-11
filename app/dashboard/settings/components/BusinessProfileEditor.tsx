@@ -41,12 +41,21 @@ export function BusinessProfileEditor({ initial }: { initial: BusinessProfile })
 
     const handleSave = async () => {
         setSaving(true);
-        const res = await updateBusinessProfile(form);
-        setSaving(false);
-        if (res.ok) {
-            toast.success('Profil bisnis disimpan');
-        } else {
-            toast.error(res.error ?? 'Gagal menyimpan profil bisnis');
+        const promise = (async () => {
+            const res = await updateBusinessProfile(form);
+            if (!res.ok) throw new Error(res.error ?? 'Gagal menyimpan profil bisnis');
+        })();
+        toast.promise(promise, {
+            loading: 'Menyimpan profil…',
+            success: 'Profil bisnis disimpan',
+            error: (e) => (e instanceof Error ? e.message : 'Gagal menyimpan profil bisnis'),
+        });
+        try {
+            await promise;
+        } catch {
+            /* error already surfaced by toast.promise */
+        } finally {
+            setSaving(false);
         }
     };
 

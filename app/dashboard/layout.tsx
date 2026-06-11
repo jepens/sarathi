@@ -1,4 +1,5 @@
 import { Sidebar } from "@/components/sidebar"
+import { NavProgress } from "@/components/nav-progress"
 
 export default function DashboardLayout({
     children,
@@ -7,6 +8,7 @@ export default function DashboardLayout({
 }) {
     return (
         <div className="flex min-h-screen bg-background">
+            <NavProgress />
             <Sidebar />
             <main className="flex-1 p-8 overflow-y-auto">
                 {children}
