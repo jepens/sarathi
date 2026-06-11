@@ -12,8 +12,10 @@ so we run this tiny service instead.
    random string, and redeploy. This locks down `/api/queue/process` so only
    callers with the secret can trigger it.
 2. **Create a new service** in the same project → type **App** → source **Git**
-   (this repo), and set:
-   - **Build**: Dockerfile, path `deploy/cron/Dockerfile`
+   (this repo, same branch as the app), and set:
+   - **Build**: Builder = **Dockerfile**, Dockerfile path = `deploy/cron/Dockerfile`
+     (build context stays at the repo root — the Dockerfile's `COPY` is written
+     relative to root, so don't change the context)
    - **Environment**:
      - `TARGET_URL=https://nindra.sailendra.co.id/api/queue/process`
      - `CRON_SECRET=<same value as the app service>`
