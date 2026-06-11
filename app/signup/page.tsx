@@ -1,165 +1,125 @@
-"use client";
+import { Fraunces } from 'next/font/google';
+import { CheckCheck, CalendarCheck, MessageCircle, Bot, ShieldCheck } from 'lucide-react';
+import { SignupForm } from './SignupForm';
 
-import { useState } from "react";
-import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { createClient } from "@/lib/supabase/client";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import {
-    Card,
-    CardContent,
-    CardDescription,
-    CardFooter,
-    CardHeader,
-    CardTitle,
-} from "@/components/ui/card";
-import { Loader2 } from "lucide-react";
+// Characterful serif for the wordmark + brand headline only; body stays Inter.
+const fraunces = Fraunces({
+    subsets: ['latin'],
+    weight: ['400', '500', '600'],
+    style: ['normal', 'italic'],
+    variable: '--font-fraunces',
+});
+
+const display = { fontFamily: 'var(--font-fraunces), Georgia, serif' };
+
+// Deep "evening event" gradient with warm gold + magenta glows — a deliberate
+// colored brand surface, not the flat near-black default.
+const brandBg = {
+    backgroundImage:
+        'radial-gradient(120% 80% at 12% 8%, rgba(192,57,126,0.28), transparent 55%),' +
+        'radial-gradient(90% 70% at 92% 100%, rgba(231,193,106,0.20), transparent 50%),' +
+        'linear-gradient(150deg, #2A1145 0%, #181A4A 46%, #0B1030 100%)',
+};
+
+const FEATURES = [
+    { icon: Bot, text: 'Asisten WhatsApp ber-AI membalas & mencatat klien 24/7' },
+    { icon: CalendarCheck, text: 'Pipeline lead & kalender acara terisi otomatis' },
+    { icon: ShieldCheck, text: 'Data tiap EO terisolasi penuh' },
+];
 
 export default function SignupPage() {
-    const [orgName, setOrgName] = useState("");
-    const [email, setEmail] = useState("");
-    const [password, setPassword] = useState("");
-    const [error, setError] = useState<string | null>(null);
-    const [info, setInfo] = useState<string | null>(null);
-    const [loading, setLoading] = useState(false);
-    const router = useRouter();
-    const supabase = createClient();
-
-    const handleSignup = async (e: React.FormEvent) => {
-        e.preventDefault();
-        setLoading(true);
-        setError(null);
-        setInfo(null);
-
-        try {
-            const { data, error } = await supabase.auth.signUp({
-                email,
-                password,
-                options: {
-                    // org_name -> raw_user_meta_data, read by the handle_new_user
-                    // trigger to name the new org.
-                    data: { org_name: orgName },
-                    // The "Confirm signup" email template already routes through
-                    // /auth/confirm (…&next={{ .RedirectTo }}); so this must be the
-                    // FINAL landing page, not another /auth/confirm URL — otherwise
-                    // the confirm route redirects back into itself with no token.
-                    emailRedirectTo: `${window.location.origin}/dashboard/settings`,
-                },
-            });
-
-            if (error) {
-                setError(error.message);
-                return;
-            }
-
-            // When email confirmation is ON, signUp with an already-registered
-            // email returns an obfuscated success with an empty identities array.
-            if (data.user && data.user.identities && data.user.identities.length === 0) {
-                setError("Email ini sudah terdaftar. Silakan masuk.");
-                return;
-            }
-
-            if (data.session) {
-                // Email confirmation OFF -> signed in immediately. Send to
-                // onboarding (fill the Business Profile).
-                router.push("/dashboard/settings");
-                router.refresh();
-            } else {
-                // Confirmation ON -> no session yet; org is already created by
-                // the trigger, user just needs to confirm their email.
-                setInfo(
-                    "Akun dibuat! Cek email Anda untuk mengonfirmasi, lalu masuk."
-                );
-            }
-        } catch {
-            setError("Terjadi kesalahan. Coba lagi.");
-        } finally {
-            setLoading(false);
-        }
-    };
-
     return (
-        <div className="flex min-h-screen flex-col items-center justify-center gap-6 bg-zinc-50 dark:bg-black p-4">
-            <span className="text-2xl font-bold tracking-tight">Helat</span>
-            <Card className="w-full max-w-md">
-                <CardHeader className="space-y-1">
-                    <CardTitle className="text-2xl font-bold text-center">
-                        Daftar EO baru
-                    </CardTitle>
-                    <CardDescription className="text-center">
-                        Buat akun untuk Event Organizer Anda.
-                    </CardDescription>
-                </CardHeader>
-                <form onSubmit={handleSignup}>
-                    <CardContent className="space-y-4">
-                        {error && (
-                            <div className="bg-destructive/15 text-destructive text-sm p-3 rounded-md">
-                                {error}
+        <main className={`${fraunces.variable} min-h-screen lg:grid lg:grid-cols-[1.05fr_1fr]`}>
+            {/* ── Brand panel (lg+) ─────────────────────────────────────── */}
+            <aside
+                className="relative hidden overflow-hidden p-12 text-white lg:flex lg:flex-col lg:justify-between"
+                style={brandBg}
+            >
+                <div className="relative z-10">
+                    <div className="text-3xl font-semibold tracking-tight" style={display}>
+                        Helat
+                        <span className="ml-2 align-middle text-sm font-normal text-white/50">
+                            by Sailendra
+                        </span>
+                    </div>
+                    <div className="mt-1 h-0.5 w-12 rounded-full bg-[#e7c16a]" />
+                </div>
+
+                <div className="relative z-10 max-w-md">
+                    <h1 className="text-4xl leading-[1.15] font-light xl:text-5xl" style={display}>
+                        Dari chat WhatsApp,
+                        <br />
+                        jadi acara{' '}
+                        <em className="font-medium text-[#e7c16a]" style={display}>
+                            ter-booking.
+                        </em>
+                    </h1>
+
+                    {/* Signature motif: a WhatsApp message resolving into a booked event */}
+                    <div className="mt-9 space-y-3">
+                        <div className="max-w-[80%] rounded-2xl rounded-bl-md border border-white/10 bg-white/[0.07] p-3 backdrop-blur-sm">
+                            <p className="text-sm text-white/90">
+                                Halo, mau tanya paket wedding untuk 200 tamu 😊
+                            </p>
+                            <div className="mt-1 flex items-center justify-end gap-1 text-[10px] text-white/45">
+                                09:24 <CheckCheck className="h-3 w-3 text-[#7fd0c4]" />
                             </div>
-                        )}
-                        {info && (
-                            <div className="bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-sm p-3 rounded-md">
-                                {info}
+                        </div>
+
+                        <div className="flex items-center gap-2 pl-3 text-xs text-white/45">
+                            <MessageCircle className="h-3.5 w-3.5 text-[#e7c16a]" />
+                            Asisten Helat menjawab, lalu mencatat lead-nya
+                        </div>
+
+                        <div className="ml-auto max-w-[84%] rounded-2xl rounded-br-md border border-[#e7c16a]/25 bg-white/[0.06] p-3.5 backdrop-blur-sm">
+                            <div className="flex items-center justify-between">
+                                <span className="text-sm font-medium" style={display}>
+                                    Wedding · 200 tamu
+                                </span>
+                                <span className="rounded-full bg-[#e7c16a]/15 px-2 py-0.5 text-[10px] font-medium text-[#e7c16a]">
+                                    Ter-booking ✓
+                                </span>
                             </div>
-                        )}
-                        <div className="space-y-2">
-                            <Label htmlFor="orgName">Nama bisnis / EO</Label>
-                            <Input
-                                id="orgName"
-                                placeholder="Sailendra Organizer"
-                                value={orgName}
-                                onChange={(e) => setOrgName(e.target.value)}
-                                required
-                            />
+                            <div className="mt-1 text-xs text-white/50">12 Jul 2026 · Ballroom</div>
                         </div>
-                        <div className="space-y-2">
-                            <Label htmlFor="email">Email</Label>
-                            <Input
-                                id="email"
-                                type="email"
-                                placeholder="kamu@bisnis.co.id"
-                                value={email}
-                                onChange={(e) => setEmail(e.target.value)}
-                                required
-                            />
+                    </div>
+                </div>
+
+                <ul className="relative z-10 space-y-2.5">
+                    {FEATURES.map(({ icon: Icon, text }) => (
+                        <li key={text} className="flex items-center gap-3 text-sm text-white/75">
+                            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white/8 text-[#e7c16a]">
+                                <Icon className="h-3.5 w-3.5" />
+                            </span>
+                            {text}
+                        </li>
+                    ))}
+                </ul>
+            </aside>
+
+            {/* ── Form panel ────────────────────────────────────────────── */}
+            <div className="flex min-h-screen flex-col items-center justify-center bg-background px-6 py-10">
+                <div className="w-full max-w-md">
+                    {/* Compact brand header for mobile (brand panel is hidden) */}
+                    <div className="mb-8 text-center lg:hidden">
+                        <div className="text-2xl font-semibold tracking-tight" style={display}>
+                            Helat
                         </div>
-                        <div className="space-y-2">
-                            <Label htmlFor="password">Password</Label>
-                            <Input
-                                id="password"
-                                type="password"
-                                minLength={6}
-                                value={password}
-                                onChange={(e) => setPassword(e.target.value)}
-                                required
-                            />
-                        </div>
-                    </CardContent>
-                    <CardFooter className="flex flex-col gap-3">
-                        <Button className="w-full" type="submit" disabled={loading}>
-                            {loading ? (
-                                <>
-                                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                    Mendaftarkan...
-                                </>
-                            ) : (
-                                "Daftar"
-                            )}
-                        </Button>
-                        <p className="text-sm text-muted-foreground">
-                            Sudah punya akun?{" "}
-                            <Link
-                                href="/login"
-                                className="font-medium text-foreground underline underline-offset-4"
-                            >
-                                Masuk
-                            </Link>
+                        <p className="mt-1 text-sm text-muted-foreground">
+                            Dari chat WhatsApp, jadi acara ter-booking.
                         </p>
-                    </CardFooter>
-                </form>
-            </Card>
-        </div>
+                    </div>
+
+                    <div className="mb-6">
+                        <h2 className="text-2xl font-bold tracking-tight">Daftar EO baru</h2>
+                        <p className="mt-1 text-sm text-muted-foreground">
+                            Buat akun Event Organizer Anda — siap dalam semenit.
+                        </p>
+                    </div>
+
+                    <SignupForm />
+                </div>
+            </div>
+        </main>
     );
 }
