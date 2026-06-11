@@ -14,6 +14,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createServiceOrServerClient } from "@/lib/supabase/service";
 import { WhatsAppCredentials } from "./components/WhatsAppCredentials";
 import { getMyWhatsAppIntegration } from "@/lib/whatsapp/integration";
+import { resolvePublicOrigin } from "@/lib/utils/public-url";
 import { headers } from "next/headers";
 
 export default async function SettingsPage() {
@@ -25,12 +26,10 @@ export default async function SettingsPage() {
     // phone_number_id). Resolve them platform-wide so every tenant — not just the
     // platform owner whose org owns the app_settings row — sees the real values:
     // the URL from the request host, the verify token via a service-role client.
-    const h = await headers();
-    const host = h.get("host");
-    const proto = h.get("x-forwarded-proto") ?? "https";
+    const origin = resolvePublicOrigin(await headers());
     const svc = await createServiceOrServerClient();
-    const webhookUrl = host
-        ? `${proto}://${host}/api/webhook/whatsapp`
+    const webhookUrl = origin
+        ? `${origin}/api/webhook/whatsapp`
         : await getWebhookUrl(svc);
     const verifyToken = await getVerifyToken(svc);
 

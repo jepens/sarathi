@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server';
 import { createServiceOrServerClient } from '@/lib/supabase/service';
 import { getCurrentOrgId } from '@/lib/settings/org-context';
 import { getWebhookUrl, getVerifyToken } from '@/lib/settings/app-settings';
+import { resolvePublicOrigin } from '@/lib/utils/public-url';
 import { NextResponse } from 'next/server';
 
 export const dynamic = 'force-dynamic';
@@ -50,11 +51,10 @@ export async function GET(request: Request) {
     // read (it would fall back to localhost/'123456'). Resolve them platform-wide
     // instead: the callback URL from the request host, the verify token via a
     // service-role client.
-    const proto = request.headers.get('x-forwarded-proto') ?? 'https';
-    const host = request.headers.get('host');
+    const origin = resolvePublicOrigin(request.headers);
     const svc = await createServiceOrServerClient();
-    const webhookUrl = host
-        ? `${proto}://${host}/api/webhook/whatsapp`
+    const webhookUrl = origin
+        ? `${origin}/api/webhook/whatsapp`
         : await getWebhookUrl(svc);
     const verifyToken = await getVerifyToken(svc);
 

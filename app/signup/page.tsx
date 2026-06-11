@@ -41,7 +41,11 @@ export default function SignupPage() {
                     // org_name -> raw_user_meta_data, read by the handle_new_user
                     // trigger to name the new org.
                     data: { org_name: orgName },
-                    emailRedirectTo: `${window.location.origin}/auth/confirm?next=/dashboard/settings`,
+                    // The "Confirm signup" email template already routes through
+                    // /auth/confirm (…&next={{ .RedirectTo }}); so this must be the
+                    // FINAL landing page, not another /auth/confirm URL — otherwise
+                    // the confirm route redirects back into itself with no token.
+                    emailRedirectTo: `${window.location.origin}/dashboard/settings`,
                 },
             });
 
