@@ -22,6 +22,7 @@ import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
 import { createClient } from "@/lib/supabase/client"
 import { ModeToggle } from "@/components/mode-toggle"
+import { Brand } from "@/components/brand"
 
 type NavItem = {
     href: string
@@ -85,9 +86,9 @@ export function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
         <div className="flex flex-1 flex-col justify-between overflow-y-auto">
             <div className="space-y-4 py-4">
                 <div className="px-3 py-2">
-                    <h2 className="mb-3 px-4 text-lg font-semibold tracking-tight text-sidebar-foreground">
-                        Helat
-                    </h2>
+                    <div className="mb-3 px-4">
+                        <Brand />
+                    </div>
                     <nav className="space-y-1">
                         {NAV_ITEMS.map((item) => {
                             const Icon = item.icon

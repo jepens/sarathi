@@ -7,6 +7,7 @@ import { Menu } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet"
 import { SidebarNav } from "@/components/sidebar"
+import { Brand } from "@/components/brand"
 
 /**
  * Mobile-only top bar + slide-in nav drawer. Below md the desktop rail is hidden
@@ -40,7 +41,7 @@ export function MobileNav() {
                 >
                     <Menu className="size-5" />
                 </Button>
-                <span className="text-lg font-semibold tracking-tight">Helat</span>
+                <Brand />
             </header>
 
             <Sheet open={open} onOpenChange={setOpen}>
