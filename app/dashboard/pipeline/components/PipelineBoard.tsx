@@ -194,10 +194,10 @@ export function PipelineBoard() {
 
     if (loading) {
         return (
-            <div className="h-full overflow-x-auto pb-4">
+            <div className="h-full overflow-x-auto overscroll-x-contain pb-4 snap-x snap-mandatory [-webkit-overflow-scrolling:touch] md:snap-none">
                 <div className="flex gap-4 h-full min-w-max">
                     {Array.from({ length: 5 }).map((_, i) => (
-                        <div key={i} className="w-72 flex-shrink-0 rounded-lg border bg-card flex flex-col">
+                        <div key={i} className="w-[85vw] sm:w-72 flex-shrink-0 snap-start rounded-lg border bg-card flex flex-col">
                             <div className="px-3 py-2 border-b flex items-center justify-between">
                                 <Skeleton className="h-4 w-20" />
                                 <Skeleton className="h-4 w-6" />
@@ -231,7 +231,7 @@ export function PipelineBoard() {
                         <div
                             key={stage.id}
                             className={cn(
-                                'w-72 flex-shrink-0 rounded-lg border bg-card flex flex-col transition-colors',
+                                'w-[85vw] sm:w-72 flex-shrink-0 snap-start rounded-lg border bg-card flex flex-col transition-colors',
                                 stage.accent,
                                 dragOverStage === stage.id && 'ring-2 ring-primary'
                             )}
@@ -346,7 +346,7 @@ function LeadCard({
                         <Button
                             variant="ghost"
                             size="icon"
-                            className="h-6 w-6 -mr-1"
+                            className="h-7 w-7 sm:h-6 sm:w-6 -mr-1"
                             onClick={(e) => e.stopPropagation()}
                             // Disable drag while the menu trigger is pressed —
                             // otherwise mousedown starts a drag and the menu

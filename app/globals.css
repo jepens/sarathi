@@ -175,3 +175,52 @@
     animation: none;
   }
 }
+
+/* ── Off-canvas Sheet (mobile nav drawer) ────────────────────────────
+   Honour reduced-motion: skip the slide/fade so the drawer just appears. */
+@media (prefers-reduced-motion: reduce) {
+  [data-slot="sheet-content"],
+  [data-slot="sheet-overlay"] {
+    animation: none !important;
+  }
+}
+
+/* ── WhatsApp Inbox palette (app/dashboard/chats) ────────────────────
+   The inbox keeps the recognizable WhatsApp look — but the original hard-
+   coded hex values rendered a light island inside the dark app and put
+   black text on what becomes a dark bubble. These scoped tokens flip the
+   whole surface to WhatsApp's own dark palette under .dark, so the inbox
+   follows the user's theme. Components reference them as bg-[var(--wa-…)].
+   Set on the inbox root via the .wa-inbox class. */
+.wa-inbox {
+  --wa-list: #ffffff;
+  --wa-panel: #f0f2f5;
+  --wa-paper: #efeae2;
+  --wa-search: #ffffff;
+  --wa-avatar: #dfe5e7;
+  --wa-bubble-in: #ffffff;
+  --wa-bubble-out: #d9fdd3;
+  --wa-text: #111b21;
+  --wa-text-muted: #667781;
+  --wa-icon: #8696a0;
+  --wa-hover: #f5f6f6;
+  --wa-selected: #f0f2f5;
+  --wa-crm: #f7f8fa;
+  --wa-header-icon: #54656f;
+}
+.dark .wa-inbox {
+  --wa-list: #111b21;
+  --wa-panel: #202c33;
+  --wa-paper: #0b141a;
+  --wa-search: #2a3942;
+  --wa-avatar: #2a3942;
+  --wa-bubble-in: #202c33;
+  --wa-bubble-out: #005c4b;
+  --wa-text: #e9edef;
+  --wa-text-muted: #8696a0;
+  --wa-icon: #8696a0;
+  --wa-hover: #202c33;
+  --wa-selected: #2a3942;
+  --wa-crm: #1d282f;
+  --wa-header-icon: #aebac1;
+}

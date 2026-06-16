@@ -95,6 +95,28 @@ function StageBadge({ stage }: { stage: string | null }) {
     return <Badge className={`${meta.className} border-transparent`}>{meta.label}</Badge>;
 }
 
+// Edit / remove-name actions — shared by the desktop table row and the mobile card.
+function ContactActions({
+    contact,
+    onEdit,
+    onDelete,
+}: {
+    contact: Contact;
+    onEdit: (c: Contact) => void;
+    onDelete: (c: Contact) => void;
+}) {
+    return (
+        <>
+            <Button variant="ghost" size="icon" onClick={() => onEdit(contact)} title="Edit Nama">
+                <Edit2 className="h-4 w-4 text-muted-foreground" />
+            </Button>
+            <Button variant="ghost" size="icon" onClick={() => onDelete(contact)} title="Hapus Nama">
+                <Trash2 className="h-4 w-4 text-red-500" />
+            </Button>
+        </>
+    );
+}
+
 export function ContactList() {
     const [contacts, setContacts] = useState<Contact[]>([]);
     const [search, setSearch] = useState('');
@@ -400,16 +422,16 @@ export function ContactList() {
     }
 
     return (
-        <div className="flex flex-col h-full bg-white rounded-lg border shadow-sm">
-            <div className="p-4 border-b flex flex-wrap items-center justify-between gap-3">
-                <Tabs value={typeFilter} onValueChange={(v) => setTypeFilter(v as typeof typeFilter)}>
-                    <TabsList>
-                        <TabsTrigger value="all">Semua ({counts.all})</TabsTrigger>
-                        <TabsTrigger value="lead">Klien ({counts.lead})</TabsTrigger>
-                        <TabsTrigger value="vendor">Vendor ({counts.vendor})</TabsTrigger>
+        <div className="flex flex-col h-full bg-card rounded-lg border shadow-sm">
+            <div className="p-3 sm:p-4 border-b flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+                <Tabs value={typeFilter} onValueChange={(v) => setTypeFilter(v as typeof typeFilter)} className="w-full sm:w-auto">
+                    <TabsList className="w-full sm:w-auto">
+                        <TabsTrigger value="all" className="flex-1 sm:flex-none">Semua ({counts.all})</TabsTrigger>
+                        <TabsTrigger value="lead" className="flex-1 sm:flex-none">Klien ({counts.lead})</TabsTrigger>
+                        <TabsTrigger value="vendor" className="flex-1 sm:flex-none">Vendor ({counts.vendor})</TabsTrigger>
                     </TabsList>
                 </Tabs>
-                <div className="relative w-64">
+                <div className="relative w-full sm:w-64">
                     <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
                     <Input
                         placeholder="Cari nama, nomor, acara…"
@@ -422,94 +444,153 @@ export function ContactList() {
 
             <div className="flex-1 overflow-y-auto">
                 {loading ? (
-                    <table className="w-full text-sm text-left">
-                        <thead className="text-xs text-gray-700 uppercase bg-gray-50 sticky top-0">
-                            <tr>
-                                {['Nama', 'Acara / Tawaran', 'Peserta', 'Stage', 'Last Active', 'Aksi'].map((h) => (
-                                    <th key={h} className="px-6 py-3">{h}</th>
-                                ))}
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {Array.from({ length: 8 }).map((_, i) => (
-                                <tr key={i} className="bg-white border-b">
-                                    {Array.from({ length: 6 }).map((_, j) => (
-                                        <td key={j} className="px-6 py-4">
-                                            <Skeleton className="h-4 w-full bg-gray-200" />
-                                        </td>
+                    <>
+                        {/* Desktop skeleton */}
+                        <table className="hidden w-full text-sm text-left md:table">
+                            <thead className="text-xs text-muted-foreground uppercase bg-muted sticky top-0">
+                                <tr>
+                                    {['Nama', 'Acara / Tawaran', 'Peserta', 'Stage', 'Last Active', 'Aksi'].map((h) => (
+                                        <th key={h} className="px-6 py-3">{h}</th>
                                     ))}
                                 </tr>
+                            </thead>
+                            <tbody>
+                                {Array.from({ length: 8 }).map((_, i) => (
+                                    <tr key={i} className="border-b">
+                                        {Array.from({ length: 6 }).map((_, j) => (
+                                            <td key={j} className="px-6 py-4">
+                                                <Skeleton className="h-4 w-full" />
+                                            </td>
+                                        ))}
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                        {/* Mobile skeleton */}
+                        <div className="space-y-3 p-3 md:hidden">
+                            {Array.from({ length: 6 }).map((_, i) => (
+                                <div key={i} className="rounded-lg border p-4">
+                                    <Skeleton className="h-4 w-1/2" />
+                                    <Skeleton className="mt-2 h-3 w-2/3" />
+                                    <Skeleton className="mt-2 h-3 w-1/3" />
+                                </div>
                             ))}
-                        </tbody>
-                    </table>
+                        </div>
+                    </>
                 ) : filteredContacts.length === 0 ? (
                     <div className="p-8 text-center text-muted-foreground">No contacts found</div>
                 ) : (
-                    <table className="w-full text-sm text-left">
-                        <thead className="text-xs text-gray-700 uppercase bg-gray-50 sticky top-0">
-                            <tr>
-                                <th className="px-6 py-3">Nama</th>
-                                <th className="px-6 py-3">Acara / Tawaran</th>
-                                <th className="px-6 py-3">Peserta</th>
-                                <th className="px-6 py-3">Stage</th>
-                                <th className="px-6 py-3">Last Active</th>
-                                <th className="px-6 py-3 text-right">Aksi</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {filteredContacts.map((contact) => (
-                                <tr key={contact.phone_number} className="bg-white border-b hover:bg-gray-50">
-                                    <td className="px-6 py-4 font-medium text-gray-900">
-                                        <button
-                                            type="button"
-                                            onClick={() => setDetailPhone(contact.phone_number)}
-                                            className="flex items-center gap-2 text-left hover:underline"
-                                            title="Lihat detail"
-                                        >
-                                            <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center text-primary">
-                                                {contact.contact_type === 'vendor' ? <Store className="h-4 w-4" /> : <User className="h-4 w-4" />}
-                                            </div>
-                                            <span className="flex items-center gap-1">
-                                                {contact.contact_name || (
-                                                    <span className="text-muted-foreground">{contact.phone_number}</span>
-                                                )}
-                                                {contact.contact_name_locked && (
-                                                    <Lock className="h-3 w-3 text-muted-foreground" />
-                                                )}
-                                                <ContactTypeBadge type={contact.contact_type} />
-                                            </span>
-                                        </button>
-                                    </td>
-                                    <td className="px-6 py-4 text-gray-600">
-                                        {contact.contact_type === 'vendor'
-                                            ? contact.vendor_offering || contact.vendor_category || <span className="text-muted-foreground">—</span>
-                                            : contact.event_interest || <span className="text-muted-foreground">—</span>}
-                                    </td>
-                                    <td className="px-6 py-4 text-gray-600">
-                                        {contact.participant_count ? `${contact.participant_count} pax` : <span className="text-muted-foreground">—</span>}
-                                    </td>
-                                    <td className="px-6 py-4">
-                                        {contact.contact_type === 'vendor' ? (
-                                            <span className="text-xs text-muted-foreground">—</span>
-                                        ) : (
-                                            <StageBadge stage={contact.lead_stage} />
-                                        )}
-                                    </td>
-                                    <td className="px-6 py-4 text-gray-500">{formatTime(contact.last_message_at)}</td>
-                                    <td className="px-6 py-4 text-right">
-                                        <div className="flex items-center justify-end gap-2">
-                                            <Button variant="ghost" size="icon" onClick={() => openEditDialog(contact)} title="Edit Nama">
-                                                <Edit2 className="h-4 w-4 text-gray-500" />
-                                            </Button>
-                                            <Button variant="ghost" size="icon" onClick={() => openDeleteDialog(contact)} title="Hapus Nama">
-                                                <Trash2 className="h-4 w-4 text-red-500" />
-                                            </Button>
-                                        </div>
-                                    </td>
+                    <>
+                        {/* Desktop: full table */}
+                        <table className="hidden w-full text-sm text-left md:table">
+                            <thead className="text-xs text-muted-foreground uppercase bg-muted sticky top-0">
+                                <tr>
+                                    <th className="px-6 py-3">Nama</th>
+                                    <th className="px-6 py-3">Acara / Tawaran</th>
+                                    <th className="px-6 py-3">Peserta</th>
+                                    <th className="px-6 py-3">Stage</th>
+                                    <th className="px-6 py-3">Last Active</th>
+                                    <th className="px-6 py-3 text-right">Aksi</th>
                                 </tr>
-                            ))}
-                        </tbody>
-                    </table>
+                            </thead>
+                            <tbody>
+                                {filteredContacts.map((contact) => (
+                                    <tr key={contact.phone_number} className="border-b hover:bg-muted/50">
+                                        <td className="px-6 py-4 font-medium text-foreground">
+                                            <button
+                                                type="button"
+                                                onClick={() => setDetailPhone(contact.phone_number)}
+                                                className="flex items-center gap-2 text-left hover:underline"
+                                                title="Lihat detail"
+                                            >
+                                                <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center text-primary">
+                                                    {contact.contact_type === 'vendor' ? <Store className="h-4 w-4" /> : <User className="h-4 w-4" />}
+                                                </div>
+                                                <span className="flex items-center gap-1">
+                                                    {contact.contact_name || (
+                                                        <span className="text-muted-foreground">{contact.phone_number}</span>
+                                                    )}
+                                                    {contact.contact_name_locked && (
+                                                        <Lock className="h-3 w-3 text-muted-foreground" />
+                                                    )}
+                                                    <ContactTypeBadge type={contact.contact_type} />
+                                                </span>
+                                            </button>
+                                        </td>
+                                        <td className="px-6 py-4 text-muted-foreground">
+                                            {contact.contact_type === 'vendor'
+                                                ? contact.vendor_offering || contact.vendor_category || <span className="text-muted-foreground">—</span>
+                                                : contact.event_interest || <span className="text-muted-foreground">—</span>}
+                                        </td>
+                                        <td className="px-6 py-4 text-muted-foreground">
+                                            {contact.participant_count ? `${contact.participant_count} pax` : <span className="text-muted-foreground">—</span>}
+                                        </td>
+                                        <td className="px-6 py-4">
+                                            {contact.contact_type === 'vendor' ? (
+                                                <span className="text-xs text-muted-foreground">—</span>
+                                            ) : (
+                                                <StageBadge stage={contact.lead_stage} />
+                                            )}
+                                        </td>
+                                        <td className="px-6 py-4 text-muted-foreground">{formatTime(contact.last_message_at)}</td>
+                                        <td className="px-6 py-4 text-right">
+                                            <div className="flex items-center justify-end gap-2">
+                                                <ContactActions contact={contact} onEdit={openEditDialog} onDelete={openDeleteDialog} />
+                                            </div>
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+
+                        {/* Mobile: stacked cards (same data, no horizontal scroll) */}
+                        <div className="space-y-3 p-3 md:hidden">
+                            {filteredContacts.map((contact) => {
+                                const detail =
+                                    contact.contact_type === 'vendor'
+                                        ? contact.vendor_offering || contact.vendor_category
+                                        : contact.event_interest;
+                                const hasMeta =
+                                    !!detail ||
+                                    !!contact.participant_count ||
+                                    (contact.contact_type !== 'vendor' && !!contact.lead_stage);
+                                return (
+                                    <div key={contact.phone_number} className="rounded-lg border bg-card p-3 shadow-sm">
+                                        <div className="flex items-start justify-between gap-2">
+                                            <button
+                                                type="button"
+                                                onClick={() => setDetailPhone(contact.phone_number)}
+                                                className="flex min-w-0 items-center gap-2 text-left"
+                                                title="Lihat detail"
+                                            >
+                                                <div className="h-9 w-9 shrink-0 rounded-full bg-primary/10 flex items-center justify-center text-primary">
+                                                    {contact.contact_type === 'vendor' ? <Store className="h-4 w-4" /> : <User className="h-4 w-4" />}
+                                                </div>
+                                                <span className="min-w-0">
+                                                    <span className="flex items-center gap-1 font-medium">
+                                                        <span className="truncate">{contact.contact_name || contact.phone_number}</span>
+                                                        {contact.contact_name_locked && <Lock className="h-3 w-3 shrink-0 text-muted-foreground" />}
+                                                        <ContactTypeBadge type={contact.contact_type} className="shrink-0" />
+                                                    </span>
+                                                    <span className="block truncate text-xs text-muted-foreground">{formatTime(contact.last_message_at)}</span>
+                                                </span>
+                                            </button>
+                                            <div className="flex shrink-0 items-center gap-1">
+                                                <ContactActions contact={contact} onEdit={openEditDialog} onDelete={openDeleteDialog} />
+                                            </div>
+                                        </div>
+                                        {hasMeta && (
+                                            <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 pl-11 text-sm text-muted-foreground">
+                                                {detail && <span className="min-w-0 truncate">{detail}</span>}
+                                                {contact.participant_count ? <span>{contact.participant_count} pax</span> : null}
+                                                {contact.contact_type !== 'vendor' && contact.lead_stage && <StageBadge stage={contact.lead_stage} />}
+                                            </div>
+                                        )}
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </>
                 )}
             </div>
 
@@ -574,7 +655,7 @@ export function ContactList() {
                                         <StickyNote className="h-4 w-4 flex-shrink-0 text-muted-foreground mt-0.5" />
                                         <div className="min-w-0">
                                             <div className="text-xs text-muted-foreground">Catatan</div>
-                                            <p className="whitespace-pre-wrap break-words text-gray-700">{stripAuditLines(detailContact.notes)}</p>
+                                            <p className="whitespace-pre-wrap break-words text-foreground">{stripAuditLines(detailContact.notes)}</p>
                                         </div>
                                     </div>
                                 )}
@@ -641,7 +722,7 @@ export function ContactList() {
                             <Label htmlFor="v-cp">Kontak person</Label>
                             <Input id="v-cp" value={promote.contact_person} onChange={(e) => setPromote((p) => ({ ...p, contact_person: e.target.value }))} />
                         </div>
-                        <div className="grid grid-cols-2 gap-3">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                             <div className="space-y-1">
                                 <Label htmlFor="v-phone">Nomor</Label>
                                 <Input id="v-phone" value={promote.phone} disabled className="bg-muted" />
@@ -675,13 +756,13 @@ export function ContactList() {
                         </DialogDescription>
                     </DialogHeader>
                     <div className="grid gap-4 py-4">
-                        <div className="grid grid-cols-4 items-center gap-4">
-                            <Label htmlFor="name" className="text-right">Nama</Label>
-                            <Input id="name" value={editName} onChange={(e) => setEditName(e.target.value)} className="col-span-3" placeholder="mis. Budi Santoso" />
+                        <div className="grid grid-cols-1 sm:grid-cols-4 items-center gap-2 sm:gap-4">
+                            <Label htmlFor="name" className="sm:text-right">Nama</Label>
+                            <Input id="name" value={editName} onChange={(e) => setEditName(e.target.value)} className="sm:col-span-3" placeholder="mis. Budi Santoso" />
                         </div>
-                        <div className="grid grid-cols-4 items-center gap-4">
-                            <Label htmlFor="phone" className="text-right">Nomor</Label>
-                            <Input id="phone" value={selectedContact?.phone_number || ''} disabled className="col-span-3 bg-muted" />
+                        <div className="grid grid-cols-1 sm:grid-cols-4 items-center gap-2 sm:gap-4">
+                            <Label htmlFor="phone" className="sm:text-right">Nomor</Label>
+                            <Input id="phone" value={selectedContact?.phone_number || ''} disabled className="sm:col-span-3 bg-muted" />
                         </div>
                         <div className="flex items-start justify-between gap-4 rounded-md border p-3">
                             <div className="space-y-0.5">
@@ -741,8 +822,8 @@ function Field({
     return (
         <div className="flex items-center gap-2">
             <Icon className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
-            <span className="w-24 flex-shrink-0 text-xs text-muted-foreground">{label}</span>
-            <span className="min-w-0 break-words text-gray-800">
+            <span className="w-20 sm:w-24 flex-shrink-0 text-xs text-muted-foreground">{label}</span>
+            <span className="min-w-0 break-words text-foreground">
                 {value || <span className="text-muted-foreground">—</span>}
             </span>
         </div>

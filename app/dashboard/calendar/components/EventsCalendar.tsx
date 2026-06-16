@@ -138,14 +138,14 @@ export function EventsCalendar() {
 
     return (
         <div className="rounded-lg border bg-card overflow-hidden">
-            <div className="px-4 py-3 border-b flex items-center gap-4 text-xs">
+            <div className="px-4 py-3 border-b flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
                 <Legend color="#34d399" label="Confirmed Events" />
                 <Legend color="#a78bfa" label="Online Meetings" />
                 <span className="ml-auto text-muted-foreground">
                     {calendarEvents.length} jadwal
                 </span>
             </div>
-            <div className="h-[700px] sx-react-calendar-wrapper">
+            <div className="h-[70dvh] min-h-[440px] md:h-[700px] sx-react-calendar-wrapper">
                 <ScheduleXCalendar calendarApp={calendar} />
             </div>
         </div>

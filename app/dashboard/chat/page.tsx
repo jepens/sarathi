@@ -137,11 +137,11 @@ export default function ChatPage() {
     };
 
     return (
-        <div className="flex h-[calc(100vh-4rem)] flex-col">
+        <div className="flex h-[calc(100dvh-5.5rem)] md:h-[calc(100dvh-4rem)] flex-col">
             {/* Header */}
             <div className="border-b border-white/10 bg-black/40 backdrop-blur-sm">
-                <div className="px-6 py-4">
-                    <h1 className="text-2xl font-semibold tracking-tight">Chat dengan AI</h1>
+                <div className="px-4 py-3 md:px-6 md:py-4">
+                    <h1 className="text-lg md:text-2xl font-semibold tracking-tight">Chat dengan AI</h1>
                     <p className="text-sm text-muted-foreground">
                         Tanyakan tentang bisnis Anda berdasarkan knowledge base
                     </p>
@@ -149,7 +149,7 @@ export default function ChatPage() {
             </div>
 
             {/* Messages */}
-            <div className="flex-1 overflow-y-auto px-6 py-4">
+            <div className="flex-1 overflow-y-auto px-4 py-4 md:px-6">
                 {messages.length === 0 ? (
                     <div className="flex h-full items-center justify-center">
                         <div className="text-center">
@@ -201,7 +201,7 @@ export default function ChatPage() {
 
             {/* Input */}
             <div className="border-t border-white/10 bg-black/40 backdrop-blur-sm">
-                <form onSubmit={handleSubmit} className="px-6 py-4">
+                <form onSubmit={handleSubmit} className="px-4 py-3 md:px-6 md:py-4">
                     <div className="flex gap-2">
                         <Textarea
                             value={input}
@@ -215,7 +215,7 @@ export default function ChatPage() {
                             type="submit"
                             size="icon"
                             disabled={!input.trim() || isLoading}
-                            className="h-[60px] w-[60px]"
+                            className="h-[60px] w-12 md:w-[60px]"
                         >
                             {isLoading ? (
                                 <Loader2 className="h-4 w-4 animate-spin" />

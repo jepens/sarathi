@@ -6,7 +6,7 @@ export default function PipelinePage() {
         // board's flex chain resolves: columns scroll vertically inside their own
         // height and the horizontal scrollbar sits at the bottom of the viewport
         // instead of being pushed off-screen by the tallest column.
-        <div className="space-y-6 flex flex-col h-[calc(100vh-4rem)]">
+        <div className="space-y-6 flex flex-col h-[calc(100dvh-5.5rem)] md:h-[calc(100dvh-4rem)]">
             <div className="flex-shrink-0">
                 <h1 className="text-2xl font-bold tracking-tight">Sales Pipeline</h1>
                 <p className="text-muted-foreground">

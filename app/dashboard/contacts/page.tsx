@@ -9,7 +9,7 @@ export default function ContactsPage() {
                     Manage your WhatsApp contacts and their names.
                 </p>
             </div>
-            <div className="h-[calc(100vh-12rem)]">
+            <div className="h-[calc(100dvh-13rem)] md:h-[calc(100dvh-12rem)]">
                 <ContactList />
             </div>
         </div>

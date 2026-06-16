@@ -105,13 +105,13 @@ export function ChatList({ selectedPhone, onSelect }: ChatListProps) {
     }
 
     return (
-        <div className="flex flex-col h-full bg-white">
-            <div className="p-3 border-b bg-[#f0f2f5] flex-shrink-0">
+        <div className="flex flex-col h-full bg-[var(--wa-list)]">
+            <div className="p-3 border-b bg-[var(--wa-panel)] flex-shrink-0">
                 <div className="relative">
-                    <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+                    <Search className="absolute left-3 top-2.5 h-4 w-4 text-[var(--wa-text-muted)]" />
                     <Input
                         placeholder="Search or start new chat"
-                        className="pl-10 bg-white border-none focus-visible:ring-1 rounded-lg text-black placeholder:text-gray-500"
+                        className="pl-10 bg-[var(--wa-search)] border-none focus-visible:ring-1 rounded-lg text-[var(--wa-text)] placeholder:text-[var(--wa-text-muted)]"
                         value={search}
                         onChange={(e) => setSearch(e.target.value)}
                     />
@@ -123,10 +123,10 @@ export function ChatList({ selectedPhone, onSelect }: ChatListProps) {
                     <div className="divide-y divide-border/40">
                         {Array.from({ length: 8 }).map((_, i) => (
                             <div key={i} className="flex items-center gap-3 p-3">
-                                <Skeleton className="h-12 w-12 shrink-0 rounded-full bg-gray-200" />
+                                <Skeleton className="h-12 w-12 shrink-0 rounded-full bg-[var(--wa-avatar)]" />
                                 <div className="flex-1 space-y-2">
-                                    <Skeleton className="h-3.5 w-1/3 rounded bg-gray-200" />
-                                    <Skeleton className="h-3 w-2/3 rounded bg-gray-200" />
+                                    <Skeleton className="h-3.5 w-1/3 rounded bg-[var(--wa-avatar)]" />
+                                    <Skeleton className="h-3 w-2/3 rounded bg-[var(--wa-avatar)]" />
                                 </div>
                             </div>
                         ))}
@@ -142,15 +142,15 @@ export function ChatList({ selectedPhone, onSelect }: ChatListProps) {
                                 key={chat.phone_number}
                                 onClick={() => onSelect(chat.phone_number)}
                                 className={cn(
-                                    "flex items-center gap-3 p-3 border-b border-border/40 text-left hover:bg-[#f5f6f6] transition-colors w-full",
-                                    selectedPhone === chat.phone_number && "bg-[#f0f2f5]"
+                                    "flex items-center gap-3 p-3 border-b border-border/40 text-left hover:bg-[var(--wa-hover)] transition-colors w-full",
+                                    selectedPhone === chat.phone_number && "bg-[var(--wa-selected)]"
                                 )}
                             >
-                                <div className="h-12 w-12 rounded-full bg-[#dfe5e7] flex items-center justify-center shrink-0">
+                                <div className="h-12 w-12 rounded-full bg-[var(--wa-avatar)] flex items-center justify-center shrink-0">
                                     {chat.contact_type === 'vendor' ? (
                                         <Store className="w-6 h-6 text-orange-500" />
                                     ) : (
-                                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-7 h-7 text-[#8696a0]">
+                                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-7 h-7 text-[var(--wa-icon)]">
                                             <path fillRule="evenodd" d="M7.5 6a4.5 4.5 0 119 0 4.5 4.5 0 01-9 0zM3.751 20.105a8.25 8.25 0 0116.498 0 .75.75 0 01-.437.695A18.683 18.683 0 0112 22.5c-2.786 0-5.433-.608-7.812-1.7a.75.75 0 01-.437-.695z" clipRule="evenodd" />
                                         </svg>
                                     )}
@@ -158,26 +158,26 @@ export function ChatList({ selectedPhone, onSelect }: ChatListProps) {
                                 <div className="flex-1 min-w-0">
                                     <div className="flex justify-between items-center mb-1 gap-2">
                                         <span className="flex items-center gap-1.5 min-w-0">
-                                            <span className="font-medium text-[15px] text-[#111b21] truncate min-w-0">
+                                            <span className="font-medium text-[15px] text-[var(--wa-text)] truncate min-w-0">
                                                 {chat.contact_name || chat.phone_number}
                                             </span>
                                             <ContactTypeBadge type={chat.contact_type} className="shrink-0" />
                                         </span>
                                         <span className="flex items-center gap-1 shrink-0">
                                             {reply && <span className="h-2 w-2 rounded-full bg-emerald-500" aria-label="Belum dibalas" />}
-                                            <span className={cn("text-[12px]", reply ? "text-emerald-600 font-semibold" : "text-[#667781]")}>
+                                            <span className={cn("text-[12px]", reply ? "text-emerald-600 font-semibold" : "text-[var(--wa-text-muted)]")}>
                                                 {formatTime(chat.last_message_at)}
                                             </span>
                                         </span>
                                     </div>
                                     <div className="flex items-center justify-between gap-2">
-                                        <p className={cn("text-[13px] truncate leading-5", reply ? "text-[#111b21] font-medium" : "text-[#667781]")}>
+                                        <p className={cn("text-[13px] truncate leading-5", reply ? "text-[var(--wa-text)] font-medium" : "text-[var(--wa-text-muted)]")}>
                                             {chat.last_message}
                                         </p>
                                         {isWindowExpired(chat.last_inbound_at) && (
                                             <span
                                                 title="Lebih dari 24 jam sejak pesan terakhir customer. Balasan biasa akan ditolak Meta (kode 131047) — pakai template message."
-                                                className="shrink-0 inline-flex items-center gap-1 rounded-full bg-amber-100 text-amber-800 border border-amber-300 px-1.5 py-0.5 text-[10px] font-medium leading-none"
+                                                className="shrink-0 inline-flex items-center gap-1 rounded-full bg-amber-100 text-amber-800 border border-amber-300 px-1.5 py-0.5 text-[10px] font-medium leading-none dark:bg-amber-500/15 dark:text-amber-300 dark:border-amber-500/30"
                                             >
                                                 <Clock className="h-2.5 w-2.5" />
                                                 Perlu template

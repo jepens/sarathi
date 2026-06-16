@@ -4,7 +4,7 @@ import { useEffect, useState, useRef, useCallback } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Send, MoreVertical, Check, CheckCheck, AlertCircle, FileText, Store, Clock } from 'lucide-react';
+import { Send, MoreVertical, Check, CheckCheck, AlertCircle, FileText, Store, Clock, ChevronLeft } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { SendTemplateDialog } from './SendTemplateDialog';
@@ -76,6 +76,8 @@ interface Message {
 
 interface ChatWindowProps {
     phoneNumber: string;
+    // Mobile master-detail: returns from the conversation to the chat list.
+    onBack?: () => void;
 }
 
 // Placeholder bubbles shown while a chat's history loads — alternating sides
@@ -93,14 +95,14 @@ function MessagesSkeleton() {
             {rows.map((r, i) => (
                 <Skeleton
                     key={i}
-                    className={cn('h-10 rounded-lg bg-black/5', r.w, r.out ? 'self-end' : 'self-start')}
+                    className={cn('h-10 rounded-lg bg-black/5 dark:bg-white/10', r.w, r.out ? 'self-end' : 'self-start')}
                 />
             ))}
         </div>
     );
 }
 
-export function ChatWindow({ phoneNumber }: ChatWindowProps) {
+export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
     const [messages, setMessages] = useState<Message[]>([]);
     const [loadingMsgs, setLoadingMsgs] = useState(true);
     const [newMessage, setNewMessage] = useState('');
@@ -335,42 +337,52 @@ export function ChatWindow({ phoneNumber }: ChatWindowProps) {
     const windowExpired = isWindowExpired(lastInboundAt);
 
     return (
-        <div className="flex flex-col h-full bg-[#efeae2]">
-            <div className="p-3 border-b flex justify-between items-center bg-[#f0f2f5] shadow-sm flex-shrink-0">
-                <div className="flex items-center gap-3">
-                    <div className="h-10 w-10 rounded-full bg-[#dfe5e7] flex items-center justify-center">
+        <div className="flex flex-col h-full bg-[var(--wa-paper)]">
+            <div className="p-3 border-b flex justify-between items-center gap-2 bg-[var(--wa-panel)] shadow-sm flex-shrink-0">
+                <div className="flex items-center gap-2 min-w-0">
+                    {onBack && (
+                        <button
+                            type="button"
+                            onClick={onBack}
+                            aria-label="Kembali ke daftar chat"
+                            className="md:hidden -ml-1 shrink-0 rounded-full p-1.5 text-[var(--wa-header-icon)] hover:bg-black/5 dark:hover:bg-white/10"
+                        >
+                            <ChevronLeft className="h-5 w-5" />
+                        </button>
+                    )}
+                    <div className="h-10 w-10 rounded-full bg-[var(--wa-avatar)] flex items-center justify-center shrink-0">
                         {contactType === 'vendor' ? (
                             <Store className="w-5 h-5 text-orange-500" />
                         ) : (
-                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6 text-[#8696a0]">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6 text-[var(--wa-icon)]">
                                 <path fillRule="evenodd" d="M7.5 6a4.5 4.5 0 119 0 4.5 4.5 0 01-9 0zM3.751 20.105a8.25 8.25 0 0116.498 0 .75.75 0 01-.437.695A18.683 18.683 0 0112 22.5c-2.786 0-5.433-.608-7.812-1.7a.75.75 0 01-.437-.695z" clipRule="evenodd" />
                             </svg>
                         )}
                     </div>
-                    <div>
-                        <h2 className="font-semibold text-sm text-[#111b21] flex items-center gap-2">
-                            {contactName || phoneNumber}
+                    <div className="min-w-0">
+                        <h2 className="font-semibold text-sm text-[var(--wa-text)] flex items-center gap-2 min-w-0">
+                            <span className="truncate">{contactName || phoneNumber}</span>
                             <ContactTypeBadge type={contactType} />
                         </h2>
-                        <p className="text-xs text-[#667781]">{formatLastActive(lastMessageAt) || phoneNumber}</p>
+                        <p className="text-xs text-[var(--wa-text-muted)] truncate">{formatLastActive(lastMessageAt) || phoneNumber}</p>
                     </div>
                 </div>
-                <div className="flex gap-4 text-[#54656f]">
-                    <MoreVertical className="h-5 w-5 cursor-pointer hover:text-[#111b21]" />
+                <div className="flex gap-4 text-[var(--wa-header-icon)] shrink-0">
+                    <MoreVertical className="h-5 w-5 cursor-pointer hover:text-[var(--wa-text)]" />
                 </div>
             </div>
 
             {/* CRM context + AI/Manual takeover toggle */}
-            <div className="px-3 py-1.5 bg-[#f7f8fa] border-b flex items-center justify-between gap-3">
-                <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-0.5 text-[12px] text-[#667781]">
+            <div className="px-3 py-1.5 bg-[var(--wa-crm)] border-b flex items-center justify-between gap-3">
+                <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-0.5 text-[12px] text-[var(--wa-text-muted)]">
                     {contactType === 'vendor' ? (
                         crm.vendor_category || crm.vendor_offering ? (
                             <>
                                 {crm.vendor_category && (
-                                    <span className="capitalize">Kategori: <span className="text-[#111b21]">{crm.vendor_category}</span></span>
+                                    <span className="capitalize">Kategori: <span className="text-[var(--wa-text)]">{crm.vendor_category}</span></span>
                                 )}
                                 {crm.vendor_offering && (
-                                    <span className="truncate">Tawaran: <span className="text-[#111b21]">{crm.vendor_offering}</span></span>
+                                    <span className="truncate">Tawaran: <span className="text-[var(--wa-text)]">{crm.vendor_offering}</span></span>
                                 )}
                             </>
                         ) : (
@@ -379,10 +391,10 @@ export function ChatWindow({ phoneNumber }: ChatWindowProps) {
                     ) : crm.lead_stage || crm.event_interest || crm.participant_count || crm.location_pref ? (
                         <>
                             {crm.lead_stage && (
-                                <span>Tahap: <span className="font-medium text-[#111b21]">{STAGE_LABELS[crm.lead_stage] ?? crm.lead_stage}</span></span>
+                                <span>Tahap: <span className="font-medium text-[var(--wa-text)]">{STAGE_LABELS[crm.lead_stage] ?? crm.lead_stage}</span></span>
                             )}
-                            {crm.event_interest && <span>Acara: <span className="text-[#111b21]">{crm.event_interest}</span></span>}
-                            {crm.participant_count ? <span><span className="text-[#111b21]">{crm.participant_count}</span> pax</span> : null}
+                            {crm.event_interest && <span>Acara: <span className="text-[var(--wa-text)]">{crm.event_interest}</span></span>}
+                            {crm.participant_count ? <span><span className="text-[var(--wa-text)]">{crm.participant_count}</span> pax</span> : null}
                             {crm.location_pref && <span className="truncate">{crm.location_pref}</span>}
                         </>
                     ) : (
@@ -406,7 +418,7 @@ export function ChatWindow({ phoneNumber }: ChatWindowProps) {
                     {Object.entries(groupedMessages).map(([date, msgs]) => (
                         <div key={date} className="flex flex-col space-y-4">
                             <div className="flex justify-center sticky top-2">
-                                <span className="bg-white/90 shadow-sm rounded-lg px-3 py-1 text-xs text-[#667781] font-medium">
+                                <span className="bg-[var(--wa-panel)] shadow-sm rounded-lg px-3 py-1 text-xs text-[var(--wa-text-muted)] font-medium">
                                     {new Date(date).toLocaleDateString([], { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
                                 </span>
                             </div>
@@ -414,7 +426,7 @@ export function ChatWindow({ phoneNumber }: ChatWindowProps) {
                                 if (msg.role === 'system') {
                                     return (
                                         <div key={msg.id} className="flex justify-center my-2">
-                                            <span className="bg-[#ffeecd] text-yellow-800 text-xs px-3 py-1 rounded-lg text-center shadow-sm max-w-[80%]">
+                                            <span className="bg-[#ffeecd] text-yellow-800 dark:bg-yellow-500/15 dark:text-yellow-200 text-xs px-3 py-1 rounded-lg text-center shadow-sm max-w-[80%]">
                                                 {msg.content}
                                             </span>
                                         </div>
@@ -429,21 +441,21 @@ export function ChatWindow({ phoneNumber }: ChatWindowProps) {
                                         className={cn(
                                             "max-w-[80%] rounded-lg p-2 px-3 text-sm shadow-sm relative",
                                             msg.role === 'user'
-                                                ? "bg-white self-start text-black rounded-tl-none"
+                                                ? "bg-[var(--wa-bubble-in)] self-start text-[var(--wa-text)] rounded-tl-none"
                                                 : failed
-                                                    ? "bg-red-50 border border-red-300 self-end text-black rounded-tr-none"
-                                                    : "bg-[#d9fdd3] self-end text-black rounded-tr-none"
+                                                    ? "bg-red-50 border border-red-300 self-end text-black rounded-tr-none dark:bg-red-950/40 dark:border-red-900 dark:text-red-50"
+                                                    : "bg-[var(--wa-bubble-out)] self-end text-[var(--wa-text)] rounded-tr-none"
                                         )}
                                     >
                                         <p className="leading-relaxed whitespace-pre-wrap">{msg.content}</p>
-                                        <div className="flex items-center justify-end gap-1 mt-1 text-[10px] text-zinc-500">
+                                        <div className="flex items-center justify-end gap-1 mt-1 text-[10px] text-[var(--wa-text-muted)]">
                                             <span>
                                                 {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                                             </span>
                                             {isOutbound && <MessageStatusIcon status={msg.status ?? null} />}
                                         </div>
                                         {failed && (
-                                            <div className="mt-1 text-[11px] text-red-700 border-t border-red-200 pt-1">
+                                            <div className="mt-1 text-[11px] text-red-700 border-t border-red-200 pt-1 dark:text-red-300 dark:border-red-900/50">
                                                 <div className="flex items-start gap-1">
                                                     <AlertCircle className="h-3 w-3 mt-0.5 flex-shrink-0" />
                                                     <div>
@@ -472,9 +484,9 @@ export function ChatWindow({ phoneNumber }: ChatWindowProps) {
                 </div>
             </div>
 
-            <div className="p-3 bg-[#f0f2f5] flex flex-col gap-2 flex-shrink-0">
+            <div className="p-3 bg-[var(--wa-panel)] flex flex-col gap-2 flex-shrink-0">
                 {windowExpired && (
-                    <div className="flex items-center gap-2 rounded-md border border-amber-300 bg-amber-100 px-2.5 py-1.5 text-[12px] text-amber-800">
+                    <div className="flex items-center gap-2 rounded-md border border-amber-300 bg-amber-100 px-2.5 py-1.5 text-[12px] text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/15 dark:text-amber-200">
                         <Clock className="h-3.5 w-3.5 shrink-0" />
                         <span>
                             Lebih dari 24 jam sejak pesan terakhir customer — balasan biasa akan ditolak Meta. Gunakan <strong>template message</strong>.
@@ -492,8 +504,8 @@ export function ChatWindow({ phoneNumber }: ChatWindowProps) {
                         className={cn(
                             "h-12 w-12 rounded-lg shrink-0",
                             windowExpired
-                                ? "bg-amber-100 text-amber-800 hover:bg-amber-200 ring-1 ring-amber-300"
-                                : "text-[#54656f] hover:text-[#111b21] hover:bg-[#e5e7eb]"
+                                ? "bg-amber-100 text-amber-800 hover:bg-amber-200 ring-1 ring-amber-300 dark:bg-amber-500/15 dark:text-amber-200 dark:ring-amber-500/30 dark:hover:bg-amber-500/25"
+                                : "text-[var(--wa-header-icon)] hover:text-[var(--wa-text)] hover:bg-[var(--wa-hover)]"
                         )}
                     >
                         <FileText className="h-5 w-5" />
@@ -507,7 +519,7 @@ export function ChatWindow({ phoneNumber }: ChatWindowProps) {
                             onChange={(e) => setNewMessage(e.target.value)}
                             placeholder={windowExpired ? 'Window 24 jam habis — kirim template message' : 'Type a message'}
                             disabled={sending || windowExpired}
-                            className="bg-white border-none focus-visible:ring-0 rounded-lg py-6 text-black disabled:opacity-60"
+                            className="bg-[var(--wa-search)] border-none focus-visible:ring-0 rounded-lg py-6 text-[var(--wa-text)] disabled:opacity-60"
                         />
                         <Button
                             type="submit"

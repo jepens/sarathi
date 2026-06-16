@@ -179,7 +179,7 @@ export function ProposalHistoryDialog({
                                                         <p className="text-xs font-medium text-muted-foreground">
                                                             Kebutuhan klien (FNA)
                                                         </p>
-                                                        <dl className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-xs">
+                                                        <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-3 gap-y-1.5 text-xs">
                                                             <FnaRow label="Jenis acara" value={fna.event_interest} />
                                                             <FnaRow
                                                                 label="Peserta"
