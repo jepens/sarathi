@@ -79,10 +79,10 @@ function VendorsDirectory() {
     }, {});
 
     return (
-        <div className="space-y-8">
-            <div className="flex items-center justify-between">
+        <div className="space-y-6 md:space-y-8">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                 <div className="space-y-1">
-                    <h1 className="text-3xl font-bold tracking-tight">Vendor Directory</h1>
+                    <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Vendor Directory</h1>
                     <p className="text-muted-foreground">
                         Direktori kontak vendor (catering, venue, transport, dll.) untuk koordinasi event.
                     </p>
@@ -134,8 +134,8 @@ function VendorsDirectory() {
             </div>
 
             <div className="space-y-4">
-                <div className="flex flex-wrap items-center gap-3">
-                    <div className="relative flex-1 min-w-[240px] max-w-md">
+                <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
+                    <div className="relative w-full sm:flex-1 sm:min-w-[240px] sm:max-w-md">
                         <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
                         <Input
                             placeholder="Cari nama, PIC, telepon, email..."
@@ -148,7 +148,7 @@ function VendorsDirectory() {
                         value={categoryFilter}
                         onValueChange={(value) => setCategoryFilter(value as CategoryFilter)}
                     >
-                        <SelectTrigger className="w-[200px] bg-black/20 border-white/10">
+                        <SelectTrigger className="w-full sm:w-[200px] bg-black/20 border-white/10">
                             <SelectValue placeholder="Semua kategori" />
                         </SelectTrigger>
                         <SelectContent>

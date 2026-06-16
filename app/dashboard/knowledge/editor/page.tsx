@@ -132,7 +132,7 @@ export default function KnowledgeEditorPage() {
     };
 
     return (
-        <div className="space-y-6">
+        <div className="space-y-4 sm:space-y-6">
             <div className="flex items-center justify-between">
                 <div className="space-y-1">
                     <Link
@@ -141,21 +141,21 @@ export default function KnowledgeEditorPage() {
                     >
                         <ArrowLeft className="h-4 w-4" /> Knowledge Base
                     </Link>
-                    <h1 className="text-3xl font-bold tracking-tight">Tulis / Edit Konten</h1>
+                    <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Tulis / Edit Konten</h1>
                     <p className="text-muted-foreground">
                         Tulis konten langsung di sini — tanpa upload file. Saat disimpan, otomatis dipecah & di-embed agar bisa dipakai AI.
                     </p>
                 </div>
             </div>
 
-            <div className="grid gap-6 lg:grid-cols-[1fr_300px]">
+            <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_300px]">
                 {/* Editor */}
                 <div className="space-y-4">
-                    <div className="flex flex-wrap items-end gap-3">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
                         <div className="space-y-1">
                             <Label className="text-xs text-muted-foreground">Muat template</Label>
                             <Select onValueChange={loadTemplate}>
-                                <SelectTrigger className="w-[260px]">
+                                <SelectTrigger className="w-full sm:w-[260px]">
                                     <SelectValue placeholder="Pilih template untuk diisi" />
                                 </SelectTrigger>
                                 <SelectContent>
@@ -167,7 +167,7 @@ export default function KnowledgeEditorPage() {
                                 </SelectContent>
                             </Select>
                         </div>
-                        <Button variant="outline" onClick={handleNew} type="button">
+                        <Button variant="outline" onClick={handleNew} type="button" className="self-start sm:self-auto">
                             <Plus className="mr-2 h-4 w-4" /> Kosong
                         </Button>
                     </div>
@@ -192,7 +192,7 @@ export default function KnowledgeEditorPage() {
                             value={content}
                             onChange={(e) => setContent(e.target.value)}
                             placeholder="Tulis konten di sini, atau muat template di atas lalu isi bagian [ISI: ...]"
-                            className="min-h-[460px] font-mono text-sm leading-relaxed"
+                            className="min-h-[300px] sm:min-h-[380px] md:min-h-[460px] font-mono text-sm leading-relaxed"
                             disabled={loadingDoc}
                         />
                         <p className="text-xs text-muted-foreground">
@@ -237,7 +237,7 @@ export default function KnowledgeEditorPage() {
                                     <button
                                         type="button"
                                         onClick={() => setToDelete(s.title)}
-                                        className="text-muted-foreground hover:text-destructive"
+                                        className="-m-1 p-1 text-muted-foreground hover:text-destructive"
                                         aria-label={`Hapus ${s.title}`}
                                     >
                                         <Trash2 className="h-3.5 w-3.5" />

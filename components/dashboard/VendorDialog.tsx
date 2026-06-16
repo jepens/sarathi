@@ -156,7 +156,7 @@ export function VendorDialog({
                     <DialogTitle>{vendorToEdit ? 'Edit Vendor' : 'Tambah Vendor'}</DialogTitle>
                 </DialogHeader>
                 <form onSubmit={handleSubmit} className="space-y-4">
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div className="space-y-2">
                             <Label htmlFor="name">Nama Vendor *</Label>
                             <Input
@@ -201,7 +201,7 @@ export function VendorDialog({
                         />
                     </div>
 
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div className="space-y-2">
                             <Label htmlFor="phone">Telepon / WhatsApp</Label>
                             <Input

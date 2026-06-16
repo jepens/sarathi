@@ -91,13 +91,13 @@ export function ProductList({ products, onProductDeleted, onEditProduct }: Produ
                         key={product.id}
                         className="group flex items-center justify-between rounded-lg border border-white/10 bg-black/20 p-4 transition-colors hover:bg-black/30"
                     >
-                        <div className="flex items-center gap-3">
+                        <div className="flex items-center gap-3 min-w-0 flex-1">
                             <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/10">
                                 <Package className="h-5 w-5 text-primary" />
                             </div>
-                            <div>
-                                <div className="flex items-center gap-2 mb-1">
-                                    <p className="font-medium text-sm">{product.name}</p>
+                            <div className="min-w-0">
+                                <div className="flex items-center gap-2 mb-1 min-w-0">
+                                    <p className="font-medium text-sm truncate">{product.name}</p>
                                     <Badge
                                         variant={product.type === 'product' ? 'default' : 'secondary'}
                                         className="h-4 px-1.5 text-[10px]"
@@ -121,10 +121,10 @@ export function ProductList({ products, onProductDeleted, onEditProduct }: Produ
                                 </div>
                             </div>
                         </div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 shrink-0">
                             <Button
                                 variant="ghost"
-                                size="sm"
+                                size="icon"
                                 onClick={() => onEditProduct(product)}
                                 className="text-muted-foreground hover:text-primary"
                             >
@@ -132,7 +132,7 @@ export function ProductList({ products, onProductDeleted, onEditProduct }: Produ
                             </Button>
                             <Button
                                 variant="ghost"
-                                size="sm"
+                                size="icon"
                                 onClick={() => handleDeleteClick(product)}
                                 disabled={deletingId === product.id}
                                 className="text-muted-foreground hover:text-destructive"
