@@ -74,7 +74,7 @@ export function ProductList({ products, onProductDeleted, onEditProduct }: Produ
 
     if (products.length === 0) {
         return (
-            <div className="rounded-lg border border-white/10 bg-black/20 p-8 text-center">
+            <div className="rounded-lg border bg-muted/30 p-8 text-center">
                 <Package className="mx-auto h-12 w-12 text-muted-foreground/50" />
                 <p className="mt-4 text-sm text-muted-foreground">
                     No items found. Add your first product or service to get started.
@@ -89,7 +89,7 @@ export function ProductList({ products, onProductDeleted, onEditProduct }: Produ
                 {products.map((product) => (
                     <div
                         key={product.id}
-                        className="group flex items-center justify-between rounded-lg border border-white/10 bg-black/20 p-4 transition-colors hover:bg-black/30"
+                        className="group flex items-center justify-between rounded-lg border bg-muted/30 p-4 transition-colors hover:bg-muted/60"
                     >
                         <div className="flex items-center gap-3 min-w-0 flex-1">
                             <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/10">

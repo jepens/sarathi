@@ -103,7 +103,7 @@ export default function ProductsPage() {
                         placeholder="Cari paket..."
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
-                        className="pl-8 max-w-sm bg-black/20 border-white/10"
+                        className="pl-8 max-w-sm"
                     />
                 </div>
 

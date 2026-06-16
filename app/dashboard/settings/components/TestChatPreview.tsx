@@ -120,7 +120,7 @@ export function TestChatPreview() {
                 </div>
 
                 {/* Chat Area */}
-                <ScrollArea className="h-[400px] border rounded-lg bg-black/20 p-4">
+                <ScrollArea className="h-[300px] sm:h-[400px] border rounded-lg bg-muted/30 p-4">
                     {messages.length === 0 ? (
                         <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
                             <MessageSquare className="h-12 w-12 mb-2 opacity-20" />
@@ -137,12 +137,12 @@ export function TestChatPreview() {
                                     <div
                                         className={`max-w-[80%] rounded-lg p-3 ${msg.role === 'user'
                                             ? 'bg-blue-600 text-white'
-                                            : 'bg-white/5 border border-white/10'
+                                            : 'bg-muted border'
                                             }`}
                                     >
                                         <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
                                         {msg.sources && msg.sources.length > 0 && (
-                                            <div className="mt-2 pt-2 border-t border-white/10">
+                                            <div className="mt-2 pt-2 border-t">
                                                 <p className="text-xs text-muted-foreground mb-1">Sources:</p>
                                                 <div className="flex flex-wrap gap-1">
                                                     {msg.sources.map((source, i) => (
@@ -158,7 +158,7 @@ export function TestChatPreview() {
                             ))}
                             {loading && (
                                 <div className="flex justify-start">
-                                    <div className="bg-white/5 border border-white/10 rounded-lg p-3">
+                                    <div className="bg-muted/50 border rounded-lg p-3">
                                         <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
                                     </div>
                                 </div>

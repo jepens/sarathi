@@ -5,6 +5,7 @@
 import 'temporal-polyfill/global';
 
 import { useEffect, useState, useMemo } from 'react';
+import { useTheme } from 'next-themes';
 import {
     ScheduleXCalendar,
     useNextCalendarApp,
@@ -31,9 +32,74 @@ interface ApiEvent {
     location?: string;
 }
 
+// Convert API strings to Temporal instances. Extracted to module scope so its
+// inferred return type can also type the CalendarView prop.
+function toCalendarEvents(apiEvents: ApiEvent[]) {
+    return apiEvents
+        .map((e) => {
+            try {
+                const start =
+                    e.kind === 'event'
+                        ? Temporal.PlainDate.from(e.start)
+                        : Temporal.ZonedDateTime.from(e.start);
+                const end =
+                    e.kind === 'event'
+                        ? Temporal.PlainDate.from(e.end)
+                        : Temporal.ZonedDateTime.from(e.end);
+                return {
+                    id: e.id,
+                    title: e.title,
+                    start,
+                    end,
+                    calendarId: e.calendarId,
+                    description: e.description,
+                    location: e.location,
+                };
+            } catch (err) {
+                // A single malformed row shouldn't blow up the whole
+                // calendar — log and drop it.
+                console.error(`Skipping unparseable event ${e.id}`, err, e);
+                return null;
+            }
+        })
+        .filter((v): v is NonNullable<typeof v> => v !== null);
+}
+
+type CalendarEvent = ReturnType<typeof toCalendarEvents>[number];
+
+const CALENDARS = {
+    events: {
+        colorName: 'events',
+        lightColors: {
+            main: '#10b981',
+            container: '#d1fae5',
+            onContainer: '#064e3b',
+        },
+        darkColors: {
+            main: '#34d399',
+            container: '#064e3b',
+            onContainer: '#d1fae5',
+        },
+    },
+    meetings: {
+        colorName: 'meetings',
+        lightColors: {
+            main: '#8b5cf6',
+            container: '#ede9fe',
+            onContainer: '#3b0764',
+        },
+        darkColors: {
+            main: '#a78bfa',
+            container: '#3b0764',
+            onContainer: '#ede9fe',
+        },
+    },
+};
+
 export function EventsCalendar() {
     const [apiEvents, setApiEvents] = useState<ApiEvent[]>([]);
     const [loading, setLoading] = useState(true);
+    const { resolvedTheme } = useTheme();
 
     useEffect(() => {
         (async () => {
@@ -51,82 +117,7 @@ export function EventsCalendar() {
         })();
     }, []);
 
-    // Convert API strings to Temporal instances. Done in a memo so the
-    // mapping only runs when the source data changes, not on every render.
-    const calendarEvents = useMemo(() => {
-        return apiEvents
-            .map((e) => {
-                try {
-                    const start =
-                        e.kind === 'event'
-                            ? Temporal.PlainDate.from(e.start)
-                            : Temporal.ZonedDateTime.from(e.start);
-                    const end =
-                        e.kind === 'event'
-                            ? Temporal.PlainDate.from(e.end)
-                            : Temporal.ZonedDateTime.from(e.end);
-                    return {
-                        id: e.id,
-                        title: e.title,
-                        start,
-                        end,
-                        calendarId: e.calendarId,
-                        description: e.description,
-                        location: e.location,
-                    };
-                } catch (err) {
-                    // A single malformed row shouldn't blow up the whole
-                    // calendar — log and drop it.
-                    console.error(`Skipping unparseable event ${e.id}`, err, e);
-                    return null;
-                }
-            })
-            .filter((v): v is NonNullable<typeof v> => v !== null);
-    }, [apiEvents]);
-
-    // The view instances must be stable across renders within a single mount.
-    // createViewMonthGrid() generates a fresh View — call once and reuse its
-    // .name for the defaultView field, rather than constructing twice.
-    const monthGrid = useMemo(() => createViewMonthGrid(), []);
-    const views = useMemo(
-        () => [monthGrid, createViewWeek(), createViewMonthAgenda()] as const,
-        [monthGrid]
-    );
-
-    const calendar = useNextCalendarApp({
-        views: [...views],
-        defaultView: monthGrid.name,
-        events: calendarEvents,
-        calendars: {
-            events: {
-                colorName: 'events',
-                lightColors: {
-                    main: '#10b981',
-                    container: '#d1fae5',
-                    onContainer: '#064e3b',
-                },
-                darkColors: {
-                    main: '#34d399',
-                    container: '#064e3b',
-                    onContainer: '#d1fae5',
-                },
-            },
-            meetings: {
-                colorName: 'meetings',
-                lightColors: {
-                    main: '#8b5cf6',
-                    container: '#ede9fe',
-                    onContainer: '#3b0764',
-                },
-                darkColors: {
-                    main: '#a78bfa',
-                    container: '#3b0764',
-                    onContainer: '#ede9fe',
-                },
-            },
-        },
-        isDark: true,
-    });
+    const calendarEvents = useMemo(() => toCalendarEvents(apiEvents), [apiEvents]);
 
     if (loading) {
         return (
@@ -135,6 +126,11 @@ export function EventsCalendar() {
             </div>
         );
     }
+
+    // Default to dark while the theme is still resolving (matches the app default).
+    // Schedule X only reads isDark at init, so CalendarView is keyed by theme to
+    // force a remount when the user switches light/dark.
+    const theme = resolvedTheme === 'light' ? 'light' : 'dark';
 
     return (
         <div className="rounded-lg border bg-card overflow-hidden">
@@ -146,10 +142,29 @@ export function EventsCalendar() {
                 </span>
             </div>
             <div className="h-[70dvh] min-h-[440px] md:h-[700px] sx-react-calendar-wrapper">
-                <ScheduleXCalendar calendarApp={calendar} />
+                <CalendarView key={theme} events={calendarEvents} isDark={theme === 'dark'} />
             </div>
         </div>
     );
+}
+
+function CalendarView({ events, isDark }: { events: CalendarEvent[]; isDark: boolean }) {
+    // The view instances must be stable across renders within a single mount.
+    const monthGrid = useMemo(() => createViewMonthGrid(), []);
+    const views = useMemo(
+        () => [monthGrid, createViewWeek(), createViewMonthAgenda()] as const,
+        [monthGrid]
+    );
+
+    const calendar = useNextCalendarApp({
+        views: [...views],
+        defaultView: monthGrid.name,
+        events,
+        calendars: CALENDARS,
+        isDark,
+    });
+
+    return <ScheduleXCalendar calendarApp={calendar} />;
 }
 
 function Legend({ color, label }: { color: string; label: string }) {

@@ -119,7 +119,7 @@ function VendorsDirectory() {
                                 {VENDOR_CATEGORY_OPTIONS.map((opt) => (
                                     <span
                                         key={opt.value}
-                                        className="rounded-md border border-white/10 bg-black/20 px-2 py-1"
+                                        className="rounded-md border bg-muted/50 px-2 py-1"
                                     >
                                         {opt.label}:{' '}
                                         <strong className="text-foreground">
@@ -141,14 +141,14 @@ function VendorsDirectory() {
                             placeholder="Cari nama, PIC, telepon, email..."
                             value={searchQuery}
                             onChange={(e) => setSearchQuery(e.target.value)}
-                            className="pl-8 bg-black/20 border-white/10"
+                            className="pl-8"
                         />
                     </div>
                     <Select
                         value={categoryFilter}
                         onValueChange={(value) => setCategoryFilter(value as CategoryFilter)}
                     >
-                        <SelectTrigger className="w-full sm:w-[200px] bg-black/20 border-white/10">
+                        <SelectTrigger className="w-full sm:w-[200px]">
                             <SelectValue placeholder="Semua kategori" />
                         </SelectTrigger>
                         <SelectContent>

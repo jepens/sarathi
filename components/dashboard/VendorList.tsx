@@ -97,7 +97,7 @@ export function VendorList({ vendors, onRefresh, onEditVendor }: VendorListProps
 
     if (vendors.length === 0) {
         return (
-            <div className="rounded-lg border border-white/10 bg-black/20 p-8 text-center">
+            <div className="rounded-lg border bg-muted/30 p-8 text-center">
                 <Building2 className="mx-auto h-12 w-12 text-muted-foreground/50" />
                 <p className="mt-4 text-sm text-muted-foreground">
                     Belum ada vendor. Tambah vendor pertama untuk membangun direktori kontak Anda.
@@ -112,7 +112,7 @@ export function VendorList({ vendors, onRefresh, onEditVendor }: VendorListProps
                 {vendors.map((vendor) => (
                     <div
                         key={vendor.id}
-                        className="group rounded-lg border border-white/10 bg-black/20 p-4 transition-colors hover:bg-black/30"
+                        className="group rounded-lg border bg-muted/30 p-4 transition-colors hover:bg-muted/60"
                     >
                         <div className="flex items-start justify-between gap-2">
                             <div className="min-w-0 flex-1 space-y-2">

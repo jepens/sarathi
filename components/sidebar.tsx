@@ -21,6 +21,7 @@ import {
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
 import { createClient } from "@/lib/supabase/client"
+import { ModeToggle } from "@/components/mode-toggle"
 
 type NavItem = {
     href: string
@@ -122,7 +123,8 @@ export function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
                     </nav>
                 </div>
             </div>
-            <div className="px-3 py-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+            <div className="space-y-1 px-3 py-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+                <ModeToggle />
                 <Button
                     variant="ghost"
                     className="w-full justify-start gap-2 text-red-500 hover:bg-red-500/10 hover:text-red-600 dark:hover:bg-red-950/40"

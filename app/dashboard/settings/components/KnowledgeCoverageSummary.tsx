@@ -98,14 +98,14 @@ export function KnowledgeCoverageSummary() {
             <CardContent className="space-y-4">
                 {/* Stats Grid */}
                 <div className="grid grid-cols-2 gap-4">
-                    <div className="bg-white/5 border border-white/10 rounded-lg p-4">
+                    <div className="bg-muted/50 border rounded-lg p-4">
                         <div className="flex items-center gap-2 mb-2">
                             <FileText className="h-4 w-4 text-blue-400" />
                             <span className="text-sm text-muted-foreground">Documents</span>
                         </div>
                         <p className="text-2xl font-bold">{summary.totalDocuments}</p>
                     </div>
-                    <div className="bg-white/5 border border-white/10 rounded-lg p-4">
+                    <div className="bg-muted/50 border rounded-lg p-4">
                         <div className="flex items-center gap-2 mb-2">
                             <Package className="h-4 w-4 text-green-400" />
                             <span className="text-sm text-muted-foreground">Products</span>

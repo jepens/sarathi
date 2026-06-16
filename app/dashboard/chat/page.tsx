@@ -139,7 +139,7 @@ export default function ChatPage() {
     return (
         <div className="flex h-[calc(100dvh-5.5rem)] md:h-[calc(100dvh-4rem)] flex-col">
             {/* Header */}
-            <div className="border-b border-white/10 bg-black/40 backdrop-blur-sm">
+            <div className="border-b bg-background/80 backdrop-blur-sm">
                 <div className="px-4 py-3 md:px-6 md:py-4">
                     <h1 className="text-lg md:text-2xl font-semibold tracking-tight">Chat dengan AI</h1>
                     <p className="text-sm text-muted-foreground">
@@ -153,7 +153,7 @@ export default function ChatPage() {
                 {messages.length === 0 ? (
                     <div className="flex h-full items-center justify-center">
                         <div className="text-center">
-                            <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full border border-white/10 bg-white/5">
+                            <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full border bg-muted">
                                 <BookOpen className="h-6 w-6 text-muted-foreground" />
                             </div>
                             <h3 className="mb-2 text-lg font-medium">Mulai Percakapan</h3>
@@ -173,12 +173,12 @@ export default function ChatPage() {
                                 <div
                                     className={`max-w-[80%] rounded-lg px-4 py-3 ${message.role === 'user'
                                         ? 'bg-primary text-primary-foreground'
-                                        : 'border border-white/10 bg-white/5'
+                                        : 'border bg-muted'
                                         }`}
                                 >
                                     <p className="whitespace-pre-wrap text-sm">{message.content}</p>
                                     {message.sources && message.sources.length > 0 && (
-                                        <div className="mt-2 border-t border-white/10 pt-2">
+                                        <div className="mt-2 border-t pt-2">
                                             <p className="text-xs text-muted-foreground">
                                                 Sumber: {message.sources.join(', ')}
                                             </p>
@@ -189,7 +189,7 @@ export default function ChatPage() {
                         ))}
                         {isLoading && (
                             <div className="flex justify-start">
-                                <div className="max-w-[80%] rounded-lg border border-white/10 bg-white/5 px-4 py-3">
+                                <div className="max-w-[80%] rounded-lg border bg-muted px-4 py-3">
                                     <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
                                 </div>
                             </div>
@@ -200,7 +200,7 @@ export default function ChatPage() {
             </div>
 
             {/* Input */}
-            <div className="border-t border-white/10 bg-black/40 backdrop-blur-sm">
+            <div className="border-t bg-background/80 backdrop-blur-sm">
                 <form onSubmit={handleSubmit} className="px-4 py-3 md:px-6 md:py-4">
                     <div className="flex gap-2">
                         <Textarea

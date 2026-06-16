@@ -224,7 +224,7 @@ export default function KnowledgeEditorPage() {
                             sources.map((s) => (
                                 <div
                                     key={s.id}
-                                    className="group flex items-center justify-between gap-2 rounded-md border border-white/10 bg-black/20 p-2"
+                                    className="group flex items-center justify-between gap-2 rounded-md border bg-muted/30 p-2"
                                 >
                                     <button
                                         type="button"
