@@ -51,7 +51,11 @@ export function ChatList({ selectedPhone, onSelect }: ChatListProps) {
     const fetchChats = useCallback(async () => {
         const { data, error } = await supabase
             .from('whatsapp_chats')
+            // Only conversations that actually exist. Manually added / imported
+            // leads have last_message_at = null until they message us, so they
+            // stay out of the Inbox (they live in Pipeline / Contacts instead).
             .select('*')
+            .not('last_message_at', 'is', null)
             .order('last_message_at', { ascending: false });
 
         if (error) {

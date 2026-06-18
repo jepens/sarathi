@@ -13,6 +13,10 @@ import {
     Send,
     UserCheck,
     History,
+    Plus,
+    Upload,
+    Pencil,
+    Trash2,
 } from 'lucide-react';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
@@ -23,9 +27,39 @@ import {
     DropdownMenuTrigger,
     DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu';
+import {
+    Dialog,
+    DialogContent,
+    DialogHeader,
+    DialogTitle,
+    DialogDescription,
+    DialogFooter,
+} from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
+import { sourceLabel } from '@/lib/leads/schema';
+import { LeadDialog } from '@/components/dashboard/LeadDialog';
+import { ImportLeadsDialog } from '@/components/dashboard/ImportLeadsDialog';
 import { SendProposalDialog } from './SendProposalDialog';
 import { ProposalHistoryDialog } from './ProposalHistoryDialog';
+
+// Small chip on each lead card showing where the lead came from. A null source
+// is a legacy/native WhatsApp lead (see sourceLabel).
+function SourceBadge({ source }: { source: string | null }) {
+    const label = sourceLabel(source);
+    const isWa = !source || source === 'whatsapp';
+    return (
+        <span
+            className={cn(
+                'inline-flex shrink-0 items-center rounded-full border px-1.5 py-0.5 text-[10px] font-medium leading-none',
+                isWa
+                    ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
+                    : 'border-border bg-muted text-muted-foreground'
+            )}
+        >
+            {label}
+        </span>
+    );
+}
 
 // Pipeline stages — must match the CHECK constraint on whatsapp_chats.lead_stage
 // and the LEAD_STAGES export in lib/ai/tools.ts. Order in this array is the
@@ -54,6 +88,7 @@ interface Lead {
     budget_range: string | null;
     notes: string | null;
     source: string | null;
+    assigned_to: string | null;
     lead_stage: StageId | null;
     last_message: string | null;
     last_message_at: string | null;
@@ -66,6 +101,11 @@ export function PipelineBoard() {
     const [dragOverStage, setDragOverStage] = useState<StageId | null>(null);
     const [proposalDialogLead, setProposalDialogLead] = useState<Lead | null>(null);
     const [historyLead, setHistoryLead] = useState<Lead | null>(null);
+    const [addOpen, setAddOpen] = useState(false);
+    const [importOpen, setImportOpen] = useState(false);
+    const [editLead, setEditLead] = useState<Lead | null>(null);
+    const [deleteLead, setDeleteLead] = useState<Lead | null>(null);
+    const [deleting, setDeleting] = useState(false);
 
     const fetchLeads = useCallback(async () => {
         try {
@@ -166,6 +206,32 @@ export function PipelineBoard() {
         }
     };
 
+    const handleDeleteLead = async () => {
+        if (!deleteLead) return;
+        setDeleting(true);
+        try {
+            const res = await fetch(
+                `/api/leads/${encodeURIComponent(deleteLead.phone_number)}`,
+                { method: 'DELETE' }
+            );
+            // 404 = already gone (stale list / concurrent delete) — reconcile too.
+            if (res.ok || res.status === 404) {
+                setLeads((cur) =>
+                    cur.filter((l) => l.phone_number !== deleteLead.phone_number)
+                );
+                toast.success(res.ok ? 'Lead dihapus' : 'Lead sudah tidak ada');
+                setDeleteLead(null);
+            } else {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.error ?? `HTTP ${res.status}`);
+            }
+        } catch (err) {
+            toast.error(err instanceof Error ? err.message : 'Gagal menghapus lead');
+        } finally {
+            setDeleting(false);
+        }
+    };
+
     const handleDragStart = (e: DragEvent<HTMLDivElement>, phone: string) => {
         setDraggedPhone(phone);
         e.dataTransfer.effectAllowed = 'move';
@@ -192,10 +258,79 @@ export function PipelineBoard() {
         if (phone) moveLead(phone, stage);
     };
 
+    const toolbar = (
+        <div className="flex flex-shrink-0 items-center justify-end gap-2">
+            <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5"
+                onClick={() => setImportOpen(true)}
+            >
+                <Upload className="h-4 w-4" />
+                <span className="hidden sm:inline">Impor CSV</span>
+                <span className="sm:hidden">Impor</span>
+            </Button>
+            <Button size="sm" className="gap-1.5" onClick={() => setAddOpen(true)}>
+                <Plus className="h-4 w-4" />
+                Tambah Lead
+            </Button>
+        </div>
+    );
+
+    const leadDialogs = (
+        <>
+            <LeadDialog open={addOpen} onOpenChange={setAddOpen} onSuccess={fetchLeads} />
+            <LeadDialog
+                key={editLead?.phone_number ?? 'none'}
+                open={!!editLead}
+                onOpenChange={(o) => !o && setEditLead(null)}
+                onSuccess={fetchLeads}
+                leadToEdit={editLead}
+            />
+            <ImportLeadsDialog
+                open={importOpen}
+                onOpenChange={setImportOpen}
+                onSuccess={fetchLeads}
+            />
+            <Dialog open={!!deleteLead} onOpenChange={(o) => !o && setDeleteLead(null)}>
+                <DialogContent>
+                    <DialogHeader>
+                        <DialogTitle>Hapus lead?</DialogTitle>
+                        <DialogDescription>
+                            Lead{' '}
+                            <span className="font-medium text-foreground">
+                                {deleteLead?.contact_name || deleteLead?.phone_number}
+                            </span>{' '}
+                            akan dihapus permanen. Tindakan ini tidak bisa dibatalkan.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <DialogFooter>
+                        <Button
+                            variant="outline"
+                            onClick={() => setDeleteLead(null)}
+                            disabled={deleting}
+                        >
+                            Batal
+                        </Button>
+                        <Button
+                            variant="destructive"
+                            onClick={handleDeleteLead}
+                            disabled={deleting}
+                        >
+                            {deleting ? 'Menghapus…' : 'Hapus'}
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+        </>
+    );
+
     if (loading) {
         return (
-            <div className="h-full overflow-x-auto overscroll-x-contain pb-4 snap-x snap-mandatory [-webkit-overflow-scrolling:touch] md:snap-none">
-                <div className="flex gap-4 h-full min-w-max">
+            <div className="flex h-full flex-col gap-3">
+                {toolbar}
+                <div className="min-h-0 flex-1 overflow-x-auto overscroll-x-contain pb-4 snap-x snap-mandatory [-webkit-overflow-scrolling:touch] md:snap-none">
+                    <div className="flex gap-4 h-full min-w-max">
                     {Array.from({ length: 5 }).map((_, i) => (
                         <div key={i} className="w-[85vw] sm:w-72 flex-shrink-0 snap-start rounded-lg border bg-card flex flex-col">
                             <div className="px-3 py-2 border-b flex items-center justify-between">
@@ -211,6 +346,8 @@ export function PipelineBoard() {
                     ))}
                 </div>
             </div>
+            {leadDialogs}
+        </div>
         );
     }
 
@@ -219,8 +356,10 @@ export function PipelineBoard() {
     const unstaged = leads.filter((l) => !l.lead_stage);
 
     return (
-        <div className="h-full overflow-x-auto pb-4">
-            <div className="flex gap-4 h-full min-w-max">
+        <div className="flex h-full flex-col gap-3">
+            {toolbar}
+            <div className="min-h-0 flex-1 overflow-x-auto pb-4">
+                <div className="flex gap-4 h-full min-w-max">
                 {STAGES.map((stage) => {
                     const stageLeads = leadsByStage(stage.id);
                     const showUnstagedHere = stage.id === 'new' && unstaged.length > 0;
@@ -261,6 +400,8 @@ export function PipelineBoard() {
                                             onViewHistory={() => setHistoryLead(lead)}
                                             onHandoff={() => handoffToMJ(lead.phone_number)}
                                             onMoveStage={(stage) => moveLead(lead.phone_number, stage)}
+                                            onEdit={() => setEditLead(lead)}
+                                            onDelete={() => setDeleteLead(lead)}
                                         />
                                     ))
                                 )}
@@ -303,6 +444,8 @@ export function PipelineBoard() {
                     contactName={historyLead.contact_name}
                 />
             )}
+            </div>
+            {leadDialogs}
         </div>
     );
 }
@@ -316,6 +459,8 @@ function LeadCard({
     onViewHistory,
     onHandoff,
     onMoveStage,
+    onEdit,
+    onDelete,
 }: {
     lead: Lead;
     isDragging: boolean;
@@ -325,6 +470,8 @@ function LeadCard({
     onViewHistory: () => void;
     onHandoff: () => void;
     onMoveStage: (stage: StageId) => void;
+    onEdit: () => void;
+    onDelete: () => void;
 }) {
     const displayName = lead.contact_name || lead.phone_number;
 
@@ -341,6 +488,7 @@ function LeadCard({
             <div className="flex items-center gap-2 mb-2">
                 <User className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
                 <span className="font-medium truncate flex-1">{displayName}</span>
+                <SourceBadge source={lead.source} />
                 <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                         <Button
@@ -368,6 +516,10 @@ function LeadCard({
                             <History className="mr-2 h-3.5 w-3.5" />
                             Riwayat proposal
                         </DropdownMenuItem>
+                        <DropdownMenuItem onClick={onEdit}>
+                            <Pencil className="mr-2 h-3.5 w-3.5" />
+                            Edit detail
+                        </DropdownMenuItem>
                         <DropdownMenuItem onClick={onHandoff}>
                             <UserCheck className="mr-2 h-3.5 w-3.5" />
                             Handoff to MJ
@@ -382,6 +534,14 @@ function LeadCard({
                                 Move to {s.label}
                             </DropdownMenuItem>
                         ))}
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem
+                            onClick={onDelete}
+                            className="text-destructive focus:text-destructive"
+                        >
+                            <Trash2 className="mr-2 h-3.5 w-3.5" />
+                            Hapus lead
+                        </DropdownMenuItem>
                     </DropdownMenuContent>
                 </DropdownMenu>
             </div>

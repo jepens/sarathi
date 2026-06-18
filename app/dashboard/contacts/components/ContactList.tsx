@@ -37,8 +37,13 @@ import {
     UserCheck,
     Store,
     Package,
+    Plus,
+    Upload,
+    Pencil,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { LeadDialog } from '@/components/dashboard/LeadDialog';
+import { ImportLeadsDialog } from '@/components/dashboard/ImportLeadsDialog';
 import {
     Dialog,
     DialogContent,
@@ -122,6 +127,11 @@ export function ContactList() {
     const [search, setSearch] = useState('');
     const [typeFilter, setTypeFilter] = useState<'all' | 'lead' | 'vendor'>('all');
     const [loading, setLoading] = useState(true);
+    const [addOpen, setAddOpen] = useState(false);
+    const [importOpen, setImportOpen] = useState(false);
+    const [editContact, setEditContact] = useState<Contact | null>(null);
+    const [deleteContact, setDeleteContact] = useState<Contact | null>(null);
+    const [deleting, setDeleting] = useState(false);
 
     // Detail (CRM card) — keyed by phone so it stays in sync with realtime.
     const [detailPhone, setDetailPhone] = useState<string | null>(null);
@@ -187,7 +197,8 @@ export function ContactList() {
         const { data, error } = await supabase
             .from('whatsapp_chats')
             .select(CONTACT_COLUMNS)
-            .order('last_message_at', { ascending: false });
+            // nullsFirst:false so conversation-less manual leads sort to the bottom.
+            .order('last_message_at', { ascending: false, nullsFirst: false });
 
         if (error) {
             console.error('Error fetching contacts:', error);
@@ -301,6 +312,34 @@ export function ContactList() {
         } catch (error) {
             console.error('Error removing contact name:', error);
             toast.error('Failed to remove contact name');
+        }
+    };
+
+    // Permanently delete the whole contact row (not just the name). Blocked by
+    // the server (409) when the contact has chat history or a booking.
+    const handleDeleteContact = async () => {
+        if (!deleteContact) return;
+        setDeleting(true);
+        try {
+            const res = await fetch(
+                `/api/leads/${encodeURIComponent(deleteContact.phone_number)}`,
+                { method: 'DELETE' }
+            );
+            // 404 = already gone (stale list / concurrent delete) — reconcile too.
+            if (res.ok || res.status === 404) {
+                setContacts((prev) =>
+                    prev.filter((c) => c.phone_number !== deleteContact.phone_number)
+                );
+                setDeleteContact(null);
+                toast.success(res.ok ? 'Kontak dihapus permanen' : 'Kontak sudah tidak ada');
+            } else {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.error ?? `HTTP ${res.status}`);
+            }
+        } catch (e) {
+            toast.error(e instanceof Error ? e.message : 'Gagal menghapus kontak');
+        } finally {
+            setDeleting(false);
         }
     };
 
@@ -431,14 +470,36 @@ export function ContactList() {
                         <TabsTrigger value="vendor" className="flex-1 sm:flex-none">Vendor ({counts.vendor})</TabsTrigger>
                     </TabsList>
                 </Tabs>
-                <div className="relative w-full sm:w-64">
-                    <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
-                    <Input
-                        placeholder="Cari nama, nomor, acara…"
-                        className="pl-10"
-                        value={search}
-                        onChange={(e) => setSearch(e.target.value)}
-                    />
+                <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
+                    <div className="relative w-full sm:w-64">
+                        <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+                        <Input
+                            placeholder="Cari nama, nomor, acara…"
+                            className="pl-10"
+                            value={search}
+                            onChange={(e) => setSearch(e.target.value)}
+                        />
+                    </div>
+                    <div className="flex gap-2">
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            className="flex-1 gap-1.5 sm:flex-none"
+                            onClick={() => setImportOpen(true)}
+                        >
+                            <Upload className="h-4 w-4" />
+                            <span className="hidden sm:inline">Impor CSV</span>
+                            <span className="sm:hidden">Impor</span>
+                        </Button>
+                        <Button
+                            size="sm"
+                            className="flex-1 gap-1.5 sm:flex-none"
+                            onClick={() => setAddOpen(true)}
+                        >
+                            <Plus className="h-4 w-4" />
+                            Tambah Lead
+                        </Button>
+                    </div>
                 </div>
             </div>
 
@@ -662,13 +723,28 @@ export function ContactList() {
                             </div>
 
                             <DialogFooter className="gap-2 sm:gap-2">
-                                {vendorByPhone.has(detailContact.phone_number) && (
-                                    <Badge
-                                        variant="outline"
-                                        className="mr-auto self-center gap-1 border-emerald-200 bg-emerald-50 text-emerald-700"
+                                <div className="mr-auto flex flex-wrap items-center gap-2">
+                                    {vendorByPhone.has(detailContact.phone_number) && (
+                                        <Badge
+                                            variant="outline"
+                                            className="self-center gap-1 border-emerald-200 bg-emerald-50 text-emerald-700"
+                                        >
+                                            <Store className="h-3 w-3" /> Di direktori
+                                        </Badge>
+                                    )}
+                                    <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                                        onClick={() => { const c = detailContact; setDetailPhone(null); setDeleteContact(c); }}
                                     >
-                                        <Store className="h-3 w-3" /> Di direktori
-                                    </Badge>
+                                        <Trash2 className="mr-2 h-4 w-4" /> Hapus
+                                    </Button>
+                                </div>
+                                {detailContact.contact_type === 'lead' && (
+                                    <Button variant="outline" onClick={() => { const c = detailContact; setDetailPhone(null); setEditContact(c); }}>
+                                        <Pencil className="mr-2 h-4 w-4" /> Edit detail
+                                    </Button>
                                 )}
                                 <Button variant="outline" onClick={() => { const c = detailContact; setDetailPhone(null); openEditDialog(c); }}>
                                     <Edit2 className="mr-2 h-4 w-4" /> Edit Nama
@@ -803,6 +879,51 @@ export function ContactList() {
                     <DialogFooter>
                         <Button variant="outline" onClick={() => setIsDeleteOpen(false)}>Batal</Button>
                         <Button variant="destructive" onClick={handleDelete}>Hapus Nama</Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+
+            <LeadDialog open={addOpen} onOpenChange={setAddOpen} onSuccess={fetchContacts} />
+            <LeadDialog
+                key={editContact?.phone_number ?? 'none'}
+                open={!!editContact}
+                onOpenChange={(o) => !o && setEditContact(null)}
+                onSuccess={fetchContacts}
+                leadToEdit={editContact}
+            />
+            <ImportLeadsDialog
+                open={importOpen}
+                onOpenChange={setImportOpen}
+                onSuccess={fetchContacts}
+            />
+
+            <Dialog open={!!deleteContact} onOpenChange={(o) => !o && setDeleteContact(null)}>
+                <DialogContent>
+                    <DialogHeader>
+                        <DialogTitle>Hapus kontak permanen?</DialogTitle>
+                        <DialogDescription>
+                            <span className="font-medium text-foreground">
+                                {deleteContact?.contact_name || deleteContact?.phone_number}
+                            </span>{' '}
+                            akan dihapus permanen beserta data lead-nya. Kontak yang punya
+                            riwayat chat atau booking tidak bisa dihapus.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <DialogFooter>
+                        <Button
+                            variant="outline"
+                            onClick={() => setDeleteContact(null)}
+                            disabled={deleting}
+                        >
+                            Batal
+                        </Button>
+                        <Button
+                            variant="destructive"
+                            onClick={handleDeleteContact}
+                            disabled={deleting}
+                        >
+                            {deleting ? 'Menghapus…' : 'Hapus permanen'}
+                        </Button>
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
