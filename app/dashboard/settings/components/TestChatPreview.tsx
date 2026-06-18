@@ -135,7 +135,7 @@ export function TestChatPreview() {
                                     className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
                                 >
                                     <div
-                                        className={`max-w-[80%] rounded-lg p-3 ${msg.role === 'user'
+                                        className={`max-w-[90%] rounded-lg p-2.5 sm:max-w-[80%] sm:p-3 ${msg.role === 'user'
                                             ? 'bg-blue-600 text-white'
                                             : 'bg-muted border'
                                             }`}

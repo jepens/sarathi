@@ -39,9 +39,9 @@ export default async function SettingsPage() {
     const waIntegration = await getMyWhatsAppIntegration();
 
     return (
-        <div className="space-y-6">
+        <div className="space-y-4 sm:space-y-6">
             <div>
-                <h2 className="text-3xl font-bold tracking-tight">Settings</h2>
+                <h2 className="text-2xl font-bold tracking-tight sm:text-3xl">Settings</h2>
                 <p className="text-muted-foreground">Manage your application settings.</p>
             </div>
 

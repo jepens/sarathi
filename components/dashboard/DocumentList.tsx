@@ -70,12 +70,12 @@ export function DocumentList({ documents, onDocumentDeleted }: DocumentListProps
     };
 
     const getFileIcon = () => {
-        return <FileText className="h-5 w-5 text-muted-foreground" />;
+        return <FileText className="h-5 w-5 shrink-0 text-muted-foreground" />;
     };
 
     if (documents.length === 0) {
         return (
-            <div className="rounded-lg border bg-muted/30 p-8 text-center">
+            <div className="rounded-lg border bg-muted/30 p-4 text-center sm:p-8">
                 <FileText className="mx-auto h-12 w-12 text-muted-foreground/50" />
                 <p className="mt-4 text-sm text-muted-foreground">
                     No documents uploaded yet. Upload your first document to get started.
@@ -90,13 +90,13 @@ export function DocumentList({ documents, onDocumentDeleted }: DocumentListProps
                 {documents.map((doc) => (
                     <div
                         key={doc.id}
-                        className="group flex items-center justify-between rounded-lg border bg-muted/30 p-4 transition-colors hover:bg-muted/60"
+                        className="group flex items-center justify-between gap-2 rounded-lg border bg-muted/30 p-4 transition-colors hover:bg-muted/60"
                     >
-                        <div className="flex items-center gap-3">
+                        <div className="flex min-w-0 items-center gap-3">
                             {getFileIcon()}
-                            <div>
-                                <p className="font-medium text-sm">{doc.file_name}</p>
-                                <p className="text-xs text-muted-foreground">
+                            <div className="min-w-0">
+                                <p className="truncate font-medium text-sm">{doc.file_name}</p>
+                                <p className="truncate text-xs text-muted-foreground">
                                     {doc.chunk_count} chunk{doc.chunk_count > 1 ? 's' : ''} • {formatDate(doc.created_at)}
                                 </p>
                             </div>
@@ -106,7 +106,7 @@ export function DocumentList({ documents, onDocumentDeleted }: DocumentListProps
                             size="sm"
                             onClick={() => handleDeleteClick(doc)}
                             disabled={deletingId === doc.id}
-                            className="text-muted-foreground hover:text-destructive transition-colors"
+                            className="shrink-0 text-muted-foreground hover:text-destructive transition-colors"
                         >
                             {deletingId === doc.id ? (
                                 <Loader2 className="h-4 w-4 animate-spin" />

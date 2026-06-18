@@ -89,9 +89,9 @@ export default function DashboardPage() {
     }, []);
 
     return (
-        <div className="space-y-6">
+        <div className="space-y-3 sm:space-y-5 lg:space-y-6">
             <div>
-                <h2 className="text-3xl font-bold tracking-tight">Dashboard Overview</h2>
+                <h2 className="text-lg font-bold tracking-tight sm:text-2xl lg:text-3xl">Dashboard Overview</h2>
                 <p className="text-muted-foreground">
                     Selamat datang di Helat — AI untuk Event Organizer
                 </p>
@@ -101,7 +101,7 @@ export default function DashboardPage() {
             <OnboardingChecklist />
 
             {/* Top stats */}
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-4">
                 <KpiCard
                     title="Total Leads"
                     icon={<Users className="h-4 w-4 text-muted-foreground" />}
@@ -159,7 +159,7 @@ export default function DashboardPage() {
             </div>
 
             {/* Funnel + upcoming */}
-            <div className="grid gap-4 lg:grid-cols-2">
+            <div className="grid gap-3 sm:gap-4 lg:grid-cols-2">
                 <Card>
                     <CardHeader className="flex flex-row items-center justify-between">
                         <div>
@@ -301,7 +301,7 @@ function KpiCard({
                 {icon}
             </CardHeader>
             <CardContent>
-                <div className="text-2xl font-bold">{primary}</div>
+                <div className="text-base font-bold sm:text-xl lg:text-2xl">{primary}</div>
                 <div className="text-xs text-muted-foreground">{secondary}</div>
             </CardContent>
         </Card>

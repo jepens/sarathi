@@ -285,7 +285,7 @@ export function SystemMessageEditor() {
                         value={content}
                         onChange={(e) => setContent(e.target.value)}
                         placeholder="Enter system message..."
-                        className="min-h-[400px] font-mono text-sm"
+                        className="min-h-[200px] font-mono text-sm sm:min-h-[300px] md:min-h-[400px]"
                     />
                     <p className="text-xs text-muted-foreground">
                         This message defines how the AI will behave and respond to users.

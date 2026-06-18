@@ -56,16 +56,16 @@ export default function KnowledgePage() {
     const aiReadiness = stats.total > 0 ? 100 : 0;
 
     return (
-        <div className="space-y-8">
-            <div className="flex items-center justify-between">
+        <div className="space-y-4 sm:space-y-8">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                 <div className="space-y-1">
-                    <h1 className="text-3xl font-bold tracking-tight">Knowledge Base</h1>
+                    <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">Knowledge Base</h1>
                     <p className="text-muted-foreground">
                         Manage your business data and AI knowledge sources.
                     </p>
                 </div>
-                <Link href="/dashboard/knowledge/editor">
-                    <Button>
+                <Link href="/dashboard/knowledge/editor" className="w-full sm:w-auto">
+                    <Button className="w-full sm:w-auto">
                         <PenLine className="mr-2 h-4 w-4" />
                         Tulis / Edit Konten
                     </Button>
@@ -134,7 +134,7 @@ export default function KnowledgePage() {
                 </Card>
             </div>
 
-            <div className="grid gap-8 md:grid-cols-2">
+            <div className="grid gap-4 sm:gap-8 md:grid-cols-2">
                 <div className="space-y-4">
                     <h2 className="text-xl font-semibold">Upload New Data</h2>
                     <UploadZone onUploadComplete={handleUploadComplete} />

@@ -82,7 +82,7 @@ function ReadOnlyField({
                 id={id}
                 value={value}
                 readOnly
-                className="font-mono text-sm"
+                className="font-mono text-xs sm:text-sm"
             />
         </div>
     );
