@@ -11,28 +11,14 @@ import {
     CartesianGrid,
     Cell,
 } from 'recharts';
+import { FileText } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
 import { formatRupiah } from '@/lib/bookings/schema';
-
-interface ReportData {
-    period: { start: string; end: string };
-    kpis: {
-        revenue: number;
-        bookings: number;
-        avgBookingValue: number;
-        outstanding: number;
-        leads: number;
-        conversionRate: number | null;
-    };
-    revenueByMonth: { month: string; label: string; revenue: number }[];
-    revenueByEventType: { type: string; revenue: number }[];
-    leadsBySource: { label: string; count: number }[];
-    leadFunnel: Record<string, number>;
-}
+import { type ReportData } from '@/lib/reports/types';
 
 const STAGE_META: Record<string, { label: string; color: string }> = {
     unstaged: { label: 'Unstaged', color: 'bg-slate-400' },
@@ -143,6 +129,19 @@ export default function ReportsPage() {
                             {p.label}
                         </Button>
                     ))}
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        className="gap-1.5"
+                        onClick={() =>
+                            window.open(
+                                `/api/reports/pdf?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`,
+                                '_blank'
+                            )
+                        }
+                    >
+                        <FileText className="h-4 w-4" /> PDF
+                    </Button>
                 </div>
             </div>
 
