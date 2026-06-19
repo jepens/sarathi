@@ -16,12 +16,33 @@ import {
     DropdownMenu,
     DropdownMenuContent,
     DropdownMenuItem,
+    DropdownMenuLabel,
+    DropdownMenuSeparator,
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { MoreHorizontal } from 'lucide-react';
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
+} from '@/components/ui/dialog';
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from '@/components/ui/select';
+import { MoreHorizontal, Plus, Pencil, Trash2, Eye, CheckCircle2, Download } from 'lucide-react';
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
+import { BookingDialog } from '@/components/dashboard/BookingDialog';
+import { remainingBalance, formatRupiah, BOOKING_STATUS_OPTIONS } from '@/lib/bookings/schema';
+import { downloadCsv, csvDateStamp } from '@/lib/utils/csv';
+import { deleteBooking, setDpPaid, setSettled } from '../actions';
 
 interface OrderItem {
     name: string;
@@ -33,13 +54,21 @@ interface OrderItem {
 interface Order {
     id: string;
     customer_name: string;
-    customer_phone: string;
+    customer_phone: string | null;
     items: OrderItem[];
     total_amount: number;
     status: string;
-    delivery_info: string;
+    delivery_info: string | null;
     order_type: 'product' | 'service';
     created_at: string;
+    event_type: string | null;
+    event_date: string | null;
+    venue: string | null;
+    headcount: number | null;
+    dp_amount: number | null;
+    dp_paid_at: string | null;
+    pelunasan_amount: number | null;
+    pelunasan_paid_at: string | null;
 }
 
 const STATUSES = ['pending', 'paid', 'shipped', 'completed', 'cancelled'] as const;
@@ -47,6 +76,7 @@ const STATUSES = ['pending', 'paid', 'shipped', 'completed', 'cancelled'] as con
 function statusColor(status: string): string {
     switch (status) {
         case 'pending': return 'bg-yellow-500';
+        case 'scheduled': return 'bg-cyan-500';
         case 'paid': return 'bg-blue-500';
         case 'shipped': return 'bg-purple-500';
         case 'completed': return 'bg-green-500';
@@ -61,9 +91,37 @@ function formatOrderDate(iso: string): string {
     });
 }
 
+function formatEventDate(iso: string | null): string {
+    if (!iso) return '—';
+    return new Date(iso).toLocaleDateString('id-ID', {
+        day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Jakarta',
+    });
+}
+
 function itemsText(order: Order): string {
-    if (!Array.isArray(order.items)) return 'Data item tidak valid';
-    return order.items.map((i) => `${i.name} x${i.qty}`).join(', ');
+    if (!Array.isArray(order.items) || order.items.length === 0) return '—';
+    return order.items.map((i) => `${i.name}${i.qty > 1 ? ` x${i.qty}` : ''}`).join(', ');
+}
+
+function bookingToCsvRow(o: Order): Record<string, string> {
+    const items = Array.isArray(o.items) && o.items.length ? o.items.map((i) => i.name).join('; ') : '';
+    return {
+        pelanggan: o.customer_name ?? '',
+        nomor_hp: o.customer_phone ?? '',
+        tipe: o.order_type === 'service' ? 'Jasa' : 'Produk',
+        jenis_acara: o.event_type ?? '',
+        tanggal_acara: o.event_date ? formatEventDate(o.event_date) : '',
+        lokasi: o.venue ?? '',
+        jumlah_tamu: o.headcount != null ? String(o.headcount) : '',
+        paket: items,
+        total: String(o.total_amount ?? 0),
+        dp: String(o.dp_amount ?? 0),
+        sisa: String(remainingBalance(Number(o.total_amount ?? 0), Number(o.dp_amount ?? 0))),
+        status: o.status,
+        dp_dibayar: o.dp_paid_at ? formatEventDate(o.dp_paid_at) : '',
+        lunas: o.pelunasan_paid_at ? formatEventDate(o.pelunasan_paid_at) : '',
+        dibuat: formatOrderDate(o.created_at),
+    };
 }
 
 function TypeBadge({ type }: { type: Order['order_type'] }) {
@@ -74,22 +132,54 @@ function TypeBadge({ type }: { type: Order['order_type'] }) {
     );
 }
 
-// Shared status-cycle menu used by both the desktop table row and the mobile card.
-function OrderActions({ order, onUpdate }: { order: Order; onUpdate: (id: string, status: string) => void }) {
+// Row actions: quick status cycle + detail / edit / delete.
+function OrderActions({
+    order,
+    onSetStatus,
+    onDetail,
+    onEdit,
+    onDelete,
+}: {
+    order: Order;
+    onSetStatus: (id: string, status: string) => void;
+    onDetail: () => void;
+    onEdit: () => void;
+    onDelete: () => void;
+}) {
     return (
         <DropdownMenu>
             <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon-sm" className="shrink-0">
+                <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    className="shrink-0"
+                    onClick={(e) => e.stopPropagation()}
+                >
                     <span className="sr-only">Open menu</span>
                     <MoreHorizontal className="h-4 w-4" />
                 </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
+            <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+                <DropdownMenuItem onClick={onDetail}>
+                    <Eye className="mr-2 h-3.5 w-3.5" /> Lihat detail
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={onEdit}>
+                    <Pencil className="mr-2 h-3.5 w-3.5" /> Edit
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel className="text-xs text-muted-foreground">Ubah status</DropdownMenuLabel>
                 {STATUSES.map((s) => (
-                    <DropdownMenuItem key={s} onClick={() => onUpdate(order.id, s)} className="capitalize">
-                        Set {s}
+                    <DropdownMenuItem key={s} onClick={() => onSetStatus(order.id, s)} className="capitalize">
+                        {s}
                     </DropdownMenuItem>
                 ))}
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                    onClick={onDelete}
+                    className="text-destructive focus:text-destructive"
+                >
+                    <Trash2 className="mr-2 h-3.5 w-3.5" /> Hapus
+                </DropdownMenuItem>
             </DropdownMenuContent>
         </DropdownMenu>
     );
@@ -98,9 +188,14 @@ function OrderActions({ order, onUpdate }: { order: Order; onUpdate: (id: string
 export function OrderList() {
     const [orders, setOrders] = useState<Order[]>([]);
     const [loading, setLoading] = useState(true);
+    const [addOpen, setAddOpen] = useState(false);
+    const [editOrder, setEditOrder] = useState<Order | null>(null);
+    const [deleteTarget, setDeleteTarget] = useState<Order | null>(null);
+    const [detailId, setDetailId] = useState<string | null>(null);
+    const [busy, setBusy] = useState(false);
     const supabase = createClient();
 
-    const fetchOrders = useCallback(async () => {
+    const fetchOrders = useCallback(async (): Promise<Order[]> => {
         const { data, error } = await supabase
             .from('orders')
             .select('*')
@@ -111,28 +206,24 @@ export function OrderList() {
             toast.error('Gagal memuat data pesanan');
             return [];
         }
-        return data || [];
+        return (data as Order[]) || [];
     }, [supabase]);
+
+    const refresh = useCallback(async () => {
+        setOrders(await fetchOrders());
+    }, [fetchOrders]);
 
     useEffect(() => {
         let mounted = true;
-
         const load = async () => {
-            try {
-                const data = await fetchOrders();
-                if (mounted) {
-                    setOrders(data);
-                    setLoading(false);
-                }
-            } catch (error) {
-                console.error('Error loading orders:', error);
-                if (mounted) setLoading(false);
+            const data = await fetchOrders();
+            if (mounted) {
+                setOrders(data);
+                setLoading(false);
             }
         };
-
         load();
 
-        // Subscribe to realtime changes
         const channel = supabase
             .channel('orders_realtime')
             .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, async () => {
@@ -147,43 +238,265 @@ export function OrderList() {
         };
     }, [fetchOrders, supabase]);
 
+    const detailOrder = detailId ? orders.find((o) => o.id === detailId) ?? null : null;
+
     const updateStatus = async (id: string, newStatus: string) => {
+        const currentOrder = orders.find((o) => o.id === id);
+        if (!currentOrder) {
+            toast.error('Order tidak ditemukan');
+            return;
+        }
         try {
-            // Find the order to get current data
-            const currentOrder = orders.find(o => o.id === id);
-            if (!currentOrder) {
-                toast.error('Order tidak ditemukan');
-                return;
-            }
-
-            // Call server action to handle status update + stock operations
             const { updateOrderStatus } = await import('../actions');
-            const result = await updateOrderStatus(id, newStatus, currentOrder);
-
-            if (result.success) {
-                toast.success(result.message);
-            } else {
-                toast.error(result.message);
-            }
-
-            // Refresh orders list
-            const data = await fetchOrders();
-            setOrders(data);
+            // updateOrderStatus only needs these fields (and assumes non-null
+            // phone/delivery for stock + notifications).
+            const result = await updateOrderStatus(id, newStatus, {
+                id: currentOrder.id,
+                customer_name: currentOrder.customer_name,
+                customer_phone: currentOrder.customer_phone ?? '',
+                items: currentOrder.items,
+                total_amount: currentOrder.total_amount,
+                delivery_info: currentOrder.delivery_info ?? '',
+                order_type: currentOrder.order_type,
+                status: currentOrder.status,
+            });
+            if (result.success) toast.success(result.message);
+            else toast.error(result.message);
+            await refresh();
         } catch (error) {
             console.error('Error updating status:', error);
             toast.error('Terjadi kesalahan saat mengupdate status');
         }
     };
 
+    const handleDelete = async () => {
+        if (!deleteTarget) return;
+        setBusy(true);
+        try {
+            const result = await deleteBooking(deleteTarget.id);
+            if (result.success) {
+                setOrders((cur) => cur.filter((o) => o.id !== deleteTarget.id));
+                toast.success(result.message);
+                setDeleteTarget(null);
+            } else {
+                toast.error(result.message);
+            }
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const handleDpPaid = async (order: Order, paid: boolean) => {
+        setBusy(true);
+        try {
+            const result = await setDpPaid(order.id, paid);
+            if (result.success) toast.success(result.message);
+            else toast.error(result.message);
+            await refresh();
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const handleSettled = async (order: Order, paid: boolean) => {
+        setBusy(true);
+        try {
+            const result = await setSettled(order.id, paid);
+            if (result.success) toast.success(result.message);
+            else toast.error(result.message);
+            await refresh();
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const toolbar = (
+        <div className="flex flex-shrink-0 items-center justify-end gap-2">
+            <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5"
+                disabled={orders.length === 0}
+                onClick={() => downloadCsv(`bookings-${csvDateStamp()}.csv`, orders.map(bookingToCsvRow))}
+            >
+                <Download className="h-4 w-4" />
+                <span className="hidden sm:inline">Export</span>
+            </Button>
+            <Button size="sm" className="gap-1.5" onClick={() => setAddOpen(true)}>
+                <Plus className="h-4 w-4" /> Buat Booking
+            </Button>
+        </div>
+    );
+
+    const dialogs = (
+        <>
+            <BookingDialog open={addOpen} onOpenChange={setAddOpen} onSuccess={refresh} />
+            <BookingDialog
+                key={editOrder?.id ?? 'none'}
+                open={!!editOrder}
+                onOpenChange={(o) => !o && setEditOrder(null)}
+                onSuccess={refresh}
+                bookingToEdit={editOrder}
+            />
+
+            {/* Detail panel */}
+            <Dialog open={!!detailId} onOpenChange={(o) => !o && setDetailId(null)}>
+                <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-[520px]">
+                    {detailOrder && (
+                        <>
+                            <DialogHeader>
+                                <DialogTitle className="flex flex-wrap items-center gap-2">
+                                    <span>{detailOrder.customer_name}</span>
+                                    <Badge className={cn('capitalize', statusColor(detailOrder.status))}>
+                                        {detailOrder.status}
+                                    </Badge>
+                                    <TypeBadge type={detailOrder.order_type} />
+                                </DialogTitle>
+                                {detailOrder.customer_phone && (
+                                    <DialogDescription>{detailOrder.customer_phone}</DialogDescription>
+                                )}
+                            </DialogHeader>
+
+                            <div className="grid gap-2 text-sm">
+                                <DetailRow label="Jenis acara" value={detailOrder.event_type} />
+                                <DetailRow label="Tanggal" value={formatEventDate(detailOrder.event_date)} />
+                                <DetailRow label="Lokasi" value={detailOrder.venue} />
+                                <DetailRow
+                                    label="Tamu"
+                                    value={detailOrder.headcount ? `${detailOrder.headcount} pax` : null}
+                                />
+                                <DetailRow label="Paket / item" value={itemsText(detailOrder)} />
+                                <DetailRow label="Catatan" value={detailOrder.delivery_info} />
+                            </div>
+
+                            {/* Payment tracking */}
+                            <div className="space-y-2 rounded-md border bg-muted/30 p-3 text-sm">
+                                <div className="flex items-center justify-between">
+                                    <span className="text-muted-foreground">Total</span>
+                                    <span className="font-semibold">{formatRupiah(detailOrder.total_amount)}</span>
+                                </div>
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <span className="text-muted-foreground">
+                                        DP: {formatRupiah(detailOrder.dp_amount)}
+                                        {detailOrder.dp_paid_at && (
+                                            <span className="ml-1 text-emerald-600 dark:text-emerald-400">
+                                                · dibayar {formatEventDate(detailOrder.dp_paid_at)}
+                                            </span>
+                                        )}
+                                    </span>
+                                    <Button
+                                        size="sm"
+                                        variant={detailOrder.dp_paid_at ? 'outline' : 'default'}
+                                        disabled={busy}
+                                        onClick={() => handleDpPaid(detailOrder, !detailOrder.dp_paid_at)}
+                                    >
+                                        {detailOrder.dp_paid_at ? 'Batalkan DP' : 'Tandai DP dibayar'}
+                                    </Button>
+                                </div>
+                                <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-2">
+                                    <span className="text-muted-foreground">
+                                        Sisa:{' '}
+                                        {formatRupiah(
+                                            remainingBalance(
+                                                Number(detailOrder.total_amount ?? 0),
+                                                Number(detailOrder.dp_amount ?? 0)
+                                            )
+                                        )}
+                                        {detailOrder.pelunasan_paid_at && (
+                                            <span className="ml-1 text-emerald-600 dark:text-emerald-400">
+                                                · lunas {formatEventDate(detailOrder.pelunasan_paid_at)}
+                                            </span>
+                                        )}
+                                    </span>
+                                    <Button
+                                        size="sm"
+                                        variant={detailOrder.pelunasan_paid_at ? 'outline' : 'default'}
+                                        disabled={busy}
+                                        onClick={() => handleSettled(detailOrder, !detailOrder.pelunasan_paid_at)}
+                                    >
+                                        {detailOrder.pelunasan_paid_at ? (
+                                            'Batalkan lunas'
+                                        ) : (
+                                            <>
+                                                <CheckCircle2 className="mr-1.5 h-3.5 w-3.5" /> Tandai lunas
+                                            </>
+                                        )}
+                                    </Button>
+                                </div>
+                            </div>
+
+                            {/* Status */}
+                            <div className="flex items-center justify-between gap-3">
+                                <span className="text-sm text-muted-foreground">Status</span>
+                                <Select
+                                    value={detailOrder.status}
+                                    onValueChange={(v) => updateStatus(detailOrder.id, v)}
+                                >
+                                    <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
+                                    <SelectContent>
+                                        {BOOKING_STATUS_OPTIONS.map((opt) => (
+                                            <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            </div>
+
+                            <DialogFooter className="gap-2 sm:gap-2">
+                                <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="mr-auto text-destructive hover:bg-destructive/10 hover:text-destructive"
+                                    onClick={() => { const o = detailOrder; setDetailId(null); setDeleteTarget(o); }}
+                                >
+                                    <Trash2 className="mr-2 h-4 w-4" /> Hapus
+                                </Button>
+                                <Button
+                                    variant="outline"
+                                    onClick={() => { const o = detailOrder; setDetailId(null); setEditOrder(o); }}
+                                >
+                                    <Pencil className="mr-2 h-4 w-4" /> Edit
+                                </Button>
+                            </DialogFooter>
+                        </>
+                    )}
+                </DialogContent>
+            </Dialog>
+
+            {/* Delete confirm */}
+            <Dialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>
+                <DialogContent>
+                    <DialogHeader>
+                        <DialogTitle>Hapus booking?</DialogTitle>
+                        <DialogDescription>
+                            Booking{' '}
+                            <span className="font-medium text-foreground">
+                                {deleteTarget?.customer_name}
+                            </span>{' '}
+                            akan dihapus permanen. Tindakan ini tidak bisa dibatalkan.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <DialogFooter>
+                        <Button variant="outline" onClick={() => setDeleteTarget(null)} disabled={busy}>
+                            Batal
+                        </Button>
+                        <Button variant="destructive" onClick={handleDelete} disabled={busy}>
+                            {busy ? 'Menghapus…' : 'Hapus'}
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+        </>
+    );
+
     if (loading) {
         return (
-            <>
-                {/* Desktop skeleton */}
+            <div className="space-y-3">
+                {toolbar}
                 <div className="hidden rounded-md border md:block">
                     <Table>
                         <TableHeader>
                             <TableRow>
-                                {['Tanggal', 'Pelanggan', 'Tipe', 'Items', 'Total', 'Info Pengiriman', 'Status', 'Aksi'].map((h) => (
+                                {['Tanggal', 'Pelanggan', 'Tipe', 'Items', 'Total', 'Status', 'Aksi'].map((h) => (
                                     <TableHead key={h}>{h}</TableHead>
                                 ))}
                             </TableRow>
@@ -191,141 +504,142 @@ export function OrderList() {
                         <TableBody>
                             {Array.from({ length: 6 }).map((_, i) => (
                                 <TableRow key={i}>
-                                    {Array.from({ length: 8 }).map((_, j) => (
-                                        <TableCell key={j}>
-                                            <Skeleton className="h-4 w-full" />
-                                        </TableCell>
+                                    {Array.from({ length: 7 }).map((_, j) => (
+                                        <TableCell key={j}><Skeleton className="h-4 w-full" /></TableCell>
                                     ))}
                                 </TableRow>
                             ))}
                         </TableBody>
                     </Table>
                 </div>
-                {/* Mobile skeleton */}
                 <div className="space-y-3 md:hidden">
                     {Array.from({ length: 4 }).map((_, i) => (
                         <div key={i} className="rounded-lg border p-4">
                             <Skeleton className="h-4 w-1/2" />
                             <Skeleton className="mt-2 h-3 w-1/3" />
                             <Skeleton className="mt-4 h-3 w-full" />
-                            <Skeleton className="mt-2 h-3 w-2/3" />
                         </div>
                     ))}
                 </div>
-            </>
-        );
-    }
-
-    if (orders.length === 0) {
-        return (
-            <div className="rounded-md border p-8 text-center text-sm text-muted-foreground">
-                Belum ada pesanan.
             </div>
         );
     }
 
     return (
-        <>
-            {/* Desktop: full table */}
-            <div className="hidden rounded-md border md:block">
-                <Table>
-                    <TableHeader>
-                        <TableRow>
-                            <TableHead>Tanggal</TableHead>
-                            <TableHead>Pelanggan</TableHead>
-                            <TableHead>Tipe</TableHead>
-                            <TableHead>Items</TableHead>
-                            <TableHead>Total</TableHead>
-                            <TableHead>Info Pengiriman</TableHead>
-                            <TableHead>Status</TableHead>
-                            <TableHead className="text-right">Aksi</TableHead>
-                        </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                        {orders.map((order) => (
-                            <TableRow key={order.id}>
-                                <TableCell>{formatOrderDate(order.created_at)}</TableCell>
-                                <TableCell>
-                                    <div className="font-medium">{order.customer_name}</div>
-                                    <div className="text-xs text-muted-foreground">{order.customer_phone}</div>
-                                </TableCell>
-                                <TableCell>
-                                    <TypeBadge type={order.order_type} />
-                                </TableCell>
-                                <TableCell>
-                                    <ul className="text-sm list-disc list-inside">
-                                        {Array.isArray(order.items) ? (
-                                            order.items.map((item, idx) => (
-                                                <li key={idx}>
-                                                    {item.name} x{item.qty}
-                                                </li>
-                                            ))
-                                        ) : (
-                                            <li className="text-red-500">Data item tidak valid</li>
-                                        )}
-                                    </ul>
-                                </TableCell>
-                                <TableCell>
-                                    Rp {order.total_amount.toLocaleString('id-ID')}
-                                </TableCell>
-                                <TableCell className="max-w-[200px] truncate" title={order.delivery_info}>
-                                    {order.delivery_info}
-                                </TableCell>
-                                <TableCell>
-                                    <Badge className={statusColor(order.status)}>
-                                        {order.status}
-                                    </Badge>
-                                </TableCell>
-                                <TableCell className="text-right">
-                                    <OrderActions order={order} onUpdate={updateStatus} />
-                                </TableCell>
-                            </TableRow>
-                        ))}
-                    </TableBody>
-                </Table>
-            </div>
+        <div className="space-y-3">
+            {toolbar}
 
-            {/* Mobile: stacked cards (same data, no horizontal scroll) */}
-            <div className="space-y-3 md:hidden">
-                {orders.map((order) => (
-                    <div key={order.id} className="rounded-lg border bg-card p-4 shadow-sm">
-                        <div className="flex items-start justify-between gap-2">
-                            <div className="min-w-0">
-                                <div className="truncate font-medium">{order.customer_name}</div>
-                                <div className="truncate text-xs text-muted-foreground">{order.customer_phone}</div>
-                            </div>
-                            <div className="flex shrink-0 items-center gap-1">
-                                <Badge className={cn('capitalize', statusColor(order.status))}>
-                                    {order.status}
-                                </Badge>
-                                <OrderActions order={order} onUpdate={updateStatus} />
-                            </div>
-                        </div>
-
-                        <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                            <span>{formatOrderDate(order.created_at)}</span>
-                            <TypeBadge type={order.order_type} />
-                        </div>
-
-                        <p className="mt-2 text-sm">
-                            <span className="text-muted-foreground">Items: </span>
-                            {itemsText(order)}
-                        </p>
-
-                        {order.delivery_info && (
-                            <p className="mt-1 text-sm">
-                                <span className="text-muted-foreground">Pengiriman: </span>
-                                {order.delivery_info}
-                            </p>
-                        )}
-
-                        <div className="mt-3 flex items-center justify-between border-t pt-2">
-                            <span className="text-xs text-muted-foreground">Total</span>
-                            <span className="font-semibold">Rp {order.total_amount.toLocaleString('id-ID')}</span>
-                        </div>
+            {orders.length === 0 ? (
+                <div className="rounded-md border p-8 text-center text-sm text-muted-foreground">
+                    Belum ada booking. Klik <span className="font-medium">Buat Booking</span> untuk menambah.
+                </div>
+            ) : (
+                <>
+                    {/* Desktop: full table */}
+                    <div className="hidden rounded-md border md:block">
+                        <Table>
+                            <TableHeader>
+                                <TableRow>
+                                    <TableHead>Tanggal</TableHead>
+                                    <TableHead>Pelanggan</TableHead>
+                                    <TableHead>Tipe</TableHead>
+                                    <TableHead>Items</TableHead>
+                                    <TableHead>Total</TableHead>
+                                    <TableHead>Status</TableHead>
+                                    <TableHead className="text-right">Aksi</TableHead>
+                                </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                                {orders.map((order) => (
+                                    <TableRow
+                                        key={order.id}
+                                        className="cursor-pointer"
+                                        onClick={() => setDetailId(order.id)}
+                                    >
+                                        <TableCell>{formatOrderDate(order.created_at)}</TableCell>
+                                        <TableCell>
+                                            <div className="font-medium">{order.customer_name}</div>
+                                            <div className="text-xs text-muted-foreground">{order.customer_phone}</div>
+                                        </TableCell>
+                                        <TableCell><TypeBadge type={order.order_type} /></TableCell>
+                                        <TableCell className="max-w-[220px] truncate" title={itemsText(order)}>
+                                            {itemsText(order)}
+                                        </TableCell>
+                                        <TableCell>{formatRupiah(order.total_amount)}</TableCell>
+                                        <TableCell>
+                                            <Badge className={cn('capitalize', statusColor(order.status))}>
+                                                {order.status}
+                                            </Badge>
+                                        </TableCell>
+                                        <TableCell className="text-right">
+                                            <OrderActions
+                                                order={order}
+                                                onSetStatus={updateStatus}
+                                                onDetail={() => setDetailId(order.id)}
+                                                onEdit={() => setEditOrder(order)}
+                                                onDelete={() => setDeleteTarget(order)}
+                                            />
+                                        </TableCell>
+                                    </TableRow>
+                                ))}
+                            </TableBody>
+                        </Table>
                     </div>
-                ))}
-            </div>
-        </>
+
+                    {/* Mobile: stacked cards */}
+                    <div className="space-y-3 md:hidden">
+                        {orders.map((order) => (
+                            <div
+                                key={order.id}
+                                className="cursor-pointer rounded-lg border bg-card p-4 shadow-sm"
+                                onClick={() => setDetailId(order.id)}
+                            >
+                                <div className="flex items-start justify-between gap-2">
+                                    <div className="min-w-0">
+                                        <div className="truncate font-medium">{order.customer_name}</div>
+                                        <div className="truncate text-xs text-muted-foreground">{order.customer_phone}</div>
+                                    </div>
+                                    <div className="flex shrink-0 items-center gap-1">
+                                        <Badge className={cn('capitalize', statusColor(order.status))}>
+                                            {order.status}
+                                        </Badge>
+                                        <OrderActions
+                                            order={order}
+                                            onSetStatus={updateStatus}
+                                            onDetail={() => setDetailId(order.id)}
+                                            onEdit={() => setEditOrder(order)}
+                                            onDelete={() => setDeleteTarget(order)}
+                                        />
+                                    </div>
+                                </div>
+                                <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                                    <span>{formatOrderDate(order.created_at)}</span>
+                                    <TypeBadge type={order.order_type} />
+                                </div>
+                                <p className="mt-2 text-sm">
+                                    <span className="text-muted-foreground">Items: </span>
+                                    {itemsText(order)}
+                                </p>
+                                <div className="mt-3 flex items-center justify-between border-t pt-2">
+                                    <span className="text-xs text-muted-foreground">Total</span>
+                                    <span className="font-semibold">{formatRupiah(order.total_amount)}</span>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </>
+            )}
+
+            {dialogs}
+        </div>
+    );
+}
+
+function DetailRow({ label, value }: { label: string; value: string | null }) {
+    return (
+        <div className="flex gap-2">
+            <span className="w-24 shrink-0 text-xs text-muted-foreground">{label}</span>
+            <span className="min-w-0 break-words">{value || <span className="text-muted-foreground">—</span>}</span>
+        </div>
     );
 }

@@ -40,10 +40,13 @@ import {
     Plus,
     Upload,
     Pencil,
+    Download,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { LeadDialog } from '@/components/dashboard/LeadDialog';
 import { ImportLeadsDialog } from '@/components/dashboard/ImportLeadsDialog';
+import { leadToCsvRow } from '@/lib/leads/schema';
+import { downloadCsv, csvDateStamp } from '@/lib/utils/csv';
 import {
     Dialog,
     DialogContent,
@@ -481,6 +484,29 @@ export function ContactList() {
                         />
                     </div>
                     <div className="flex gap-2">
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            className="flex-1 gap-1.5 sm:flex-none"
+                            disabled={filteredContacts.length === 0}
+                            onClick={() =>
+                                downloadCsv(
+                                    `kontak-${csvDateStamp()}.csv`,
+                                    filteredContacts.map((c) => ({
+                                        tipe:
+                                            c.contact_type === 'vendor'
+                                                ? 'Vendor'
+                                                : c.contact_type === 'other'
+                                                  ? 'Lainnya'
+                                                  : 'Klien',
+                                        ...leadToCsvRow(c),
+                                    }))
+                                )
+                            }
+                        >
+                            <Download className="h-4 w-4" />
+                            <span className="hidden sm:inline">Export</span>
+                        </Button>
                         <Button
                             variant="outline"
                             size="sm"

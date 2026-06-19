@@ -247,3 +247,47 @@ const HEADER_LOOKUP: Record<string, LeadFieldKey> = {
 export function fieldForHeader(header: string): LeadFieldKey | null {
     return HEADER_LOOKUP[normalizeHeader(header)] ?? null;
 }
+
+// --- CSV export --------------------------------------------------------------
+// The lead fields an export reads. Both the Pipeline `Lead` and the Contacts
+// `Contact` shapes satisfy this.
+export interface LeadCsvSource {
+    contact_name: string | null;
+    phone_number: string;
+    email: string | null;
+    event_interest: string | null;
+    participant_count: number | null;
+    location_pref: string | null;
+    event_date_pref: string | null;
+    event_goals: string | null;
+    budget_range: string | null;
+    source: string | null;
+    lead_stage: string | null;
+    assigned_to: string | null;
+    notes: string | null;
+}
+
+// Map a lead to a CSV row keyed by the SAME Indonesian headers as the import
+// template (LEAD_CSV_COLUMNS), so an export can be edited and re-imported.
+export function leadToCsvRow(l: LeadCsvSource): Record<string, string> {
+    return {
+        nama: l.contact_name ?? '',
+        // Synthetic phone-less identities export as blank (not "manual:<uuid>").
+        nomor_hp: l.phone_number.startsWith('manual:') ? '' : l.phone_number,
+        email: l.email ?? '',
+        jenis_acara: l.event_interest ?? '',
+        jumlah_pax: l.participant_count != null ? String(l.participant_count) : '',
+        lokasi: l.location_pref ?? '',
+        tanggal: l.event_date_pref ?? '',
+        budget: l.budget_range ?? '',
+        tujuan: l.event_goals ?? '',
+        // Raw source value (blank for WhatsApp/null) so the row re-imports cleanly.
+        sumber:
+            l.source && (LEAD_SOURCE_VALUES as readonly string[]).includes(l.source)
+                ? l.source
+                : '',
+        stage: l.lead_stage ?? '',
+        pic: l.assigned_to ?? '',
+        catatan: l.notes ?? '',
+    };
+}

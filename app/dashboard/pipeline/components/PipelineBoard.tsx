@@ -17,6 +17,8 @@ import {
     Upload,
     Pencil,
     Trash2,
+    CalendarPlus,
+    Download,
 } from 'lucide-react';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
@@ -36,9 +38,11 @@ import {
     DialogFooter,
 } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
-import { sourceLabel } from '@/lib/leads/schema';
+import { sourceLabel, leadToCsvRow } from '@/lib/leads/schema';
+import { downloadCsv, csvDateStamp } from '@/lib/utils/csv';
 import { LeadDialog } from '@/components/dashboard/LeadDialog';
 import { ImportLeadsDialog } from '@/components/dashboard/ImportLeadsDialog';
+import { BookingDialog, type BookingPrefill } from '@/components/dashboard/BookingDialog';
 import { SendProposalDialog } from './SendProposalDialog';
 import { ProposalHistoryDialog } from './ProposalHistoryDialog';
 
@@ -106,6 +110,7 @@ export function PipelineBoard() {
     const [editLead, setEditLead] = useState<Lead | null>(null);
     const [deleteLead, setDeleteLead] = useState<Lead | null>(null);
     const [deleting, setDeleting] = useState(false);
+    const [bookingPrefill, setBookingPrefill] = useState<BookingPrefill | null>(null);
 
     const fetchLeads = useCallback(async () => {
         try {
@@ -264,6 +269,16 @@ export function PipelineBoard() {
                 variant="outline"
                 size="sm"
                 className="gap-1.5"
+                disabled={leads.length === 0}
+                onClick={() => downloadCsv(`leads-${csvDateStamp()}.csv`, leads.map(leadToCsvRow))}
+            >
+                <Download className="h-4 w-4" />
+                <span className="hidden sm:inline">Export</span>
+            </Button>
+            <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5"
                 onClick={() => setImportOpen(true)}
             >
                 <Upload className="h-4 w-4" />
@@ -291,6 +306,12 @@ export function PipelineBoard() {
                 open={importOpen}
                 onOpenChange={setImportOpen}
                 onSuccess={fetchLeads}
+            />
+            <BookingDialog
+                open={!!bookingPrefill}
+                onOpenChange={(o) => !o && setBookingPrefill(null)}
+                onSuccess={fetchLeads}
+                prefill={bookingPrefill}
             />
             <Dialog open={!!deleteLead} onOpenChange={(o) => !o && setDeleteLead(null)}>
                 <DialogContent>
@@ -402,6 +423,18 @@ export function PipelineBoard() {
                                             onMoveStage={(stage) => moveLead(lead.phone_number, stage)}
                                             onEdit={() => setEditLead(lead)}
                                             onDelete={() => setDeleteLead(lead)}
+                                            onMakeBooking={() =>
+                                                setBookingPrefill({
+                                                    customer_name: lead.contact_name,
+                                                    customer_phone: lead.phone_number.startsWith('manual:')
+                                                        ? undefined
+                                                        : lead.phone_number,
+                                                    event_type: lead.event_interest,
+                                                    venue: lead.location_pref,
+                                                    headcount: lead.participant_count,
+                                                    notes: lead.notes,
+                                                })
+                                            }
                                         />
                                     ))
                                 )}
@@ -461,6 +494,7 @@ function LeadCard({
     onMoveStage,
     onEdit,
     onDelete,
+    onMakeBooking,
 }: {
     lead: Lead;
     isDragging: boolean;
@@ -472,6 +506,7 @@ function LeadCard({
     onMoveStage: (stage: StageId) => void;
     onEdit: () => void;
     onDelete: () => void;
+    onMakeBooking: () => void;
 }) {
     const displayName = lead.contact_name || lead.phone_number;
 
@@ -523,6 +558,10 @@ function LeadCard({
                         <DropdownMenuItem onClick={onHandoff}>
                             <UserCheck className="mr-2 h-3.5 w-3.5" />
                             Handoff to MJ
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={onMakeBooking}>
+                            <CalendarPlus className="mr-2 h-3.5 w-3.5" />
+                            Jadikan Booking
                         </DropdownMenuItem>
                         <DropdownMenuSeparator />
                         {STAGES.filter((s) => s.id !== lead.lead_stage).map((s) => (
