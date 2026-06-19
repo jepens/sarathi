@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { verifyWhatsAppSignature } from '@/lib/whatsapp/security';
 import { checkRateLimit } from '@/lib/whatsapp/rate-limiter-db';
-import { enqueueMessage, processQueue } from '@/lib/whatsapp/queue-db';
+import { enqueueMessage, processQueue, getDebounceSeconds } from '@/lib/whatsapp/queue-db';
 import { sendWhatsAppMessage } from '@/lib/whatsapp/client';
 import { resolveWhatsAppContext } from '@/lib/whatsapp/credentials';
 import { whatsappLogger } from '@/lib/utils/logger';
@@ -302,6 +302,10 @@ export async function POST(request: Request) {
                 const message = value.messages[0];
                 const from = message.from; // phone today; may be a BSUID from June 2026
                 const messageType = message.type;
+                // Inbound message id (wamid). Meta delivers webhooks
+                // at-least-once, so this is our idempotency key: a redelivery of
+                // the same message must not enqueue (or store) it twice.
+                const inboundWamid: string | null = typeof message.id === 'string' ? message.id : null;
 
                 // BSUID (business-scoped user ID). Present in contacts[].user_id
                 // and/or messages[].from_user_id. Used as a secondary identity
@@ -393,11 +397,27 @@ export async function POST(request: Request) {
                     const aiEnabled = aiRow?.ai_enabled !== false;
 
                     if (aiEnabled) {
-                        // Add to database queue (service role client bypasses RLS)
-                        await enqueueMessage(waCtx.orgId, contactKey, messageBody, supabase);
-                        whatsappLogger.info(`Message from ${contactKey} added to queue`);
-                        // Trigger queue processing immediately (fire and forget)
-                        processQueue(supabase).catch(err => whatsappLogger.error('Error processing queue immediately', err));
+                        // Add to database queue (service role client bypasses RLS).
+                        // Returns null when this is a duplicate webhook delivery
+                        // (deduped on wa_message_id) — then there's nothing to do.
+                        const queuedId = await enqueueMessage(waCtx.orgId, contactKey, messageBody, supabase, inboundWamid);
+                        if (queuedId) {
+                            whatsappLogger.info(`Message from ${contactKey} added to queue`);
+                            // Drain any already-settled conversations now (fire and
+                            // forget). This is a no-op for THIS conversation —
+                            // coalescing waits for the burst to settle (debounce)
+                            // before replying, so rapid follow-ups get one reply.
+                            processQueue(supabase).catch(err => whatsappLogger.error('Error processing queue immediately', err));
+                            // Schedule a delayed drain so this conversation is
+                            // answered ~debounce seconds after the customer's LAST
+                            // message. Works on the persistent server; the
+                            // per-minute cron is the backstop if the timer is lost
+                            // on a restart.
+                            const delayMs = (getDebounceSeconds() + 5) * 1000;
+                            setTimeout(() => {
+                                processQueue(supabase).catch(err => whatsappLogger.error('Delayed queue drain failed', err));
+                            }, delayMs);
+                        }
                     } else {
                         whatsappLogger.info(`AI disabled for ${contactKey} — manual mode, skipping auto-reply`);
                     }
@@ -434,18 +454,25 @@ export async function POST(request: Request) {
                                 whatsappLogger.info(`Chat summary updated for ${contactKey}`);
                             }
 
-                            // Insert message
+                            // Insert message. wa_message_id makes this idempotent:
+                            // a redelivered webhook hits the unique index (23505)
+                            // and is skipped instead of duplicating the history.
                             const { error: msgError } = await supabase
                                 .from('whatsapp_messages')
                                 .insert({
                                     org_id: waCtx.orgId,
                                     phone_number: contactKey,
                                     role: 'user',
-                                    content: messageBody
+                                    content: messageBody,
+                                    wa_message_id: inboundWamid
                                 });
 
                             if (msgError) {
-                                whatsappLogger.error('Error inserting message', msgError);
+                                if (msgError.code === '23505') {
+                                    whatsappLogger.info(`Duplicate inbound message ${inboundWamid} — already stored, skipping`);
+                                } else {
+                                    whatsappLogger.error('Error inserting message', msgError);
+                                }
                             } else {
                                 whatsappLogger.info(`User message inserted for ${contactKey}`);
                             }
