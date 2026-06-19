@@ -16,6 +16,7 @@ import {
     Kanban,
     Calendar,
     Building2,
+    BarChart3,
     type LucideIcon,
 } from "lucide-react"
 import Link from "next/link"
@@ -41,6 +42,7 @@ const NAV_ITEMS: NavItem[] = [
     { href: "/dashboard/orders", label: "Bookings", icon: ClipboardList },
     { href: "/dashboard/pipeline", label: "Pipeline", icon: Kanban },
     { href: "/dashboard/calendar", label: "Calendar", icon: Calendar },
+    { href: "/dashboard/reports", label: "Laporan", icon: BarChart3 },
     { href: "/dashboard/chat", label: "AI Chat", icon: MessageSquare },
     { href: "/dashboard/chats", label: "WhatsApp Inbox", icon: MessageCircle, match: "startsWith" },
     { href: "/dashboard/contacts", label: "Contacts", icon: Users, match: "startsWith" },
