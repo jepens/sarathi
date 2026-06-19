@@ -1,0 +1,40 @@
+name: CI
+
+# Menjalankan test suite (Vitest) otomatis di setiap push dan pull request,
+# sehingga regresi pada pipeline WhatsApp (coalescing / idempotency / resend
+# safety) langsung ketahuan sebelum di-deploy.
+on:
+  push:
+  pull_request:
+
+# Batalkan run lama pada ref yang sama saat ada push baru (hemat CI minutes).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test (Vitest)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      # Dependensi sistem untuk paket native `canvas` (node-canvas) agar
+      # `npm ci` tidak gagal saat build di runner Linux.
+      - name: Install canvas system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
