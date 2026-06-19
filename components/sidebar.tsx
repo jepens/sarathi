@@ -17,6 +17,7 @@ import {
     Calendar,
     Building2,
     BarChart3,
+    ListChecks,
     type LucideIcon,
 } from "lucide-react"
 import Link from "next/link"
@@ -24,6 +25,7 @@ import { usePathname, useRouter } from "next/navigation"
 import { createClient } from "@/lib/supabase/client"
 import { ModeToggle } from "@/components/mode-toggle"
 import { Brand } from "@/components/brand"
+import { FollowupBadge } from "@/components/followup-badge"
 
 type NavItem = {
     href: string
@@ -41,6 +43,7 @@ const NAV_ITEMS: NavItem[] = [
     { href: "/dashboard/products", label: "Paket Acara", icon: ShoppingBag },
     { href: "/dashboard/orders", label: "Bookings", icon: ClipboardList },
     { href: "/dashboard/pipeline", label: "Pipeline", icon: Kanban },
+    { href: "/dashboard/followup", label: "Follow-up", icon: ListChecks },
     { href: "/dashboard/calendar", label: "Calendar", icon: Calendar },
     { href: "/dashboard/reports", label: "Laporan", icon: BarChart3 },
     { href: "/dashboard/chat", label: "AI Chat", icon: MessageSquare },
@@ -104,6 +107,7 @@ export function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
                                     <Link href={item.href} onClick={onNavigate}>
                                         <Icon className="size-4" />
                                         {item.label}
+                                        {item.href === "/dashboard/followup" && <FollowupBadge />}
                                     </Link>
                                 </Button>
                             )
