@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { processQueue } from '@/lib/whatsapp/queue-db';
+import { maybeSendFollowupDigest } from '@/lib/followup/digest';
 import { whatsappLogger } from '@/lib/utils/logger';
 
 /**
@@ -34,6 +35,15 @@ export async function GET(request: Request) {
         await processQueue(supabase);
 
         whatsappLogger.info('Queue processing completed');
+
+        // Piggyback the daily follow-up digest on this every-minute cron. It
+        // self-guards (sends at most once/day after the configured hour) and is
+        // a no-op unless FOLLOWUP_DIGEST_TO is set. Never let it break the queue.
+        try {
+            await maybeSendFollowupDigest(supabase);
+        } catch (digestError) {
+            whatsappLogger.error('Follow-up digest check failed', digestError);
+        }
 
         return NextResponse.json({ success: true, message: 'Queue processed' });
 
