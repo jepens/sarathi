@@ -1,6 +1,3 @@
-'use client';
-
-import { useState } from 'react';
 import {
     Card,
     CardContent,
@@ -8,63 +5,19 @@ import {
     CardHeader,
     CardTitle,
 } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { CheckCircle2, XCircle, Loader2, Save } from 'lucide-react';
-import { toast } from 'sonner';
-import type { WhatsAppIntegrationView } from '@/lib/whatsapp/integration';
-import { saveWhatsAppIntegration } from '../actions';
+import { CheckCircle2, XCircle } from 'lucide-react';
 
-export function WhatsAppCredentials({
-    initial,
-}: {
-    initial: WhatsAppIntegrationView | null;
-}) {
-    const [phoneNumberId, setPhoneNumberId] = useState(initial?.phoneNumberId ?? '');
-    const [wabaId, setWabaId] = useState(initial?.wabaId ?? '');
-    const [displayPhone, setDisplayPhone] = useState(initial?.displayPhone ?? '');
-    const [accessToken, setAccessToken] = useState('');
-    const [appSecret, setAppSecret] = useState('');
-    const [saving, setSaving] = useState(false);
-
-    const configured = !!initial?.phoneNumberId && !!initial?.hasAccessToken;
-
-    const handleSave = async () => {
-        setSaving(true);
-        const promise = (async () => {
-            const res = await saveWhatsAppIntegration({
-                phoneNumberId,
-                wabaId,
-                displayPhone,
-                accessToken,
-                appSecret,
-            });
-            if (!res.ok) throw new Error(res.error ?? 'Gagal menyimpan kredensial');
-        })();
-        toast.promise(promise, {
-            loading: 'Menyimpan kredensial…',
-            success: 'Kredensial WhatsApp disimpan',
-            error: (e) => (e instanceof Error ? e.message : 'Gagal menyimpan kredensial'),
-        });
-        try {
-            await promise;
-            setAccessToken('');
-            setAppSecret('');
-        } catch {
-            /* error already surfaced by toast.promise */
-        } finally {
-            setSaving(false);
-        }
-    };
-
+// Single-tenant: WhatsApp credentials come from server environment variables,
+// not the database. This card is read-only — it only reports whether the env is
+// configured. To change the number/token, edit the env and redeploy.
+export function WhatsAppCredentials({ envConfigured }: { envConfigured: boolean }) {
     return (
         <Card>
             <CardHeader>
                 <CardTitle className="flex items-center justify-between">
-                    Kredensial WhatsApp (EO Anda)
-                    {configured ? (
+                    Kredensial WhatsApp
+                    {envConfigured ? (
                         <Badge className="bg-green-500/15 text-green-500 border-green-500/20">
                             <CheckCircle2 className="w-3 h-3 mr-1" /> Terhubung
                         </Badge>
@@ -75,92 +28,17 @@ export function WhatsAppCredentials({
                     )}
                 </CardTitle>
                 <CardDescription>
-                    Dari Meta Developer → WhatsApp → API Setup. Nomor inilah yang
-                    dipakai asisten untuk membalas klien Anda. Pasang Webhook URL &
-                    Verify Token (kartu di bawah) di Meta app Anda.
+                    Dikelola lewat environment variable server:{' '}
+                    <code className="font-mono text-xs">WHATSAPP_PHONE_NUMBER_ID</code>,{' '}
+                    <code className="font-mono text-xs">WHATSAPP_ACCESS_TOKEN</code>,{' '}
+                    <code className="font-mono text-xs">WHATSAPP_APP_SECRET</code>. Ubah di
+                    konfigurasi server lalu deploy ulang.
                 </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-4">
-                <div className="grid gap-4 sm:grid-cols-2">
-                    <div className="space-y-2">
-                        <Label htmlFor="phoneNumberId">Phone Number ID</Label>
-                        <Input
-                            id="phoneNumberId"
-                            value={phoneNumberId}
-                            onChange={(e) => setPhoneNumberId(e.target.value)}
-                            placeholder="1234567890"
-                            className="font-mono text-sm"
-                        />
-                    </div>
-                    <div className="space-y-2">
-                        <Label htmlFor="displayPhone">Nomor (tampilan)</Label>
-                        <Input
-                            id="displayPhone"
-                            value={displayPhone}
-                            onChange={(e) => setDisplayPhone(e.target.value)}
-                            placeholder="+62 812-xxxx-xxxx"
-                        />
-                    </div>
-                    <div className="space-y-2">
-                        <Label htmlFor="wabaId">WhatsApp Business Account ID</Label>
-                        <Input
-                            id="wabaId"
-                            value={wabaId}
-                            onChange={(e) => setWabaId(e.target.value)}
-                            placeholder="WABA ID"
-                            className="font-mono text-sm"
-                        />
-                    </div>
-                    <div className="space-y-2">
-                        <Label htmlFor="accessToken">Access Token</Label>
-                        <Input
-                            id="accessToken"
-                            type="password"
-                            value={accessToken}
-                            onChange={(e) => setAccessToken(e.target.value)}
-                            placeholder={
-                                initial?.hasAccessToken
-                                    ? '•••••••• (tersimpan — isi untuk ganti)'
-                                    : 'Token permanen'
-                            }
-                            className="font-mono text-sm"
-                        />
-                    </div>
-                    <div className="space-y-2 sm:col-span-2">
-                        <Label htmlFor="appSecret">App Secret</Label>
-                        <Input
-                            id="appSecret"
-                            type="password"
-                            value={appSecret}
-                            onChange={(e) => setAppSecret(e.target.value)}
-                            placeholder={
-                                initial?.hasAppSecret
-                                    ? '•••••••• (tersimpan — isi untuk ganti)'
-                                    : 'Meta App → Settings → Basic → App Secret'
-                            }
-                            className="font-mono text-sm"
-                        />
-                        <p className="text-xs text-muted-foreground">
-                            Wajib: dipakai memverifikasi signature webhook. Tanpa ini,
-                            pesan masuk ditolak dan bot tidak akan membalas.
-                        </p>
-                    </div>
-                </div>
-                <div className="flex border-t pt-4">
-                    <Button onClick={handleSave} disabled={saving}>
-                        {saving ? (
-                            <>
-                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                Menyimpan...
-                            </>
-                        ) : (
-                            <>
-                                <Save className="mr-2 h-4 w-4" />
-                                Simpan Kredensial
-                            </>
-                        )}
-                    </Button>
-                </div>
+            <CardContent className="text-sm text-muted-foreground">
+                {envConfigured
+                    ? 'Nomor WhatsApp terkonfigurasi dari environment. Asisten memakai nomor ini untuk membalas pesan klien.'
+                    : 'Set WHATSAPP_PHONE_NUMBER_ID, WHATSAPP_ACCESS_TOKEN, dan WHATSAPP_APP_SECRET di environment server agar bot bisa menerima & membalas pesan.'}
             </CardContent>
         </Card>
     );

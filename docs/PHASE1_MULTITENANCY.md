@@ -1,5 +1,9 @@
 # Fase 1 — Multi-tenancy (Sarathi)
 
+> ⚠️ **HISTORIS (tidak berlaku lagi).** Aplikasi kembali **single-tenant**
+> (de-SaaS 2026-06-20). Multi-tenancy tidak jadi dilanjutkan. Disimpan sebagai
+> catatan sejarah.
+
 > Rencana teknis untuk direview sebelum coding. Keputusan: **1 user = 1 EO**,
 > **org diturunkan dari login (tanpa subdomain)**. Masih satu Supabase project &
 > satu nomor WhatsApp (per-tenant WhatsApp = Fase 2).

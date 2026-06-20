@@ -29,18 +29,19 @@ export async function GET(request: Request) {
         .select('handoff_phone')
         .eq('org_id', orgId)
         .maybeSingle();
-    const integrationQ = await supabase
-        .from('whatsapp_integrations')
-        .select('org_id', { count: 'exact', head: true });
     const docCountQ = await supabase
         .from('documents')
         .select('id', { count: 'exact', head: true });
 
     const handoffPhone = (profileQ.data?.handoff_phone ?? '').trim();
 
+    // Single-tenant: WhatsApp credentials come from server env, not a per-org row.
+    const whatsappConfigured =
+        !!process.env.WHATSAPP_PHONE_NUMBER_ID && !!process.env.WHATSAPP_ACCESS_TOKEN;
+
     const steps = {
         profile: handoffPhone.length > 0,
-        whatsapp: (integrationQ.count ?? 0) > 0,
+        whatsapp: whatsappConfigured,
         knowledge: (docCountQ.count ?? 0) > 0,
     };
 

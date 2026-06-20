@@ -1,7 +1,6 @@
 'use client';
 
 import { useState } from 'react';
-import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { Button } from '@/components/ui/button';
@@ -91,13 +90,6 @@ export function LoginForm({ initialError }: { initialError?: string | null }) {
                     </>
                 )}
             </Button>
-
-            <p className="text-center text-sm text-brand-muted">
-                Belum punya akun?{' '}
-                <Link href="/signup" className="font-medium text-brand-bone underline-offset-4 hover:text-brand-gold hover:underline">
-                    Daftar
-                </Link>
-            </p>
         </form>
     );
 }

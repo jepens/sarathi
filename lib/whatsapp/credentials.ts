@@ -1,11 +1,10 @@
 import { SupabaseClient } from '@supabase/supabase-js';
 import { getDefaultOrgId } from '@/lib/settings/org-context';
 
-// Per-tenant WhatsApp credential resolution (Fase 2b). Service-role paths
-// (webhook, queue) resolve the org + credentials for an incoming/outgoing
-// number. Falls back to the env credentials + default org so the original
-// single-tenant number (Sailendra) keeps working until its integration row
-// exists.
+// WhatsApp credential resolution. Single-tenant: credentials come from the
+// server environment (WHATSAPP_PHONE_NUMBER_ID / WHATSAPP_ACCESS_TOKEN /
+// WHATSAPP_APP_SECRET). The per-tenant whatsapp_integrations lookup is gone —
+// there is one number, configured via env.
 
 export interface WhatsAppSendCreds {
     phoneNumberId: string;
@@ -17,9 +16,8 @@ export interface WhatsAppContext extends WhatsAppSendCreds {
     appSecret: string | null;
 }
 
-function envCreds(): WhatsAppContext & { orgId: '' } {
+function envCreds(): WhatsAppSendCreds & { appSecret: string | null } {
     return {
-        orgId: '',
         phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID || '',
         accessToken: process.env.WHATSAPP_ACCESS_TOKEN || '',
         appSecret: process.env.WHATSAPP_APP_SECRET || null,
@@ -27,52 +25,17 @@ function envCreds(): WhatsAppContext & { orgId: '' } {
 }
 
 /**
- * Resolve the org + credentials that own an INCOMING phone_number_id (webhook).
- * No integration row → env credentials + default org (Sailendra bridge).
+ * Resolve the org + credentials for an inbound webhook. Single-tenant: always
+ * the env credentials + the one org.
  */
-export async function resolveWhatsAppContext(
-    client: SupabaseClient,
-    phoneNumberId: string | undefined | null,
-): Promise<WhatsAppContext> {
-    if (phoneNumberId) {
-        const { data } = await client
-            .from('whatsapp_integrations')
-            .select('org_id, phone_number_id, access_token, app_secret')
-            .eq('phone_number_id', phoneNumberId)
-            .maybeSingle();
-        if (data?.access_token) {
-            return {
-                orgId: data.org_id,
-                phoneNumberId: data.phone_number_id,
-                accessToken: data.access_token,
-                appSecret: data.app_secret ?? null,
-            };
-        }
-    }
-    const env = envCreds();
-    return { ...env, orgId: await getDefaultOrgId(client) };
+export async function resolveWhatsAppContext(client: SupabaseClient): Promise<WhatsAppContext> {
+    return { ...envCreds(), orgId: await getDefaultOrgId(client) };
 }
 
 /**
- * Send credentials for a given org (queue → outbound reply). Falls back to env.
+ * Send credentials for outbound replies. Single-tenant: always the env creds.
  */
-export async function getWhatsAppSendCreds(
-    client: SupabaseClient,
-    orgId: string,
-): Promise<WhatsAppSendCreds> {
-    if (orgId) {
-        const { data } = await client
-            .from('whatsapp_integrations')
-            .select('phone_number_id, access_token')
-            .eq('org_id', orgId)
-            .maybeSingle();
-        if (data?.phone_number_id && data?.access_token) {
-            return {
-                phoneNumberId: data.phone_number_id,
-                accessToken: data.access_token,
-            };
-        }
-    }
+export async function getWhatsAppSendCreds(): Promise<WhatsAppSendCreds> {
     const env = envCreds();
     return { phoneNumberId: env.phoneNumberId, accessToken: env.accessToken };
 }

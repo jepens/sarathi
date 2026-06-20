@@ -1,5 +1,11 @@
 # Sarathi — SaaS Development Roadmap
 
+> ⚠️ **HISTORIS (tidak berlaku lagi).** Aplikasi di-de-SaaS kembali ke
+> **single-tenant** (2026-06-20). Mesin multi-tenant yang menghadap pengguna
+> sudah dibuang (signup publik, kredensial WhatsApp per-tenant, pembuatan org).
+> Kolom `org_id`/RLS sengaja dipertahankan sebagai jaring pengaman, selalu
+> menunjuk satu org Sailendra. Dokumen ini disimpan sebagai catatan sejarah.
+
 > **Tujuan dokumen:** titik masuk tunggal untuk melanjutkan pengembangan Sarathi
 > sebagai SaaS multi-tenant. Berisi status terkini, ringkasan arsitektur, apa
 > yang sudah selesai, catatan operasional, dan backlog berprioritas. Untuk

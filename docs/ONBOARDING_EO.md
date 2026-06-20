@@ -1,5 +1,9 @@
 # Onboarding EO baru ke Sarathi
 
+> ⚠️ **HISTORIS (tidak berlaku lagi).** App sekarang **single-tenant**: tidak
+> ada signup publik / onboarding tenant baru. Kredensial WhatsApp dari env
+> server. Disimpan sebagai catatan sejarah.
+
 Panduan menghubungkan satu Event Organizer (tenant) baru sampai bot WhatsApp-nya
 siap melayani klien. Dashboard menampilkan checklist versi ringkas dari langkah
 ini di halaman utama sampai org mulai menerima chat.

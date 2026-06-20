@@ -33,75 +33,7 @@ export async function updateBusinessProfile(
     }
 }
 
-export interface WhatsAppIntegrationInput {
-    phoneNumberId: string;
-    wabaId: string;
-    displayPhone: string;
-    accessToken: string; // blank = keep existing secret
-    appSecret: string; // blank = keep existing secret
-}
-
-export async function saveWhatsAppIntegration(
-    input: WhatsAppIntegrationInput,
-): Promise<{ ok: boolean; error?: string }> {
-    const supabase = await createClient();
-    const {
-        data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) return { ok: false, error: 'Tidak terautentikasi.' };
-
-    const orgId = await getCurrentOrgId(supabase);
-    if (!orgId) return { ok: false, error: 'Organisasi tidak ditemukan.' };
-
-    const phoneNumberId = input.phoneNumberId.trim();
-    if (!phoneNumberId) return { ok: false, error: 'Phone Number ID wajib diisi.' };
-
-    const { data: existing } = await supabase
-        .from('whatsapp_integrations')
-        .select('org_id')
-        .eq('org_id', orgId)
-        .maybeSingle();
-
-    if (!existing && !input.accessToken.trim()) {
-        return {
-            ok: false,
-            error: 'Access Token wajib diisi saat menghubungkan pertama kali.',
-        };
-    }
-
-    // App Secret is NOT optional: the webhook verifies every inbound message's
-    // signature with this org's app_secret. Without it, verifyWhatsAppSignature
-    // returns false and every message is rejected (403) — the bot silently never
-    // replies. Require it on first connect so a tenant can't trip that trap.
-    if (!existing && !input.appSecret.trim()) {
-        return {
-            ok: false,
-            error: 'App Secret wajib diisi — tanpa itu webhook menolak semua pesan masuk (verifikasi signature gagal). Ambil di Meta App → Settings → Basic.',
-        };
-    }
-
-    const patch: Record<string, unknown> = {
-        org_id: orgId,
-        phone_number_id: phoneNumberId,
-        waba_id: input.wabaId.trim() || null,
-        display_phone: input.displayPhone.trim() || null,
-        updated_at: new Date().toISOString(),
-    };
-    if (input.accessToken.trim()) patch.access_token = input.accessToken.trim();
-    if (input.appSecret.trim()) patch.app_secret = input.appSecret.trim();
-
-    const { error } = await supabase
-        .from('whatsapp_integrations')
-        .upsert(patch, { onConflict: 'org_id' });
-
-    if (error) {
-        if (error.code === '23505') {
-            return { ok: false, error: 'Phone Number ID ini sudah dipakai organisasi lain.' };
-        }
-        console.error('saveWhatsAppIntegration failed:', error);
-        return { ok: false, error: error.message };
-    }
-
-    revalidatePath('/dashboard/settings');
-    return { ok: true };
-}
+// WhatsApp credentials are managed via server environment variables in this
+// single-tenant build (WHATSAPP_PHONE_NUMBER_ID / WHATSAPP_ACCESS_TOKEN /
+// WHATSAPP_APP_SECRET). There is no in-app save action anymore — the Settings
+// WhatsApp card is read-only.

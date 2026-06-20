@@ -13,7 +13,6 @@ import { getCurrentOrgId } from "@/lib/settings/org-context";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceOrServerClient } from "@/lib/supabase/service";
 import { WhatsAppCredentials } from "./components/WhatsAppCredentials";
-import { getMyWhatsAppIntegration } from "@/lib/whatsapp/integration";
 import { resolvePublicOrigin } from "@/lib/utils/public-url";
 import { headers } from "next/headers";
 
@@ -36,7 +35,9 @@ export default async function SettingsPage() {
     const businessProfile = orgId
         ? await getBusinessProfile(supabase, orgId)
         : { ...GENERIC_BUSINESS_PROFILE };
-    const waIntegration = await getMyWhatsAppIntegration();
+    // Single-tenant: WhatsApp credentials live in server env, not the DB.
+    const waEnvConfigured =
+        !!process.env.WHATSAPP_PHONE_NUMBER_ID && !!process.env.WHATSAPP_ACCESS_TOKEN;
 
     return (
         <div className="space-y-4 sm:space-y-6">
@@ -52,7 +53,7 @@ export default async function SettingsPage() {
                 businessProfileTab={<BusinessProfileEditor initial={businessProfile} />}
                 whatsappTab={
                     <div className="space-y-6">
-                        <WhatsAppCredentials initial={waIntegration} />
+                        <WhatsAppCredentials envConfigured={waEnvConfigured} />
                         <WebhookSettings
                             webhookUrl={webhookUrl}
                             verifyToken={verifyToken}

@@ -1,14 +1,8 @@
-import { AuthShell } from '@/components/auth/auth-shell';
-import { SignupForm } from './SignupForm';
+import { redirect } from 'next/navigation';
 
+// Single-tenant: public self-serve signup is disabled. The owner account is
+// pre-provisioned (created by an admin in Supabase), so /signup just sends
+// people to the login page.
 export default function SignupPage() {
-    return (
-        <AuthShell
-            eyebrow="Buat akun"
-            title="Daftar EO baru"
-            subtitle="Akun gratis untuk Event Organizer Anda — siap dalam semenit."
-        >
-            <SignupForm />
-        </AuthShell>
-    );
+    redirect('/login');
 }
