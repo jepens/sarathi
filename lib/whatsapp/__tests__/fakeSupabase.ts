@@ -8,6 +8,7 @@
 //   from(t).insert(x).select('id').single()
 //   from(t).select('...').eq().eq().maybeSingle()
 //   from(t).select('...').eq().eq().order().limit(n)
+//   from(t).select('...').gte().lte().neq().is().not()  // awaited (range/null)
 //   from(t).update(x).in('id', ids)        // awaited
 //   from(t).update(x).eq('id', id)         // awaited
 //   from(t).upsert(x, opts)                // awaited
@@ -69,6 +70,13 @@ export function makeFakeSupabase(opts: {
             upsert(p: unknown, o?: unknown) { ctx.op = 'upsert'; ctx.payload = p; ctx.upsertOpts = o; return b; },
             delete() { ctx.op = 'delete'; return b; },
             eq(c: string, v: unknown) { ctx.filters.push(['eq', c, v]); return b; },
+            neq(c: string, v: unknown) { ctx.filters.push(['neq', c, v]); return b; },
+            gt(c: string, v: unknown) { ctx.filters.push(['gt', c, v]); return b; },
+            gte(c: string, v: unknown) { ctx.filters.push(['gte', c, v]); return b; },
+            lt(c: string, v: unknown) { ctx.filters.push(['lt', c, v]); return b; },
+            lte(c: string, v: unknown) { ctx.filters.push(['lte', c, v]); return b; },
+            is(c: string, v: unknown) { ctx.filters.push(['is', c, v]); return b; },
+            not(c: string, op: string, v: unknown) { ctx.filters.push(['not', c, [op, v]]); return b; },
             in(c: string, v: unknown) { ctx.filters.push(['in', c, v]); return finalize(); },
             order() { return b; }, // args (column, {ascending}) are ignored by the fake
             limit(n: number) { ctx.limitN = n; return finalize(); },

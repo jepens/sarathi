@@ -1,8 +1,8 @@
 name: CI
 
-# Menjalankan test suite (Vitest) otomatis di setiap push dan pull request,
-# sehingga regresi pada pipeline WhatsApp (coalescing / idempotency / resend
-# safety) langsung ketahuan sebelum di-deploy.
+# Gate setiap push & pull request dengan lint, typecheck, unit test (Vitest),
+# dan build produksi — sehingga regresi (mis. pipeline WhatsApp, util uang, atau
+# utility Tailwind yang tak valid) ketahuan sebelum di-deploy, bukan saat deploy.
 on:
   push:
   pull_request:
@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   test:
-    name: Test (Vitest)
+    name: Lint · Typecheck · Test · Build
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -36,5 +36,22 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
       - name: Run tests
         run: npm test
+
+      # Compile the app so changes that typecheck but break the build (e.g. an
+      # invalid Tailwind utility) are caught here, not at deploy. The NEXT_PUBLIC_*
+      # values are placeholders — the build only needs them to exist.
+      - name: Build
+        run: npm run build
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: placeholder-anon-key
+          NEXT_PUBLIC_APP_URL: https://example.com
+          NEXT_PUBLIC_TURNSTILE_SITE_KEY: 1x00000000000000000000AA
