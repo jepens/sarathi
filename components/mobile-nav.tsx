@@ -51,7 +51,7 @@ export function MobileNav() {
                     aria-describedby={undefined}
                     className="w-[82%] max-w-xs border-sidebar-border bg-sidebar p-0 text-sidebar-foreground"
                 >
-                    <SheetTitle className="sr-only">Navigasi Helat</SheetTitle>
+                    <SheetTitle className="sr-only">Navigasi Sarathi</SheetTitle>
                     <SidebarNav onNavigate={() => setOpen(false)} />
                 </SheetContent>
             </Sheet>

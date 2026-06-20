@@ -31,7 +31,10 @@ const STAGE_META: Record<string, { label: string; color: string }> = {
     lost: { label: 'Lost', color: 'bg-rose-500' },
 };
 const FUNNEL_ORDER = ['unstaged', 'new', 'qualifying', 'quoted', 'scheduled', 'booked', 'won', 'lost'];
-const CHART_COLORS = ['#10b981', '#3b82f6', '#f59e0b', '#8b5cf6', '#06b6d4', '#ec4899', '#ef4444', '#64748b'];
+// Categorical series — lead with the brand (gold = Kanaka, indigo = Nila) then
+// functional accents. Literal hex because recharts sets SVG `fill` attributes,
+// which don't resolve CSS custom properties; these mirror the --brand-* tokens.
+const CHART_COLORS = ['#e6b450', '#818cf8', '#34d399', '#22d3ee', '#fbbf24', '#f472b6', '#f87171', '#94a3b8'];
 
 const TOOLTIP_STYLE = {
     backgroundColor: 'var(--popover)',
@@ -203,7 +206,7 @@ export default function ReportsPage() {
                                         contentStyle={TOOLTIP_STYLE}
                                         formatter={(v) => [formatRupiah(Number(v)), 'Revenue']}
                                     />
-                                    <Bar dataKey="revenue" fill="#10b981" radius={[4, 4, 0, 0]} />
+                                    <Bar dataKey="revenue" fill="#e6b450" radius={[4, 4, 0, 0]} />
                                 </BarChart>
                             </ResponsiveContainer>
                         </div>

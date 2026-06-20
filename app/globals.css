@@ -7,6 +7,16 @@
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --font-sans: var(--font-inter);
+  /* Sarathi brand tokens (Kanaka & Nila) — values defined in :root below.
+     Exposed as utilities: bg-brand-gold, text-brand-indigo, border-brand-brass… */
+  --color-brand-ink: var(--brand-ink);
+  --color-brand-surface: var(--brand-surface);
+  --color-brand-bone: var(--brand-bone);
+  --color-brand-muted: var(--brand-muted);
+  --color-brand-gold: var(--brand-gold);
+  --color-brand-brass: var(--brand-brass);
+  --color-brand-indigo: var(--brand-indigo);
+  --color-brand-indigo-lit: var(--brand-indigo-lit);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -44,6 +54,19 @@
 
 :root {
   --radius: 0.5rem;
+  /* ── Sarathi brand tokens (Kanaka & Nila) ──────────────────────────
+     Identity colors for the always-dark marketing/auth surfaces (and,
+     later, the dashboard "cockpit"). Same value in light & dark — they're
+     brand constants, not theme-reactive UI tokens. The Krishna/sarathi
+     palette: nila (indigo) + heritage gold on night ink. */
+  --brand-ink: #0b0b0e;        /* base malam */
+  --brand-surface: #16161c;    /* kartu / panel */
+  --brand-bone: #f4f1e9;       /* teks terang */
+  --brand-muted: #8b8a94;      /* teks sekunder */
+  --brand-gold: #e6b450;       /* Kanaka — aksen primer (menang/perayaan) */
+  --brand-brass: #b8862f;      /* hairline / grid wash */
+  --brand-indigo: #4f46e5;     /* Nila — sais / AI */
+  --brand-indigo-lit: #818cf8; /* state aktif / teks indigo on-dark */
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);

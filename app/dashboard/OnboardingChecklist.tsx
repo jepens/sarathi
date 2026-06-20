@@ -75,10 +75,10 @@ export function OnboardingChecklist() {
     };
 
     return (
-        <Card className="border-primary/30 bg-primary/[0.03]">
+        <Card className="border-brand-gold/30 bg-brand-gold/[0.04]">
             <CardHeader>
                 <CardTitle className="flex items-center gap-2">
-                    Selesaikan setup Helat Anda
+                    Selesaikan setup Sarathi Anda
                     <span className="text-sm font-normal text-muted-foreground">
                         {doneCount}/{STEP_DEFS.length} langkah
                     </span>
@@ -125,7 +125,7 @@ export function OnboardingChecklist() {
                     phone_number_id). */}
                 <div className="space-y-2 rounded-lg border border-dashed p-3">
                     <p className="flex items-center gap-2 text-sm font-medium">
-                        <Webhook className="h-4 w-4" /> Arahkan webhook Meta ke Helat
+                        <Webhook className="h-4 w-4" /> Arahkan webhook Meta ke Sarathi
                     </p>
                     <p className="text-xs text-muted-foreground">
                         Di Meta App → WhatsApp → Configuration, isi Callback URL &

@@ -1,4 +1,4 @@
-# Onboarding EO baru ke Helat
+# Onboarding EO baru ke Sarathi
 
 Panduan menghubungkan satu Event Organizer (tenant) baru sampai bot WhatsApp-nya
 siap melayani klien. Dashboard menampilkan checklist versi ringkas dari langkah
@@ -27,9 +27,9 @@ Dari Meta App (WhatsApp → API Setup) masukkan:
 - **Access Token** dan **App Secret** (disimpan write-only; App Secret dipakai
   verifikasi signature webhook, Access Token untuk mengirim balasan)
 
-## 4. Arahkan webhook Meta ke Helat
+## 4. Arahkan webhook Meta ke Sarathi
 Di Meta App → WhatsApp → Configuration:
-- **Callback URL**: URL Helat + `/api/webhook/whatsapp`
+- **Callback URL**: URL Sarathi + `/api/webhook/whatsapp`
   (lihat Settings → WhatsApp, atau checklist di dashboard)
 - **Verify Token**: token yang sama untuk semua tenant (webhook melakukan routing
   berdasarkan `phone_number_id` di payload, lalu verifikasi signature dengan

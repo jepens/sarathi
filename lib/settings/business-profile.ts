@@ -1,6 +1,6 @@
 import { SupabaseClient } from '@supabase/supabase-js';
 
-// Helat is a vertical SaaS for Event Organizers. A tenant's identity — company
+// Sarathi is a vertical SaaS for Event Organizers. A tenant's identity — company
 // name, the WhatsApp persona's name, specialties, hand-off contact, etc. — used
 // to be hardcoded as "Sailendra / Nindra" across the AI + proposal code, then
 // lived as one GLOBAL profile in app_settings. It now lives per-org in the

@@ -1,6 +1,6 @@
 # Tiny self-hosted cron service for Easypanel.
 #
-# Purpose: hit Helat's queue drainer (/api/queue/process) once a minute so that
+# Purpose: hit Sarathi's queue drainer (/api/queue/process) once a minute so that
 # retried and stranded WhatsApp jobs get processed even when no new message is
 # arriving (the webhook only drains inline on inbound messages). This is the
 # Easypanel-sanctioned "Dockerfile + crond" pattern — run it as a SEPARATE

@@ -1,5 +1,6 @@
 import { Space_Grotesk, JetBrains_Mono } from 'next/font/google';
-import { Ticket, MessageSquare, Radio, ShieldCheck } from 'lucide-react';
+import { MessageSquare, Radio, ShieldCheck } from 'lucide-react';
+import { SarathiMark } from '@/components/sarathi-mark';
 
 // Same display + rail fonts as the landing hero, so the front door matches the
 // marketing site exactly.
@@ -25,7 +26,7 @@ const RAIL_MAX = 6;
 
 const gridWash = {
     backgroundImage:
-        'linear-gradient(#B8862F 1px, transparent 1px), linear-gradient(90deg, #B8862F 1px, transparent 1px)',
+        'linear-gradient(var(--brand-brass) 1px, transparent 1px), linear-gradient(90deg, var(--brand-brass) 1px, transparent 1px)',
     backgroundSize: '46px 46px',
 };
 
@@ -42,10 +43,10 @@ export function AuthShell({
 }) {
     return (
         <main
-            className={`${spaceGrotesk.variable} ${jetbrainsMono.variable} min-h-screen bg-[#0B0B0E] text-[#F4F1E9] selection:bg-[#E6B450]/25 lg:grid lg:grid-cols-[1.05fr_0.95fr]`}
+            className={`${spaceGrotesk.variable} ${jetbrainsMono.variable} min-h-screen bg-brand-ink text-brand-bone selection:bg-brand-gold/25 lg:grid lg:grid-cols-[1.05fr_0.95fr]`}
         >
             {/* ── Brand panel (lg+) ─────────────────────────────────────── */}
-            <aside className="relative hidden overflow-hidden border-r border-[#B8862F]/20 p-10 lg:flex lg:flex-col lg:justify-between xl:p-14">
+            <aside className="relative hidden overflow-hidden border-r border-brand-brass/20 p-10 lg:flex lg:flex-col lg:justify-between xl:p-14">
                 <div aria-hidden className="pointer-events-none absolute inset-0 opacity-[0.04]" style={gridWash} />
 
                 <Wordmark />
@@ -53,15 +54,15 @@ export function AuthShell({
                 <div className="relative z-10 max-w-md">
                     <h1 className="font-display text-[clamp(2rem,3.3vw,3rem)] leading-[1.05] font-bold tracking-tight">
                         Dari chat WhatsApp,{' '}
-                        <span className="text-[#E6B450]">jadi acara ter-booking.</span>
+                        <span className="text-brand-gold">jadi acara ter-booking.</span>
                     </h1>
 
                     {/* Live pipeline rail */}
-                    <div className="mt-8 overflow-hidden rounded-xl border border-[#B8862F]/30 bg-[#16161C] shadow-[0_30px_80px_-30px_rgba(0,0,0,0.85)]">
-                        <div className="flex items-center justify-between border-b border-[#B8862F]/20 px-4 py-3">
-                            <span className="font-rail text-[11px] tracking-[0.22em] text-[#8B8A94] uppercase">
+                    <div className="mt-8 overflow-hidden rounded-xl border border-brand-brass/30 bg-brand-surface shadow-[0_30px_80px_-30px_rgba(0,0,0,0.85)]">
+                        <div className="flex items-center justify-between border-b border-brand-brass/20 px-4 py-3">
+                            <span className="font-rail text-[11px] tracking-[0.22em] text-brand-muted uppercase">
                                 Pipeline
-                                <span className="ml-1.5 tracking-normal text-[#8B8A94]/60 normal-case">
+                                <span className="ml-1.5 tracking-normal text-brand-muted/60 normal-case">
                                     / Lead
                                 </span>
                             </span>
@@ -74,12 +75,11 @@ export function AuthShell({
                             {RAIL.map((s) => (
                                 <li
                                     key={s.label}
-                                    className={`relative flex items-center gap-3 border-b border-[#B8862F]/10 px-4 py-2.5 last:border-b-0 ${
-                                        s.active ? 'bg-[#E6B450]/[0.06]' : ''
-                                    }`}
+                                    className={`relative flex items-center gap-3 border-b border-brand-brass/10 px-4 py-2.5 last:border-b-0 ${s.active ? 'bg-brand-gold/[0.06]' : ''
+                                        }`}
                                 >
                                     {s.active && (
-                                        <span aria-hidden className="absolute inset-y-0 left-0 w-0.5 bg-[#E6B450]" />
+                                        <span aria-hidden className="absolute inset-y-0 left-0 w-0.5 bg-brand-gold" />
                                     )}
                                     <span
                                         className="h-2.5 w-2.5 shrink-0 rounded-full"
@@ -88,7 +88,7 @@ export function AuthShell({
                                     <span className="font-rail w-20 shrink-0 text-sm tracking-[0.06em] uppercase">
                                         {s.label}
                                     </span>
-                                    <span className="relative h-1.5 flex-1 overflow-hidden rounded-full bg-[#0B0B0E]">
+                                    <span className="relative h-1.5 flex-1 overflow-hidden rounded-full bg-brand-ink">
                                         <span
                                             className="absolute inset-y-0 left-0 rounded-full"
                                             style={{ width: `${(s.count / RAIL_MAX) * 100}%`, backgroundColor: s.color }}
@@ -104,15 +104,15 @@ export function AuthShell({
                             ))}
                         </ul>
 
-                        <div className="flex items-center gap-3 border-t border-[#B8862F]/20 px-4 py-3">
+                        <div className="flex items-center gap-3 border-t border-brand-brass/20 px-4 py-3">
                             <span className="grid h-7 w-7 shrink-0 place-items-center rounded-md bg-[#34D399]/15">
                                 <MessageSquare className="h-3.5 w-3.5 text-[#34D399]" />
                             </span>
                             <div className="min-w-0 flex-1">
-                                <p className="font-rail text-[10px] tracking-[0.16em] text-[#8B8A94] uppercase">
+                                <p className="font-rail text-[10px] tracking-[0.16em] text-brand-muted uppercase">
                                     Lead baru dari WhatsApp
                                 </p>
-                                <p className="truncate text-sm">Budi · Wedding 300 pax</p>
+                                <p className="truncate text-sm">Budi · Employee Gathering 300 pax</p>
                             </div>
                             <span className="font-rail shrink-0 text-[10px] tracking-[0.18em] text-[#22D3EE] uppercase">
                                 → Booked
@@ -121,8 +121,8 @@ export function AuthShell({
                     </div>
                 </div>
 
-                <div className="font-rail relative z-10 flex items-center gap-2 text-[11px] tracking-[0.18em] text-[#8B8A94] uppercase">
-                    <ShieldCheck className="h-3.5 w-3.5 text-[#E6B450]" /> Data tiap EO terisolasi penuh
+                <div className="font-rail relative z-10 flex items-center gap-2 text-[11px] tracking-[0.18em] text-brand-muted uppercase">
+                    <ShieldCheck className="h-3.5 w-3.5 text-brand-gold" /> Data tiap EO terisolasi penuh
                 </div>
             </aside>
 
@@ -133,9 +133,9 @@ export function AuthShell({
                         <Wordmark />
                     </div>
 
-                    <p className="font-rail text-[11px] tracking-[0.22em] text-[#E6B450] uppercase">{eyebrow}</p>
+                    <p className="font-rail text-[11px] tracking-[0.22em] text-brand-gold uppercase">{eyebrow}</p>
                     <h2 className="font-display mt-2.5 text-3xl font-bold tracking-tight">{title}</h2>
-                    <p className="mt-2 text-sm text-[#8B8A94]">{subtitle}</p>
+                    <p className="mt-2 text-sm text-brand-muted">{subtitle}</p>
 
                     <div className="mt-8">{children}</div>
                 </div>
@@ -147,11 +147,11 @@ export function AuthShell({
 function Wordmark() {
     return (
         <div className="relative z-10 flex items-center gap-2.5">
-            <span className="grid h-9 w-9 place-items-center rounded-md border border-[#B8862F]/40 bg-[#16161C]">
-                <Ticket className="h-[18px] w-[18px] text-[#E6B450]" />
+            <span className="grid h-9 w-9 place-items-center rounded-md border border-brand-brass/40 bg-brand-surface">
+                <SarathiMark className="h-[22px] w-[22px]" />
             </span>
-            <span className="font-display text-lg font-semibold tracking-tight">Helat</span>
-            <span className="font-rail ml-0.5 text-[10px] tracking-[0.18em] text-[#8B8A94] uppercase">
+            <span className="font-display text-lg font-semibold tracking-tight">Sarathi</span>
+            <span className="font-rail ml-0.5 text-[10px] tracking-[0.18em] text-brand-muted uppercase">
                 by Sailendra
             </span>
         </div>

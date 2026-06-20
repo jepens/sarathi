@@ -1,6 +1,6 @@
-# Helat — SaaS Development Roadmap
+# Sarathi — SaaS Development Roadmap
 
-> **Tujuan dokumen:** titik masuk tunggal untuk melanjutkan pengembangan Helat
+> **Tujuan dokumen:** titik masuk tunggal untuk melanjutkan pengembangan Sarathi
 > sebagai SaaS multi-tenant. Berisi status terkini, ringkasan arsitektur, apa
 > yang sudah selesai, catatan operasional, dan backlog berprioritas. Untuk
 > rencana teknis awal multi-tenancy lihat [PHASE1_MULTITENANCY.md](PHASE1_MULTITENANCY.md);
@@ -13,7 +13,7 @@
 
 ## 1. Visi
 
-**Helat** ("Helat — by Sailendra") = SaaS vertikal untuk **Event Organizer**.
+**Sarathi** ("Sarathi — by Sailendra") = SaaS vertikal untuk **Event Organizer**.
 Inti produk: asisten WhatsApp ber-AI yang mengubah chat klien menjadi acara
 ter-booking, dengan KB, pipeline lead, dan kalender per-tenant. Sailendra adalah
 tenant pertama sekaligus perusahaan di balik produk.
@@ -56,7 +56,7 @@ verify-token = env/app_settings global.
 
 | Fase | Isi | Migrasi |
 |---|---|---|
-| **0** | Rebrand → Helat; identitas Sailendra jadi BusinessProfile yang dapat dikonfigurasi | — |
+| **0** | Rebrand → Helat (nama kini Sarathi); identitas Sailendra jadi BusinessProfile yang dapat dikonfigurasi | — |
 | **1a/1c** | Fondasi isolasi: org + members + helper + `org_id` 11 tabel + RLS; `match_*` filter org | `0025`–`0030` |
 | **1b** | Signup auto-buat org + owner; `/signup` + `/auth/confirm` | `0031` |
 | **2a** | Kredensial WhatsApp per-org (entry manual, bukan Embedded Signup) | `0032` |
@@ -118,7 +118,7 @@ chat hanya tampil di dashboard org pilot (tidak di Sailendra, dan sebaliknya).
 **Utang lain (catat, prioritas rendah):** `scripts/backfill-contacts.mjs` masih
 phone-only; webhook punya forward hardcoded `MUDIK_PHONE_NUMBER_ID` →
 mudik.buildwithabdul.com (milik proyek "Mudik" terpisah, load-bearing di sana,
-bukan urusan Helat).
+bukan urusan Sarathi).
 
 ## 8. Landmine yang sudah diketahui (baca sebelum mengubah)
 

@@ -8,13 +8,13 @@ import { SwRegister } from "@/components/sw-register";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Helat — Asisten Event Organizer di WhatsApp",
+  title: "Sarathi — Asisten Event Organizer di WhatsApp",
   description: "Dari chat WhatsApp, jadi acara ter-booking. Asisten AI untuk Event Organizer.",
-  applicationName: "Helat",
+  applicationName: "Sarathi",
   // Installable PWA niceties for iOS "Add to Home Screen".
   appleWebApp: {
     capable: true,
-    title: "Helat",
+    title: "Sarathi",
     statusBarStyle: "default",
   },
 };

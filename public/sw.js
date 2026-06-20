@@ -2,7 +2,7 @@
 // Deliberately conservative: it does NOT cache Next.js's hashed assets (which
 // would risk serving stale code) — it only intercepts top-level navigations and
 // serves a cached offline page when the network is unavailable.
-const CACHE = 'helat-v1';
+const CACHE = 'sarathi-v1';
 const OFFLINE_URL = '/offline.html';
 
 self.addEventListener('install', (event) => {

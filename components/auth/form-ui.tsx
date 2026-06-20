@@ -8,8 +8,8 @@ import { Eye, EyeOff, AlertCircle, CheckCircle2 } from 'lucide-react';
 // #16161C surface, brass hairline, gold focus) rather than the neutral shadcn
 // theme tokens, so the auth pages read as the same product as the marketing site.
 export const FIELD =
-    'h-11 bg-[#16161C] dark:bg-[#16161C] border-[#B8862F]/30 text-[#F4F1E9] ' +
-    'placeholder:text-[#8B8A94]/60 focus-visible:border-[#E6B450]/60 focus-visible:ring-[#E6B450]/25';
+    'h-11 bg-brand-surface dark:bg-brand-surface border-brand-brass/30 text-brand-bone ' +
+    'placeholder:text-brand-muted/60 focus-visible:border-brand-gold/60 focus-visible:ring-brand-gold/25';
 
 export function FormAlert({
     kind,
@@ -68,7 +68,7 @@ export function PasswordInput({
                 tabIndex={-1}
                 onClick={() => setShow((v) => !v)}
                 aria-label={show ? 'Sembunyikan password' : 'Tampilkan password'}
-                className="absolute inset-y-0 right-0 flex w-10 items-center justify-center text-[#8B8A94] transition-colors hover:text-[#F4F1E9]"
+                className="absolute inset-y-0 right-0 flex w-10 items-center justify-center text-brand-muted transition-colors hover:text-brand-bone"
             >
                 {show ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
             </button>
@@ -78,5 +78,5 @@ export function PasswordInput({
 
 // Shared gold CTA — the one bold action on each auth page.
 export const CTA =
-    'h-11 w-full bg-[#E6B450] font-semibold text-[#0B0B0E] hover:bg-[#E6B450]/90 ' +
-    'focus-visible:ring-[#E6B450]/70 disabled:opacity-50';
+    'h-11 w-full bg-brand-gold font-semibold text-brand-ink hover:bg-brand-gold/90 ' +
+    'focus-visible:ring-brand-gold/70 disabled:opacity-50';

@@ -27,7 +27,7 @@ function passwordChecks(pw: string) {
 }
 
 const STRENGTH = [
-    { label: 'Terlalu pendek', bar: 'bg-[#1F1F26]', text: 'text-[#8B8A94]' },
+    { label: 'Terlalu pendek', bar: 'bg-[#1F1F26]', text: 'text-brand-muted' },
     { label: 'Lemah', bar: 'bg-[#F87171]', text: 'text-[#F87171]' },
     { label: 'Cukup', bar: 'bg-[#FBBF24]', text: 'text-[#FBBF24]' },
     { label: 'Kuat', bar: 'bg-[#34D399]', text: 'text-[#34D399]' },
@@ -190,16 +190,16 @@ export function SignupForm() {
                 )}
             </div>
 
-            <label className="flex cursor-pointer items-start gap-2.5 text-sm text-[#8B8A94]">
+            <label className="flex cursor-pointer items-start gap-2.5 text-sm text-brand-muted">
                 <input
                     type="checkbox"
                     checked={agree}
                     onChange={(e) => setAgree(e.target.checked)}
-                    className="mt-0.5 h-4 w-4 shrink-0 rounded border-[#B8862F]/40 accent-[#E6B450]"
+                    className="mt-0.5 h-4 w-4 shrink-0 rounded border-brand-brass/40 accent-brand-gold"
                 />
                 <span>
-                    Saya setuju dengan <span className="font-medium text-[#F4F1E9]">Syarat &amp; Ketentuan</span> dan{' '}
-                    <span className="font-medium text-[#F4F1E9]">Kebijakan Privasi</span> Helat.
+                    Saya setuju dengan <span className="font-medium text-brand-bone">Syarat &amp; Ketentuan</span> dan{' '}
+                    <span className="font-medium text-brand-bone">Kebijakan Privasi</span> Sarathi.
                 </span>
             </label>
 
@@ -217,13 +217,13 @@ export function SignupForm() {
                 )}
             </Button>
 
-            <p className="font-rail flex items-center justify-center gap-1.5 text-[10px] tracking-[0.16em] text-[#8B8A94] uppercase">
+            <p className="font-rail flex items-center justify-center gap-1.5 text-[10px] tracking-[0.16em] text-brand-muted uppercase">
                 <Lock className="h-3 w-3" /> Terenkripsi · konfirmasi via email
             </p>
 
-            <p className="text-center text-sm text-[#8B8A94]">
+            <p className="text-center text-sm text-brand-muted">
                 Sudah punya akun?{' '}
-                <Link href="/login" className="font-medium text-[#F4F1E9] underline-offset-4 hover:text-[#E6B450] hover:underline">
+                <Link href="/login" className="font-medium text-brand-bone underline-offset-4 hover:text-brand-gold hover:underline">
                     Masuk
                 </Link>
             </p>
@@ -233,7 +233,7 @@ export function SignupForm() {
 
 function Req({ ok, label }: { ok: boolean; label: string }) {
     return (
-        <li className={`flex items-center gap-1.5 ${ok ? 'text-[#34D399]' : 'text-[#8B8A94]'}`}>
+        <li className={`flex items-center gap-1.5 ${ok ? 'text-[#34D399]' : 'text-brand-muted'}`}>
             {ok ? <Check className="h-3 w-3" /> : <X className="h-3 w-3 opacity-40" />}
             {label}
         </li>

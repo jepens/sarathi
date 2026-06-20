@@ -67,7 +67,7 @@ function navItemClasses(active: boolean): string {
         "relative w-full justify-start gap-2 font-normal text-sidebar-foreground/70",
         "hover:bg-sidebar-accent hover:text-sidebar-foreground",
         active &&
-            "bg-sidebar-accent font-medium text-sidebar-foreground before:absolute before:inset-y-1.5 before:left-0 before:w-0.5 before:rounded-full before:bg-primary before:content-['']"
+            "bg-sidebar-accent font-medium text-sidebar-foreground before:absolute before:inset-y-1.5 before:left-0 before:w-0.5 before:rounded-full before:bg-brand-gold before:content-['']"
     )
 }
 

@@ -92,9 +92,9 @@ export function LoginForm({ initialError }: { initialError?: string | null }) {
                 )}
             </Button>
 
-            <p className="text-center text-sm text-[#8B8A94]">
+            <p className="text-center text-sm text-brand-muted">
                 Belum punya akun?{' '}
-                <Link href="/signup" className="font-medium text-[#F4F1E9] underline-offset-4 hover:text-[#E6B450] hover:underline">
+                <Link href="/signup" className="font-medium text-brand-bone underline-offset-4 hover:text-brand-gold hover:underline">
                     Daftar
                 </Link>
             </p>

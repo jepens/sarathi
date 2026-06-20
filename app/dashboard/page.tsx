@@ -93,7 +93,7 @@ export default function DashboardPage() {
             <div>
                 <h2 className="text-lg font-bold tracking-tight sm:text-2xl lg:text-3xl">Dashboard Overview</h2>
                 <p className="text-muted-foreground">
-                    Selamat datang di Helat — AI untuk Event Organizer
+                    Selamat datang di Sarathi — AI untuk Event Organizer
                 </p>
             </div>
 

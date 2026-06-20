@@ -1,4 +1,4 @@
-# Mobile UX Audit — Helat Dashboard
+# Mobile UX Audit — Sarathi Dashboard
 
 > Audited at ~390–430px (iPhone 14 Pro Max is 430px). Stack: Next 16 (App Router, react-compiler), React 19, Tailwind v4, shadcn-style Radix UI (`components/ui/`), lucide-react, framer-motion. styled-jsx is banned here (Turbopack + react-compiler hydration bug) — use `globals.css` / Tailwind arbitrary values.
 

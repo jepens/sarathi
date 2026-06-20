@@ -1,11 +1,11 @@
 import type { MetadataRoute } from 'next'
 
-// Web App Manifest — makes Helat installable to the home screen (Add to Home
+// Web App Manifest — makes Sarathi installable to the home screen (Add to Home
 // Screen on iOS, install prompt on Android/desktop) and launch standalone.
 export default function manifest(): MetadataRoute.Manifest {
     return {
-        name: 'Helat — Asisten Event Organizer',
-        short_name: 'Helat',
+        name: 'Sarathi — Asisten Event Organizer',
+        short_name: 'Sarathi',
         description:
             'Dari chat WhatsApp, jadi acara ter-booking. Asisten AI untuk Event Organizer.',
         start_url: '/dashboard',

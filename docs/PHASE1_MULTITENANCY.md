@@ -1,4 +1,4 @@
-# Fase 1 — Multi-tenancy (Helat)
+# Fase 1 — Multi-tenancy (Sarathi)
 
 > Rencana teknis untuk direview sebelum coding. Keputusan: **1 user = 1 EO**,
 > **org diturunkan dari login (tanpa subdomain)**. Masih satu Supabase project &
