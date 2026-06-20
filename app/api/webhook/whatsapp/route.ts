@@ -306,6 +306,12 @@ export async function POST(request: Request) {
                 // at-least-once, so this is our idempotency key: a redelivery of
                 // the same message must not enqueue (or store) it twice.
                 const inboundWamid: string | null = typeof message.id === 'string' ? message.id : null;
+                if (!inboundWamid) {
+                    // Well-formed messages always carry a wamid; a missing one
+                    // means our at-least-once dedup (keyed on wamid) is bypassed
+                    // for this message. Log it so the blind spot is observable.
+                    whatsappLogger.warn(`Inbound ${messageType} message from ${from} has no usable message id — wamid dedup bypassed`);
+                }
 
                 // BSUID (business-scoped user ID). Present in contacts[].user_id
                 // and/or messages[].from_user_id. Used as a secondary identity

@@ -14,11 +14,19 @@ import { whatsappLogger } from '@/lib/utils/logger';
 
 export async function GET(request: Request) {
     try {
-        // Optional: Add authentication
         const authHeader = request.headers.get('authorization');
         const cronSecret = process.env.CRON_SECRET;
 
-        if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
+        // This endpoint drains the queue (sends WhatsApp replies) and triggers
+        // the follow-up digest, so it must be authenticated in production. When
+        // CRON_SECRET is unset it would be OPEN to anyone — refuse rather than
+        // run unprotected. Local dev stays frictionless (no secret required).
+        if (!cronSecret) {
+            if (process.env.NODE_ENV === 'production') {
+                whatsappLogger.error('CRON_SECRET is not set in production — refusing to run the unauthenticated queue endpoint');
+                return new NextResponse('Server misconfigured: CRON_SECRET required', { status: 503 });
+            }
+        } else if (authHeader !== `Bearer ${cronSecret}`) {
             whatsappLogger.warn('Unauthorized queue process attempt');
             return new NextResponse('Unauthorized', { status: 401 });
         }
@@ -43,6 +51,21 @@ export async function GET(request: Request) {
             await maybeSendFollowupDigest(supabase);
         } catch (digestError) {
             whatsappLogger.error('Follow-up digest check failed', digestError);
+        }
+
+        // Prune old completed/failed queue rows (and stale rate-limit rows) so
+        // the table and the wamid idempotency indexes don't grow unbounded.
+        // Guarded to ~once/hour (this endpoint runs every minute); never let it
+        // break the queue. Retention is 24h, safely beyond Meta's redelivery
+        // horizon, so pruning can't reopen the dedup window.
+        if (new Date().getMinutes() === 0) {
+            try {
+                await supabase.rpc('cleanup_old_queue_entries');
+                await supabase.rpc('cleanup_old_rate_limits');
+                whatsappLogger.info('Hourly queue/rate-limit cleanup done');
+            } catch (cleanupError) {
+                whatsappLogger.error('Queue cleanup failed', cleanupError);
+            }
         }
 
         return NextResponse.json({ success: true, message: 'Queue processed' });

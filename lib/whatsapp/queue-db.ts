@@ -143,7 +143,9 @@ export async function processQueue(client?: SupabaseClient): Promise<void> {
 
         for (const group of groups.values()) {
             // Stable chronological order so the coalesced turn reads correctly.
-            group.sort((a, b) => a.created_at.localeCompare(b.created_at));
+            // Tie-break on id so same-millisecond messages keep a deterministic
+            // order instead of reshuffling between runs.
+            group.sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id));
             await processConversation(group, supabase);
         }
 
