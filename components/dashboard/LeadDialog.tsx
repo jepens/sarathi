@@ -25,6 +25,7 @@ import {
     leadInputSchema,
     leadFieldsSchema,
     sourceLabel,
+    isSyntheticPhone,
     LEAD_SOURCE_OPTIONS,
     LEAD_SOURCE_VALUES,
     LEAD_STAGE_OPTIONS,
@@ -109,7 +110,7 @@ interface LeadDialogProps {
 
 export function LeadDialog({ open, onOpenChange, onSuccess, leadToEdit }: LeadDialogProps) {
     const isEdit = !!leadToEdit;
-    const isSynthetic = !!leadToEdit?.phone_number.startsWith('manual:');
+    const isSynthetic = isSyntheticPhone(leadToEdit?.phone_number);
 
     const [loading, setLoading] = useState(false);
     const [form, setForm] = useState<LeadFormState>(EMPTY_FORM);
@@ -120,7 +121,7 @@ export function LeadDialog({ open, onOpenChange, onSuccess, leadToEdit }: LeadDi
         if (leadToEdit) {
             setForm({
                 contact_name: leadToEdit.contact_name ?? '',
-                phone_number: leadToEdit.phone_number.startsWith('manual:')
+                phone_number: isSyntheticPhone(leadToEdit.phone_number)
                     ? ''
                     : leadToEdit.phone_number,
                 email: leadToEdit.email ?? '',

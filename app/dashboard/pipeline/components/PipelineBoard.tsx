@@ -19,6 +19,7 @@ import {
     Trash2,
     CalendarPlus,
     Download,
+    ExternalLink,
 } from 'lucide-react';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
@@ -38,13 +39,14 @@ import {
     DialogFooter,
 } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
-import { sourceLabel, leadToCsvRow } from '@/lib/leads/schema';
+import { sourceLabel, leadToCsvRow, isSyntheticPhone } from '@/lib/leads/schema';
 import { downloadCsv, csvDateStamp } from '@/lib/utils/csv';
 import { LeadDialog } from '@/components/dashboard/LeadDialog';
 import { ImportLeadsDialog } from '@/components/dashboard/ImportLeadsDialog';
 import { BookingDialog, type BookingPrefill } from '@/components/dashboard/BookingDialog';
 import { SendProposalDialog } from './SendProposalDialog';
 import { ProposalHistoryDialog } from './ProposalHistoryDialog';
+import { PortalHandoffDialog } from './PortalHandoffDialog';
 
 // Small chip on each lead card showing where the lead came from. A null source
 // is a legacy/native WhatsApp lead (see sourceLabel).
@@ -96,6 +98,8 @@ interface Lead {
     lead_stage: StageId | null;
     last_message: string | null;
     last_message_at: string | null;
+    portal_client_id: string | null;
+    portal_last_proposal_url: string | null;
 }
 
 export function PipelineBoard() {
@@ -105,6 +109,8 @@ export function PipelineBoard() {
     const [dragOverStage, setDragOverStage] = useState<StageId | null>(null);
     const [proposalDialogLead, setProposalDialogLead] = useState<Lead | null>(null);
     const [historyLead, setHistoryLead] = useState<Lead | null>(null);
+    const [portalLead, setPortalLead] = useState<Lead | null>(null);
+    const [portalEnabled, setPortalEnabled] = useState(false);
     const [addOpen, setAddOpen] = useState(false);
     const [importOpen, setImportOpen] = useState(false);
     const [editLead, setEditLead] = useState<Lead | null>(null);
@@ -118,6 +124,7 @@ export function PipelineBoard() {
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const data = await res.json();
             setLeads(data.leads ?? []);
+            setPortalEnabled(Boolean(data.portalEnabled));
         } catch (err) {
             console.error('Failed to load leads', err);
             toast.error('Gagal memuat leads');
@@ -420,13 +427,15 @@ export function PipelineBoard() {
                                             onSendProposal={() => openProposalDialog(lead.phone_number)}
                                             onViewHistory={() => setHistoryLead(lead)}
                                             onHandoff={() => handoffToMJ(lead.phone_number)}
+                                            onPortalHandoff={() => setPortalLead(lead)}
+                                            portalEnabled={portalEnabled}
                                             onMoveStage={(stage) => moveLead(lead.phone_number, stage)}
                                             onEdit={() => setEditLead(lead)}
                                             onDelete={() => setDeleteLead(lead)}
                                             onMakeBooking={() =>
                                                 setBookingPrefill({
                                                     customer_name: lead.contact_name,
-                                                    customer_phone: lead.phone_number.startsWith('manual:')
+                                                    customer_phone: isSyntheticPhone(lead.phone_number)
                                                         ? undefined
                                                         : lead.phone_number,
                                                     event_type: lead.event_interest,
@@ -477,6 +486,18 @@ export function PipelineBoard() {
                     contactName={historyLead.contact_name}
                 />
             )}
+
+            {portalLead && (
+                <PortalHandoffDialog
+                    key={portalLead.phone_number}
+                    open={true}
+                    onOpenChange={(o) => {
+                        if (!o) setPortalLead(null);
+                    }}
+                    lead={portalLead}
+                    onLinked={fetchLeads}
+                />
+            )}
             </div>
             {leadDialogs}
         </div>
@@ -491,6 +512,8 @@ function LeadCard({
     onSendProposal,
     onViewHistory,
     onHandoff,
+    onPortalHandoff,
+    portalEnabled,
     onMoveStage,
     onEdit,
     onDelete,
@@ -503,6 +526,8 @@ function LeadCard({
     onSendProposal: () => void;
     onViewHistory: () => void;
     onHandoff: () => void;
+    onPortalHandoff: () => void;
+    portalEnabled: boolean;
     onMoveStage: (stage: StageId) => void;
     onEdit: () => void;
     onDelete: () => void;
@@ -546,6 +571,11 @@ function LeadCard({
                         <DropdownMenuItem onClick={onSendProposal} disabled={!lead.email}>
                             <Send className="mr-2 h-3.5 w-3.5" />
                             Send Proposal{!lead.email && ' (no email)'}
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={onPortalHandoff} disabled={!portalEnabled}>
+                            <ExternalLink className="mr-2 h-3.5 w-3.5" />
+                            {lead.portal_client_id ? 'Proposal di Portal (tertaut)' : 'Buat Proposal di Portal'}
+                            {!portalEnabled && ' (off)'}
                         </DropdownMenuItem>
                         <DropdownMenuItem onClick={onViewHistory}>
                             <History className="mr-2 h-3.5 w-3.5" />
