@@ -89,6 +89,16 @@ export function normalizePhone(raw: string | null | undefined): string | null {
     return s;
 }
 
+/**
+ * True when a phone is a synthetic, phone-less identity (`manual:<uuid>`) rather
+ * than a real number. Leads saved without a phone get such an identity (see
+ * createOrFillLead), and several read sites must treat it as "no real phone".
+ * Centralised here so the `manual:` prefix lives in exactly one place.
+ */
+export function isSyntheticPhone(phone: string | null | undefined): boolean {
+    return !!phone && phone.startsWith('manual:');
+}
+
 // --- Field cleaners (shared by form + CSV) -----------------------------------
 // CSV cells arrive as strings (we parse without dynamicTyping to preserve
 // leading zeros on phones); form fields are strings too. These turn blank
@@ -273,7 +283,7 @@ export function leadToCsvRow(l: LeadCsvSource): Record<string, string> {
     return {
         nama: l.contact_name ?? '',
         // Synthetic phone-less identities export as blank (not "manual:<uuid>").
-        nomor_hp: l.phone_number.startsWith('manual:') ? '' : l.phone_number,
+        nomor_hp: isSyntheticPhone(l.phone_number) ? '' : l.phone_number,
         email: l.email ?? '',
         jenis_acara: l.event_interest ?? '',
         jumlah_pax: l.participant_count != null ? String(l.participant_count) : '',

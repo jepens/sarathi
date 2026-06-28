@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { getCurrentOrgId } from '@/lib/settings/org-context';
 import { leadInputSchema } from '@/lib/leads/schema';
 import { createOrFillLead } from '@/lib/leads/create';
+import { isPortalConfigured } from '@/lib/portal/config';
 
 // Lead = whatsapp_chats row enriched with EO/CRM fields.
 // "Leads" is the user-facing name; the backing table is whatsapp_chats because
@@ -11,7 +12,8 @@ import { createOrFillLead } from '@/lib/leads/create';
 const LEAD_FIELDS =
     'phone_number, contact_name, email, event_interest, participant_count, ' +
     'location_pref, event_date_pref, event_goals, budget_range, lead_stage, ' +
-    'assigned_to, source, tags, notes, last_message, last_message_at, updated_at';
+    'assigned_to, source, tags, notes, last_message, last_message_at, updated_at, ' +
+    'portal_client_id, portal_last_proposal_url';
 
 export async function GET(request: Request) {
     const supabase = await createClient();
@@ -46,7 +48,9 @@ export async function GET(request: Request) {
         return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    return NextResponse.json({ leads: data ?? [] });
+    // portalEnabled lets the client gate the "Buat Proposal di Portal" action
+    // without exposing the shared secret (it's derived from server-only env).
+    return NextResponse.json({ leads: data ?? [], portalEnabled: isPortalConfigured() });
 }
 
 // Create a single lead manually (the "+ Tambah Lead" form). Dedup is

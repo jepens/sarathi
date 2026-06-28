@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
+import { isSyntheticPhone } from '@/lib/leads/schema';
 import type { FollowupData, FollowupLead, FollowupBooking } from '@/lib/followup/compute';
 
 const STAGE_LABEL: Record<string, string> = {
@@ -147,7 +148,7 @@ export default function FollowupPage() {
 }
 
 function LeadRow({ lead }: { lead: FollowupLead }) {
-    const name = lead.contact_name || (lead.phone_number.startsWith('manual:') ? 'Tanpa nama' : lead.phone_number);
+    const name = lead.contact_name || (isSyntheticPhone(lead.phone_number) ? 'Tanpa nama' : lead.phone_number);
     const stage = lead.lead_stage ?? 'new';
     return (
         <Link
