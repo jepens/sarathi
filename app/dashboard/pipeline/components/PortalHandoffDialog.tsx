@@ -15,6 +15,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import {
+    AlertTriangle,
     Building2,
     Check,
     ExternalLink,
@@ -24,19 +25,14 @@ import {
     Link2,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { safeRandomUUID, deterministicUuid } from '@/lib/uuid';
 import { handoffToPortal } from '../actions';
-import { buildProposalTitle, type PortalClient } from '@/lib/portal/types';
+import { buildProposalTitle, type PortalClient, type HandoffLead } from '@/lib/portal/types';
 
-export interface PortalHandoffLead {
-    phone_number: string;
-    contact_name: string | null;
-    email: string | null;
-    event_interest: string | null;
-    participant_count: number | null;
-    location_pref: string | null;
-    event_date_pref: string | null;
-    event_goals: string | null;
-    budget_range: string | null;
+// The lead shape the dialog needs = the shared brief/identity fields (HandoffLead)
+// plus the two Portal-link columns. Extends rather than re-declaring so the shape
+// stays in ONE place (types.ts) and can't drift.
+export interface PortalHandoffLead extends HandoffLead {
     portal_client_id: string | null;
     portal_last_proposal_url: string | null;
 }
@@ -68,6 +64,9 @@ export function PortalHandoffDialog({ open, onOpenChange, lead, onLinked }: Port
     const [titleDirty, setTitleDirty] = useState(false);
     const [submitting, setSubmitting] = useState(false);
     const [doneUrl, setDoneUrl] = useState<string | null>(null);
+    // Set when the handoff succeeded at the Portal but the link failed to persist
+    // (see actions.ts). Drives a persistent warning banner in the success view.
+    const [doneWarning, setDoneWarning] = useState<string | null>(null);
 
     // The client (Organization) name that drives the default proposal title.
     const effectiveClientName =
@@ -99,6 +98,7 @@ export function PortalHandoffDialog({ open, onOpenChange, lead, onLinked }: Port
         setTitleDirty(false);
         setSubmitting(false);
         setDoneUrl(null);
+        setDoneWarning(null);
         idemRef.current = null;
     }, [open, lead.contact_name]);
 
@@ -166,15 +166,30 @@ export function PortalHandoffDialog({ open, onOpenChange, lead, onLinked }: Port
                 ? { mode: 'existing' as const, clientId: selected!.id }
                 : { mode: 'new' as const, name: newName.trim() };
 
-        // Reuse the key for the current selection (retry-safe); mint a new one
-        // only if the selection changed since the last attempt.
-        if (!idemRef.current || idemRef.current.sig !== selectionSig) {
-            idemRef.current = { sig: selectionSig, key: crypto.randomUUID() };
-        }
+        // Open the destination tab NOW, synchronously inside the click gesture, so
+        // strict popup blockers (Safari; Chrome once transient activation lapses on
+        // a slow handoff) don't suppress it after the await. NOT 'noopener' here —
+        // that returns null and we'd lose the handle; we null `opener` after
+        // navigating to keep the same protection.
+        const proposalTab = window.open('about:blank', '_blank');
 
         setSubmitting(true);
         const toastId = toast.loading('Membuat proposal di Portal…');
         try {
+            // Reuse the key for the current selection (retry-safe); mint a new one
+            // only if the selection changed. First handoff (not yet linked) derives
+            // the key DETERMINISTICALLY from phone + selection so two tabs with the
+            // same choice collide on ONE key → Portal dedups → a single client. A
+            // relinked lead uses a fresh random key so it can spin up many drafts.
+            // Generated in-try (via safeRandomUUID, which works over plain HTTP) so
+            // any failure surfaces as a toast instead of a silent no-op.
+            if (!idemRef.current || idemRef.current.sig !== selectionSig) {
+                const key = alreadyLinked
+                    ? safeRandomUUID()
+                    : deterministicUuid(`${lead.phone_number}::${selectionSig}`);
+                idemRef.current = { sig: selectionSig, key };
+            }
+
             const result = await handoffToPortal({
                 phone: lead.phone_number,
                 idempotencyKey: idemRef.current.key,
@@ -184,15 +199,26 @@ export function PortalHandoffDialog({ open, onOpenChange, lead, onLinked }: Port
             if (!result.ok) throw new Error(result.error);
 
             onLinked();
-            toast.success('Proposal Portal dibuat & klien tertaut', { id: toastId });
+            // On a persist warning the link was NOT saved, so don't claim "klien
+            // tertaut" — the persistent detail lives in the success-view banner.
+            if (result.warning) {
+                toast.warning('Proposal dibuat, tetapi tautan klien gagal disimpan.', { id: toastId });
+            } else {
+                toast.success('Proposal Portal dibuat & klien tertaut', { id: toastId });
+            }
+            setDoneWarning(result.warning ?? null);
             setDoneUrl(result.proposalUrl);
             // Clear submitting so the success view's standard close affordances
             // (Esc / overlay / X) aren't swallowed by the onOpenChange guard.
             setSubmitting(false);
-            // Open the draft in a new tab. If the browser blocks the popup, the
-            // success view below still offers a manual "Buka proposal" button.
-            window.open(result.proposalUrl, '_blank', 'noopener,noreferrer');
+            // Point the pre-opened tab at the draft. If it was blocked anyway, the
+            // success view still offers a manual "Buka proposal" button.
+            if (proposalTab) {
+                proposalTab.opener = null;
+                proposalTab.location.href = result.proposalUrl;
+            }
         } catch (err) {
+            proposalTab?.close();
             toast.error(err instanceof Error ? err.message : 'Gagal handoff ke Portal', {
                 id: toastId,
             });
@@ -227,10 +253,17 @@ export function PortalHandoffDialog({ open, onOpenChange, lead, onLinked }: Port
 
                 {doneUrl ? (
                     <div className="space-y-4 py-2">
-                        <div className="flex items-center gap-2 rounded-md border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm">
-                            <Check className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
-                            <span>Klien tertaut & draft proposal siap diisi di Portal.</span>
-                        </div>
+                        {doneWarning ? (
+                            <div className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+                                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                                <span>{doneWarning}</span>
+                            </div>
+                        ) : (
+                            <div className="flex items-center gap-2 rounded-md border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm">
+                                <Check className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+                                <span>Klien tertaut & draft proposal siap diisi di Portal.</span>
+                            </div>
+                        )}
                         <Button asChild className="w-full">
                             <a href={doneUrl} target="_blank" rel="noopener noreferrer">
                                 <ExternalLink className="mr-2 h-4 w-4" />

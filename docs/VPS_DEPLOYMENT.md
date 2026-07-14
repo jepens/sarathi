@@ -24,6 +24,21 @@
 - [ ] Run `database/whatsapp_monitoring.sql` in Supabase SQL Editor
 - [ ] Verify tables created: `message_queue`, `rate_limits`, `whatsapp_chats`, `whatsapp_messages`
 - [ ] Test connection from local
+- [ ] **Apply ALL pending `supabase/migrations/*.sql` BEFORE deploying app code** (see ⚠️ below)
+
+> ⚠️ **Migrations must run before the app code that reads them.** Migrations are
+> applied **manually** (Supabase MCP `apply_migration`, the CLI, or the SQL
+> Editor) and **CI never touches the database** — so deploying app code first
+> makes any SELECT of a not-yet-added column return **500**.
+>
+> Most recent: [`supabase/migrations/0044_whatsapp_chats_portal_client.sql`](../supabase/migrations/0044_whatsapp_chats_portal_client.sql)
+> adds `whatsapp_chats.portal_client_id` (uuid) + `portal_last_proposal_url`
+> (text) for the Portal handoff. If the app ships before it runs, `GET /api/leads`
+> 500s and the **entire leads/pipeline board renders empty** (not just the handoff
+> feature). Columns are additive + idempotent (`add column if not exists`), so
+> applying them early is always safe.
+>
+> **Order:** apply migration → verify the columns exist → *then* deploy app code.
 
 ### 2. Code Preparation
 - [ ] All changes committed to Git
@@ -342,6 +357,7 @@ git push origin main
 
 ## ✅ Deployment Checklist
 
+- [ ] **All pending `supabase/migrations/*.sql` applied & columns verified — BEFORE deploying app code**
 - [ ] Database migration completed
 - [ ] Code pushed to GitHub
 - [ ] VPS connected to GitHub repo
