@@ -20,20 +20,43 @@ export class PortalError extends Error {
 const NOT_CONFIGURED =
     'Portal belum dikonfigurasi (set PORTAL_BASE_URL & PORTAL_INTAKE_TOKEN).';
 
+// Mirrors zod's z.uuid() (versions 1–8, variant 8–b). The handoff input schema
+// requires a uuid clientId and the DB column is `uuid`, so a non-UUID client the
+// Portal might return could never be handed off — filter it out of the picker.
+const UUID_RE =
+    /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$/;
+
 async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
     try {
-        return await fetch(url, { ...init, signal: controller.signal, cache: 'no-store' });
+        // AbortSignal.timeout keeps the deadline bound to the whole exchange —
+        // headers AND the body stream. A manual clearTimeout() in a finally used
+        // to cancel the timer the instant fetch() resolved (headers received),
+        // leaving the later res.json() body read with no timeout at all.
+        return await fetch(url, { ...init, signal: AbortSignal.timeout(TIMEOUT_MS), cache: 'no-store' });
     } catch (err) {
-        if (err instanceof Error && err.name === 'AbortError') {
+        // AbortSignal.timeout aborts with a DOMException named 'TimeoutError';
+        // a caller-supplied AbortController (none today) would surface 'AbortError'.
+        if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
             throw new PortalError('Portal tidak merespons (timeout).');
         }
         throw new PortalError(
             `Tidak bisa menghubungi Portal: ${err instanceof Error ? err.message : 'unknown'}`
         );
-    } finally {
-        clearTimeout(timer);
+    }
+}
+
+// Read a JSON body under the same timeout signal as the request. A stalled body
+// (headers arrived, stream never finishes) trips AbortSignal.timeout and surfaces
+// as a clean timeout PortalError instead of hanging; a non-JSON / genuine parse
+// error yields null so callers fall back to their "incomplete response" handling.
+async function readJson(res: Response): Promise<unknown> {
+    try {
+        return await res.json();
+    } catch (err) {
+        if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+            throw new PortalError('Portal tidak merespons (timeout).');
+        }
+        return null;
     }
 }
 
@@ -75,7 +98,7 @@ export async function searchPortalClients(q: string): Promise<PortalClient[]> {
     });
     if (!res.ok) throw new PortalError(await errorMessage(res, 'Gagal mencari klien Portal'), res.status);
 
-    const data = await res.json().catch(() => null);
+    const data = await readJson(res);
     const arr: unknown[] = Array.isArray(data)
         ? data
         : data && typeof data === 'object' && Array.isArray((data as Record<string, unknown>).clients)
@@ -86,7 +109,7 @@ export async function searchPortalClients(q: string): Promise<PortalClient[]> {
         .map((row): PortalClient | null => {
             if (!row || typeof row !== 'object') return null;
             const r = row as Record<string, unknown>;
-            const id = typeof r.id === 'string' ? r.id : null;
+            const id = typeof r.id === 'string' && UUID_RE.test(r.id) ? r.id : null;
             const name = typeof r.name === 'string' ? r.name : null;
             return id && name ? { id, name } : null;
         })
@@ -112,7 +135,7 @@ export async function postHandoff(body: HandoffRequestBody): Promise<HandoffResp
     });
     if (!res.ok) throw new PortalError(await errorMessage(res, 'Gagal membuat proposal di Portal'), res.status);
 
-    const data = await res.json().catch(() => null);
+    const data = await readJson(res);
     const clientId = data && typeof data === 'object' ? (data as Record<string, unknown>).clientId : null;
     const proposalId = data && typeof data === 'object' ? (data as Record<string, unknown>).proposalId : null;
     const proposalUrl = data && typeof data === 'object' ? (data as Record<string, unknown>).proposalUrl : null;
