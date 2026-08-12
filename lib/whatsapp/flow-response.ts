@@ -8,8 +8,9 @@ import { getBusinessProfile } from '@/lib/settings/business-profile';
 // ---------------------------------------------------------------------------
 // WhatsApp Flow submission handler (interactive → nfm_reply).
 //
-// Pairs the "Brief Acara" Flow (docs/flow-brief-acara.json, Flow ID
-// 1338308915130746) with the Nindra RAG assistant:
+// Pairs the "Brief Acara" Flow (docs/flow-brief-acara.json — v1 Flow ID
+// 1338308915130746, v2 "Brief Acara - Sailendra v2" Flow ID 1790632228793903
+// with cakupan_paket) with the Nindra RAG assistant:
 //
 //   1. Store the submission in chat history (resets the 24h window, shows in
 //      the inbox like any customer message). The wa_message_id unique index is
@@ -50,6 +51,12 @@ const BUDGET_LABELS: Record<string, string> = {
     '100_250jt': 'Rp100-250 juta',
     gt_250jt: '> Rp250 juta',
     tbd: 'Belum ditentukan',
+};
+
+const CAKUPAN_PAKET_LABELS: Record<string, string> = {
+    all_in: 'All-in / paket lengkap (akomodasi, meals, transportasi, program)',
+    program_saja: 'Program saja (outbound, team building, fun games)',
+    belum_tahu: 'Belum tahu / perlu konsultasi',
 };
 
 export interface NfmReplyPayload {
@@ -97,12 +104,7 @@ function str(data: Record<string, unknown>, key: string): string | null {
 
 /** "2026-09-01 s/d 2026-09-03" | single date | null. */
 function formatDateRange(mulai: string | null, selesai: string | null): string | null {
-    if (mulai && selesai) {
-        // The two CalendarPickers can't enforce order; if the customer picks an
-        // end before the start, clamp it to the start (YYYY-MM-DD sorts lexically).
-        const end = selesai < mulai ? mulai : selesai;
-        return mulai === end ? mulai : `${mulai} s/d ${end}`;
-    }
+    if (mulai && selesai) return mulai === selesai ? mulai : `${mulai} s/d ${selesai}`;
     return mulai ?? selesai;
 }
 
@@ -112,6 +114,8 @@ interface BriefAcara {
     pesertaMid: number | null;
     tanggal: string | null;
     lokasi: string | null;
+    cakupanId: string | null;
+    cakupanLabel: string | null;
     budgetLabel: string | null;
     namaPerusahaan: string | null;
     namaPic: string | null;
@@ -123,6 +127,7 @@ function extractBrief(data: Record<string, unknown>): BriefAcara {
     const jenisId = str(data, 'jenis_acara');
     const pesertaId = str(data, 'jumlah_peserta');
     const budgetId = str(data, 'budget');
+    const cakupanId = str(data, 'cakupan_paket');
     const peserta = pesertaId ? JUMLAH_PESERTA_OPTIONS[pesertaId] ?? null : null;
     return {
         jenisLabel: jenisId ? JENIS_ACARA_LABELS[jenisId] ?? jenisId : null,
@@ -130,6 +135,8 @@ function extractBrief(data: Record<string, unknown>): BriefAcara {
         pesertaMid: peserta?.mid ?? null,
         tanggal: formatDateRange(str(data, 'tanggal_mulai'), str(data, 'tanggal_selesai')),
         lokasi: str(data, 'lokasi'),
+        cakupanId,
+        cakupanLabel: cakupanId ? CAKUPAN_PAKET_LABELS[cakupanId] ?? cakupanId : null,
         budgetLabel: budgetId ? BUDGET_LABELS[budgetId] ?? budgetId : null,
         namaPerusahaan: str(data, 'nama_perusahaan'),
         namaPic: str(data, 'nama_pic'),
@@ -144,6 +151,7 @@ function briefSummaryLines(b: BriefAcara): string[] {
     if (b.pesertaLabel) lines.push(`Jumlah peserta: ${b.pesertaLabel}`);
     if (b.tanggal) lines.push(`Tanggal: ${b.tanggal}`);
     if (b.lokasi) lines.push(`Lokasi: ${b.lokasi}`);
+    if (b.cakupanLabel) lines.push(`Cakupan paket: ${b.cakupanLabel}`);
     if (b.budgetLabel) lines.push(`Budget: ${b.budgetLabel}`);
     if (b.namaPerusahaan) lines.push(`Perusahaan/instansi: ${b.namaPerusahaan}`);
     if (b.namaPic) lines.push(`PIC: ${b.namaPic}`);
@@ -241,7 +249,15 @@ export async function handleFlowReply(params: HandleFlowReplyParams): Promise<vo
                 event_date_pref: brief.tanggal,
                 budget_range: brief.budgetLabel,
                 source: 'whatsapp_flow',
-                notes: brief.catatan ? `[Brief Acara] ${brief.catatan}` : null,
+                notes: (() => {
+                    // Cakupan paket rides in notes (v1 minimal path — no schema
+                    // migration). Promote to a dedicated column later if the
+                    // pipeline needs to filter on it.
+                    const parts: string[] = [];
+                    if (brief.cakupanLabel) parts.push(`Cakupan paket: ${brief.cakupanLabel}`);
+                    if (brief.catatan) parts.push(brief.catatan);
+                    return parts.length > 0 ? `[Brief Acara] ${parts.join(' — ')}` : null;
+                })(),
                 contact_type: 'lead',
             },
             profile
@@ -265,13 +281,19 @@ export async function handleFlowReply(params: HandleFlowReplyParams): Promise<vo
         // -- 3. Context for Nindra: the brief becomes a system message in the
         //       conversation history, so the RAG assistant knows what was
         //       answered and moves the conversation FORWARD instead of re-asking.
+        const belumTahuCakupan = brief.cakupanId === 'belum_tahu';
         await logSystemMessage(
             orgId,
             contactKey,
             `Customer mengisi form Brief Acara (WhatsApp Flow). ${lines.join(' · ')}. ` +
             'Data sudah tersimpan ke CRM dan lead stage sudah disesuaikan. ' +
             'JANGAN tanyakan ulang data di atas — lanjutkan dengan langkah berikutnya ' +
-            '(rekomendasikan paket yang cocok, tawarkan jadwal meeting/survei, atau jawab pertanyaan lain).'
+            '(rekomendasikan paket yang cocok, tawarkan jadwal meeting/survei, atau jawab pertanyaan lain).' +
+            (belumTahuCakupan
+                ? ' PENTING: customer BELUM menentukan cakupan paket — jelaskan perbedaan all-in ' +
+                  '(akomodasi, meals, transportasi, program — tanpa repot koordinasi vendor) vs ' +
+                  'program saja (outbound/team building/fun games di lokasi mereka), lalu bantu memilih.'
+                : '')
         );
 
         // -- 4. Deterministic confirmation (no AI round-trip; Nindra takes over

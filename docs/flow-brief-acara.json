@@ -99,6 +99,28 @@
                 "helper-text": "Kota atau venue yang diinginkan"
               },
               {
+                "type": "RadioButtonsGroup",
+                "name": "cakupan_paket",
+                "label": "Cakupan paket",
+                "required": true,
+                "data-source": [
+                  {
+                    "id": "all_in",
+                    "title": "All-in (paket lengkap)",
+                    "description": "Akomodasi, meals, transportasi, dan program"
+                  },
+                  {
+                    "id": "program_saja",
+                    "title": "Program saja",
+                    "description": "Outbound, team building, fun games"
+                  },
+                  {
+                    "id": "belum_tahu",
+                    "title": "Belum tahu / perlu konsultasi"
+                  }
+                ]
+              },
+              {
                 "type": "Dropdown",
                 "name": "budget",
                 "label": "Perkiraan budget",
@@ -139,6 +161,7 @@
                     "jenis_acara": "${form.jenis_acara}",
                     "jumlah_peserta": "${form.jumlah_peserta}",
                     "lokasi": "${form.lokasi}",
+                    "cakupan_paket": "${form.cakupan_paket}",
                     "budget": "${form.budget}",
                     "tanggal_mulai": "${form.tanggal_mulai}",
                     "tanggal_selesai": "${form.tanggal_selesai}"
@@ -166,6 +189,10 @@
         "lokasi": {
           "type": "string",
           "__example__": "Bandung"
+        },
+        "cakupan_paket": {
+          "type": "string",
+          "__example__": "all_in"
         },
         "budget": {
           "type": "string",
@@ -231,6 +258,7 @@
                     "jenis_acara": "${data.jenis_acara}",
                     "jumlah_peserta": "${data.jumlah_peserta}",
                     "lokasi": "${data.lokasi}",
+                    "cakupan_paket": "${data.cakupan_paket}",
                     "budget": "${data.budget}",
                     "nama_perusahaan": "${form.nama_perusahaan}",
                     "nama_pic": "${form.nama_pic}",
