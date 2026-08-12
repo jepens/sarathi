@@ -151,6 +151,7 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
     const [deleting, setDeleting] = useState(false);
     const [pendingFile, setPendingFile] = useState<File | null>(null);
     const [uploadingMedia, setUploadingMedia] = useState(false);
+    const [lightbox, setLightbox] = useState<{ url: string; name: string } | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const scrollRef = useRef<HTMLDivElement>(null);
     const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -582,7 +583,16 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
                                     >
                                         {msg.media_type === 'image' &&
                                             (msg.media_url ? (
-                                                <a href={msg.media_url} target="_blank" rel="noopener noreferrer" className="mb-1 block">
+                                                <button
+                                                    type="button"
+                                                    onClick={() =>
+                                                        setLightbox({
+                                                            url: msg.media_url!,
+                                                            name: msg.media_filename || 'Gambar',
+                                                        })
+                                                    }
+                                                    className="mb-1 block cursor-zoom-in"
+                                                >
                                                     {/* eslint-disable-next-line @next/next/no-img-element */}
                                                     <img
                                                         src={msg.media_url}
@@ -590,7 +600,7 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
                                                         loading="lazy"
                                                         className="max-h-64 w-auto max-w-full rounded-md object-cover"
                                                     />
-                                                </a>
+                                                </button>
                                             ) : (
                                                 // Storage copy failed but the photo WAS delivered — show a
                                                 // placeholder so the bubble isn't blank (mirrors the doc card).
@@ -762,6 +772,32 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
                     </form>
                 </div>
             </div>
+
+            <Dialog open={!!lightbox} onOpenChange={(o) => { if (!o) setLightbox(null); }}>
+                <DialogContent className="max-w-2xl">
+                    <DialogTitle className="truncate pr-8 text-sm font-medium">
+                        {lightbox?.name || 'Pratinjau'}
+                    </DialogTitle>
+                    {lightbox && (
+                        <div className="flex flex-col items-center gap-2">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                                src={lightbox.url}
+                                alt={lightbox.name}
+                                className="mx-auto max-h-[75vh] w-auto max-w-full rounded-md object-contain"
+                            />
+                            <a
+                                href={lightbox.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-xs text-muted-foreground underline hover:text-foreground"
+                            >
+                                Buka ukuran asli di tab baru
+                            </a>
+                        </div>
+                    )}
+                </DialogContent>
+            </Dialog>
 
             <Dialog open={deleteOpen} onOpenChange={(o) => { if (!deleting) setDeleteOpen(o); }}>
                 <DialogContent>
