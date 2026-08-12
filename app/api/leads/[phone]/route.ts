@@ -12,6 +12,7 @@ function isLeadStage(v: unknown): v is LeadStage {
 // stomping on system columns like phone_number / created_at.
 const PATCHABLE_FIELDS = new Set([
     'contact_name',
+    'company',
     'email',
     'event_interest',
     'participant_count',
