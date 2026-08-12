@@ -101,6 +101,7 @@ export async function sendPushToOrg(
     });
 
     const stale: string[] = [];
+    let sent = 0;
     await Promise.all(
         subs.map(async (sub) => {
             try {
@@ -108,6 +109,7 @@ export async function sendPushToOrg(
                     { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
                     body,
                 );
+                sent += 1;
             } catch (err) {
                 const status = (err as { statusCode?: number }).statusCode;
                 // 404 Not Found / 410 Gone → the browser dropped this subscription;
@@ -120,6 +122,11 @@ export async function sendPushToOrg(
             }
         }),
     );
+
+    // Observability: a single summary line per inbound so it's clear from the
+    // server logs whether Tier 2 actually dispatched (sent N/M) vs. silently
+    // no-op'd (this line absent → VAPID unset or org had no subscriptions).
+    whatsappLogger.info(`Web push: sent ${sent}/${subs.length} notification(s) for org ${orgId}`);
 
     if (stale.length > 0) {
         const { error: pruneErr } = await supabase
