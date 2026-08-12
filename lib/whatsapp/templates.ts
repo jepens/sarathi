@@ -81,6 +81,62 @@ export async function listApprovedTemplates(limit = 100): Promise<WhatsAppTempla
     return Array.isArray(json.data) ? json.data : [];
 }
 
+/**
+ * Fetch ONE template by exact name + language from the WABA. Used to detect
+ * FLOW buttons before sending: Meta requires templates that carry a Flow
+ * button to be sent WITH a `button` component (sub_type "flow"), otherwise
+ * the send fails with 131009 "Components sub_type invalid".
+ * Returns null when not found or on any error (caller falls back gracefully).
+ */
+async function getTemplateDefinition(
+    name: string,
+    language: string,
+): Promise<WhatsAppTemplate | null> {
+    try {
+        const accessToken = await getWhatsAppAccessToken();
+        const wabaId = await getWhatsAppBusinessAccountId();
+        const url = `${WHATSAPP_API_URL}/${wabaId}/message_templates?name=${encodeURIComponent(name)}&limit=25`;
+        const response = await fetch(url, {
+            headers: { Authorization: `Bearer ${accessToken}` },
+            cache: 'no-store',
+        });
+        if (!response.ok) return null;
+        const json = (await response.json()) as TemplateListResponse;
+        const list = Array.isArray(json.data) ? json.data : [];
+        // The name filter is a prefix match on Meta's side — require exact.
+        return list.find((t) => t.name === name && t.language === language) ?? null;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Build `button` components for a template's FLOW buttons. Meta indexes
+ * buttons by their position in the template's BUTTONS component; URL/phone/
+ * quick-reply buttons without dynamic params need no component, but every
+ * FLOW button must be present with sub_type "flow" and an `action` parameter.
+ * flow_token is echoed back verbatim inside the customer's nfm_reply, so a
+ * per-send token doubles as a correlation id in the webhook.
+ */
+function buildFlowButtonComponents(template: WhatsAppTemplate): Array<Record<string, unknown>> {
+    const buttonsComp = template.components.find((c) => c.type === 'BUTTONS');
+    const buttons = buttonsComp?.buttons ?? [];
+    const components: Array<Record<string, unknown>> = [];
+    buttons.forEach((btn, index) => {
+        if ((btn.type ?? '').toUpperCase() !== 'FLOW') return;
+        const flowToken = `tpl_${template.name}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        components.push({
+            type: 'button',
+            sub_type: 'flow',
+            index: String(index),
+            parameters: [
+                { type: 'action', action: { flow_token: flowToken } },
+            ],
+        });
+    });
+    return components;
+}
+
 // Variable extraction. Matches Meta's positional placeholder syntax
 // `{{1}}, {{2}}, ...` (we don't support named params in v1 — they'd require
 // a different `template.components[].parameters` shape with `parameter_name`).
@@ -141,6 +197,15 @@ export async function sendTemplateMessage(opts: SendTemplateOptions): Promise<Se
             type: 'body',
             parameters: opts.variables.map((text) => ({ type: 'text', text })),
         });
+    }
+
+    // FLOW buttons (e.g. brief_acara_sailendra_v2) — required in the send
+    // payload or Meta rejects with 131009 "Components sub_type invalid".
+    // Best-effort: if the definition lookup fails we send without it (same
+    // behavior as before this fix) and let Meta's error surface.
+    const definition = await getTemplateDefinition(opts.templateName, opts.language);
+    if (definition) {
+        components.push(...buildFlowButtonComponents(definition));
     }
 
     const body = {
