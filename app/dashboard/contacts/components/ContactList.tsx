@@ -23,6 +23,7 @@ import {
     Edit2,
     Trash2,
     User,
+    Building2,
     Lock,
     Sparkles,
     Mail,
@@ -76,6 +77,7 @@ type ContactType = 'lead' | 'vendor' | 'other';
 interface Contact {
     phone_number: string;
     contact_name: string | null;
+    company: string | null;
     contact_name_locked: boolean;
     contact_type: ContactType;
     vendor_category: string | null;
@@ -95,7 +97,7 @@ interface Contact {
 }
 
 const CONTACT_COLUMNS =
-    'phone_number, contact_name, contact_name_locked, contact_type, vendor_category, vendor_offering, email, event_interest, participant_count, location_pref, event_date_pref, event_goals, budget_range, lead_stage, assigned_to, source, notes, last_message_at';
+    'phone_number, contact_name, company, contact_name_locked, contact_type, vendor_category, vendor_offering, email, event_interest, participant_count, location_pref, event_date_pref, event_goals, budget_range, lead_stage, assigned_to, source, notes, last_message_at';
 
 function StageBadge({ stage }: { stage: string | null }) {
     if (!stage) return <span className="text-xs text-muted-foreground">—</span>;
@@ -434,6 +436,7 @@ export function ContactList() {
         return (
             c.phone_number.includes(search) ||
             (c.contact_name && c.contact_name.toLowerCase().includes(q)) ||
+            (c.company && c.company.toLowerCase().includes(q)) ||
             (c.event_interest && c.event_interest.toLowerCase().includes(q)) ||
             (c.vendor_offering && c.vendor_offering.toLowerCase().includes(q)) ||
             (c.email && c.email.toLowerCase().includes(q))
@@ -727,6 +730,7 @@ export function ContactList() {
                                     </>
                                 ) : (
                                     <>
+                                        <Field icon={Building2} label="Instansi" value={detailContact.company} />
                                         <Field icon={Tag} label="Jenis acara" value={detailContact.event_interest} />
                                         <Field icon={Users} label="Peserta" value={detailContact.participant_count ? `${detailContact.participant_count} pax` : null} />
                                         <Field icon={MapPin} label="Lokasi" value={detailContact.location_pref} />

@@ -375,6 +375,7 @@ LEAD CAPTURE (use the save_lead_info and update_lead_stage tools):
 Whenever the customer reveals any of these in conversation, IMMEDIATELY call
 save_lead_info with the new field(s):
   • Name → name
+  • Company / instansi / perusahaan → company
   • Email address → email
   • Type of event ("team building", "company gathering", "wedding", etc.) → event_interest
   • Number of participants/attendees → participant_count (integer; use midpoint if a range)

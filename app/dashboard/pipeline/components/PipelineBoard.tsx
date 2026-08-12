@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, type DragEvent } from 'react';
 import { toast } from 'sonner';
 import {
     User,
+    Building2,
     Mail,
     Users,
     MapPin,
@@ -85,6 +86,7 @@ type StageId = (typeof STAGES)[number]['id'];
 interface Lead {
     phone_number: string;
     contact_name: string | null;
+    company: string | null;
     email: string | null;
     event_interest: string | null;
     participant_count: number | null;
@@ -614,6 +616,12 @@ function LeadCard({
                     </DropdownMenuContent>
                 </DropdownMenu>
             </div>
+            {lead.company && (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
+                    <Building2 className="h-3 w-3 flex-shrink-0" />
+                    <span className="truncate">{lead.company}</span>
+                </div>
+            )}
             {lead.event_interest && (
                 <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
                     <Target className="h-3 w-3 flex-shrink-0" />

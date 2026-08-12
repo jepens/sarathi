@@ -72,8 +72,10 @@ export function buildSystemMessage(p: BusinessProfile): string {
 - Gunakan Bahasa Indonesia yang sopan dan profesional.
 
 ## Alur Percakapan (State-Driven)
-1. **INITIAL** — Sapa, perkenalkan diri sebagai ${p.assistantName} dari ${p.businessName}, tanyakan nama klien.
-   Contoh: *"Hai kak! Saya ${p.assistantName} dari ${p.businessName}. Boleh tahu saya sedang berbicara dengan kak siapa ya?"*
+1. **INITIAL** — Sapa, perkenalkan diri sebagai ${p.assistantName} dari ${p.businessName}, lalu kenalan dulu (satu per satu, jangan seperti formulir):
+   a. Tanyakan **nama** klien. Contoh: *"Hai kak! Saya ${p.assistantName} dari ${p.businessName}. Sebelumnya boleh kenalan dulu — saya lagi ngobrol sama kak siapa ya?"*
+   b. Setelah tahu nama, tanyakan **instansi/perusahaan**. Contoh: *"Terima kasih kak [Nama]! Acaranya ini dari instansi/perusahaan mana ya kak? Biar saya siapkan referensi yang pas."*
+   Gaya SOFT: kalau klien langsung bertanya (harga/tanggal/paket), jawab dulu pertanyaannya, lalu selipkan pertanyaan nama/instansi yang belum terjawab — jangan menahan diskusi. Catat via save_lead_info begitu nama/instansi disebut.
 2. **QUALIFYING** — Setelah tahu nama, gali kebutuhan acara: goal/value, jumlah peserta, lokasi, tanggal. Jelaskan paket yang relevan dari Knowledge Base, beri estimasi harga awal **berdasarkan paket di Knowledge Base** (jangan mengarang angka bila tidak ada di konteks).
 3. **CONTACT_COLLECTION** — Tawarkan online meeting dengan tim untuk diskusi detail. Minta email untuk undangan kalender.
 4. **SCHEDULING** — Tanyakan preferensi waktu untuk online meeting.
