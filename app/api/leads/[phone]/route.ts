@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server';
 import { NextResponse } from 'next/server';
 import { LEAD_STAGES, type LeadStage } from '@/lib/ai/tools';
+import { getCurrentOrgId } from '@/lib/settings/org-context';
 
 // Mirror the DB CHECK constraint so we reject bad input before hitting Postgres.
 function isLeadStage(v: unknown): v is LeadStage {
@@ -94,18 +95,19 @@ export async function PATCH(
     return NextResponse.json({ lead: data });
 }
 
-// Permanently delete a lead/contact row. RLS scopes the delete to the caller's
-// org (1 user = 1 org), so phone_number alone is enough to target the row.
+// Permanently delete a contact and EVERYTHING tied to it — its chat history (the
+// AI's "memory"), pending queue items, rate-limit rows, and the contact row
+// itself (which cascades proposals and unlinks any vendor). Atomic, via the
+// delete_contact_cascade RPC (migration 0047). REFUSES with 409 when the contact
+// has bookings, so financial records are never wiped.
 export async function DELETE(
-    request: Request,
+    _request: Request,
     { params }: { params: Promise<{ phone: string }> }
 ) {
     const supabase = await createClient();
 
-    const {
-        data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) {
+    const orgId = await getCurrentOrgId(supabase);
+    if (!orgId) {
         return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
@@ -114,34 +116,35 @@ export async function DELETE(
         return NextResponse.json({ error: 'Phone number required' }, { status: 400 });
     }
 
-    const { data, error } = await supabase
-        .from('whatsapp_chats')
-        .delete()
-        .eq('phone_number', phone)
-        .select('phone_number');
+    const { data, error } = await supabase.rpc('delete_contact_cascade', {
+        p_org: orgId,
+        p_phone: phone,
+    });
 
     if (error) {
-        // whatsapp_messages / orders reference this row with ON DELETE NO ACTION,
-        // so a contact with real chat history or a booking can't be hard-deleted.
-        // Protect that data with a clear 409 instead of a raw FK error.
-        if (error.code === '23503') {
+        return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+
+    const result = (data ?? {}) as { deleted?: boolean; reason?: string; orders?: number };
+
+    if (!result.deleted) {
+        if (result.reason === 'has_bookings') {
+            const n = result.orders ?? 0;
             return NextResponse.json(
                 {
-                    error: 'Kontak ini punya riwayat chat atau booking — tidak bisa dihapus permanen.',
+                    error: `Kontak ini punya ${n} booking. Hapus atau selesaikan booking-nya dulu di menu Bookings sebelum menghapus kontak.`,
+                    reason: 'has_bookings',
                 },
                 { status: 409 }
             );
         }
-        return NextResponse.json({ error: error.message }, { status: 500 });
-    }
-
-    // Zero rows affected → the row was already gone (stale list / double delete).
-    // Report it truthfully so the client doesn't show a phantom "deleted" toast.
-    if (!data || data.length === 0) {
-        return NextResponse.json(
-            { error: 'Lead tidak ditemukan atau sudah dihapus.' },
-            { status: 404 }
-        );
+        if (result.reason === 'not_found') {
+            return NextResponse.json(
+                { error: 'Kontak tidak ditemukan atau sudah dihapus.' },
+                { status: 404 }
+            );
+        }
+        return NextResponse.json({ error: 'Gagal menghapus kontak.' }, { status: 500 });
     }
 
     return NextResponse.json({ ok: true });

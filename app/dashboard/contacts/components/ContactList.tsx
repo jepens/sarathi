@@ -320,8 +320,9 @@ export function ContactList() {
         }
     };
 
-    // Permanently delete the whole contact row (not just the name). Blocked by
-    // the server (409) when the contact has chat history or a booking.
+    // Permanently delete the whole contact + its chat and AI memory (cascade via
+    // the delete_contact_cascade RPC). The server refuses (409) only when the
+    // contact has a booking, so financial records are never wiped.
     const handleDeleteContact = async () => {
         if (!deleteContact) return;
         setDeleting(true);

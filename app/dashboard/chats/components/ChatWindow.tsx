@@ -4,13 +4,27 @@ import { useEffect, useState, useRef, useCallback } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Send, MoreVertical, Check, CheckCheck, AlertCircle, FileText, Store, Clock, ChevronLeft } from 'lucide-react';
+import { Send, MoreVertical, Check, CheckCheck, AlertCircle, FileText, Store, Clock, ChevronLeft, Trash2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { SendTemplateDialog } from './SendTemplateDialog';
 import { ContactTypeBadge } from '@/components/dashboard/ContactTypeBadge';
 import { Switch } from '@/components/ui/switch';
 import { Skeleton } from '@/components/ui/skeleton';
+import {
+    DropdownMenu,
+    DropdownMenuContent,
+    DropdownMenuItem,
+    DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
+} from '@/components/ui/dialog';
 
 const STAGE_LABELS: Record<string, string> = {
     new: 'Baru',
@@ -129,6 +143,8 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
         ai_enabled: true,
     });
     const [templateDialogOpen, setTemplateDialogOpen] = useState(false);
+    const [deleteOpen, setDeleteOpen] = useState(false);
+    const [deleting, setDeleting] = useState(false);
     const scrollRef = useRef<HTMLDivElement>(null);
     const scrollContainerRef = useRef<HTMLDivElement>(null);
     // True while the user is pinned to the bottom. Background refreshes (the 10s
@@ -331,6 +347,30 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
         }
     };
 
+    const handleDeleteContact = async () => {
+        setDeleting(true);
+        try {
+            const res = await fetch(`/api/leads/${encodeURIComponent(phoneNumber)}`, {
+                method: 'DELETE',
+            });
+            if (res.ok || res.status === 404) {
+                setDeleteOpen(false);
+                toast.success(res.ok ? 'Kontak dihapus permanen' : 'Kontak sudah tidak ada');
+                // Close the open conversation; ChatList drops the row via realtime.
+                onBack?.();
+            } else {
+                const err = (await res.json().catch(() => ({}))) as { error?: string };
+                throw new Error(err.error ?? `HTTP ${res.status}`);
+            }
+        } catch (e) {
+            toast.error(e instanceof Error ? e.message : 'Gagal menghapus kontak', {
+                duration: 8000,
+            });
+        } finally {
+            setDeleting(false);
+        }
+    };
+
     const groupedMessages = messages.reduce((acc, msg) => {
         const date = new Date(msg.created_at).toDateString();
         if (!acc[date]) acc[date] = [];
@@ -386,7 +426,26 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
                     </div>
                 </div>
                 <div className="flex gap-4 text-[var(--wa-header-icon)] shrink-0">
-                    <MoreVertical className="h-5 w-5 cursor-pointer hover:text-[var(--wa-text)]" />
+                    <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                            <button
+                                type="button"
+                                aria-label="Menu kontak"
+                                className="rounded-full p-1 hover:bg-black/5 dark:hover:bg-white/10"
+                            >
+                                <MoreVertical className="h-5 w-5 cursor-pointer hover:text-[var(--wa-text)]" />
+                            </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                            <DropdownMenuItem
+                                onClick={() => setDeleteOpen(true)}
+                                className="text-red-600 focus:text-red-600 dark:text-red-400 dark:focus:text-red-400"
+                            >
+                                <Trash2 className="mr-2 h-4 w-4" />
+                                Hapus kontak
+                            </DropdownMenuItem>
+                        </DropdownMenuContent>
+                    </DropdownMenu>
                 </div>
             </div>
 
@@ -553,6 +612,28 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
                     </form>
                 </div>
             </div>
+
+            <Dialog open={deleteOpen} onOpenChange={(o) => { if (!deleting) setDeleteOpen(o); }}>
+                <DialogContent>
+                    <DialogHeader>
+                        <DialogTitle>Hapus kontak ini?</DialogTitle>
+                        <DialogDescription>
+                            Seluruh <strong>chat, memori AI, dan data kontak</strong> untuk{' '}
+                            <strong>{contactName || phoneNumber}</strong> akan dihapus permanen
+                            dan tidak bisa dikembalikan. Bila kontak punya booking, penghapusan
+                            ditolak demi menjaga data pesanan.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <DialogFooter>
+                        <Button variant="outline" onClick={() => setDeleteOpen(false)} disabled={deleting}>
+                            Batal
+                        </Button>
+                        <Button variant="destructive" onClick={handleDeleteContact} disabled={deleting}>
+                            {deleting ? 'Menghapus…' : 'Hapus permanen'}
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
 
             <SendTemplateDialog
                 open={templateDialogOpen}
