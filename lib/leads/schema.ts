@@ -59,6 +59,8 @@ export const LEAD_SOURCE_OPTIONS: { value: LeadSource; label: string }[] = [
 const SOURCE_LABELS: Record<string, string> = {
     ...Object.fromEntries(LEAD_SOURCE_OPTIONS.map((o) => [o.value, o.label])),
     whatsapp: 'WhatsApp',
+    // Lead captured from the "Brief Acara" WhatsApp Flow (see lib/whatsapp/flow-response.ts).
+    whatsapp_flow: 'WhatsApp Flow',
 };
 
 /** Human label for any source value (incl. 'whatsapp' and null → "WhatsApp"). */
