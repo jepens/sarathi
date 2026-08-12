@@ -125,6 +125,131 @@ export async function sendWhatsAppMessage(
     return { waMessageId, raw };
 }
 
+// ---- Media (admin-sent photos / documents) ----
+
+const MEDIA_LIMITS = {
+    image: { mimes: ['image/jpeg', 'image/png'], maxBytes: 5 * 1024 * 1024 },
+    document: {
+        mimes: [
+            'application/pdf',
+            'application/msword',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'application/vnd.ms-excel',
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'application/vnd.ms-powerpoint',
+            'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+            'text/plain',
+        ],
+        maxBytes: 100 * 1024 * 1024,
+    },
+} as const;
+
+export type WhatsAppMediaKind = 'image' | 'document';
+
+// Classify a MIME type into the WhatsApp message kind we support, or null when
+// it's not an allowed image/document type.
+export function classifyMedia(mime: string): WhatsAppMediaKind | null {
+    if ((MEDIA_LIMITS.image.mimes as readonly string[]).includes(mime)) return 'image';
+    if ((MEDIA_LIMITS.document.mimes as readonly string[]).includes(mime)) return 'document';
+    return null;
+}
+
+export function mediaMaxBytes(kind: WhatsAppMediaKind): number {
+    return MEDIA_LIMITS[kind].maxBytes;
+}
+
+// Upload a file to Meta's media endpoint → media_id (valid ~30 days). Multipart:
+// do NOT set Content-Type, fetch adds the boundary from the FormData.
+export async function uploadWhatsAppMedia(
+    file: Blob,
+    filename: string,
+    mimeType: string,
+    creds?: { phoneNumberId: string; accessToken: string },
+): Promise<string> {
+    const phoneNumberId = creds?.phoneNumberId || (await getWhatsAppPhoneNumberId());
+    const accessToken = creds?.accessToken || (await getWhatsAppAccessToken());
+    if (!phoneNumberId || !accessToken) {
+        throw new Error('WhatsApp not configured. Please configure in /dashboard/settings');
+    }
+
+    const form = new FormData();
+    form.append('messaging_product', 'whatsapp');
+    form.append('type', mimeType);
+    form.append('file', file, filename);
+
+    const response = await fetch(`${WHATSAPP_API_URL}/${phoneNumberId}/media`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${accessToken}` },
+        body: form,
+    });
+
+    if (!response.ok) {
+        let errorPayload: unknown = null;
+        try { errorPayload = await response.json(); } catch { errorPayload = null; }
+        console.error('Error uploading WhatsApp media:', JSON.stringify(errorPayload, null, 2));
+        throw makeWhatsAppApiError(errorPayload, response.status);
+    }
+
+    const raw = await response.json();
+    const id = raw && typeof raw === 'object' ? (raw as Record<string, unknown>).id : null;
+    if (typeof id !== 'string' || !id) {
+        throw new Error('Meta media upload returned no media id');
+    }
+    return id;
+}
+
+// Send an image or document message referencing an uploaded media_id.
+export async function sendWhatsAppMedia(
+    to: string,
+    media: { kind: WhatsAppMediaKind; mediaId: string; caption?: string; filename?: string },
+    creds?: { phoneNumberId: string; accessToken: string },
+): Promise<SendWhatsAppResult> {
+    const phoneNumberId = creds?.phoneNumberId || (await getWhatsAppPhoneNumberId());
+    const accessToken = creds?.accessToken || (await getWhatsAppAccessToken());
+    if (!phoneNumberId || !accessToken) {
+        throw new Error('WhatsApp not configured. Please configure in /dashboard/settings');
+    }
+
+    const caption = media.caption?.trim() ? media.caption.trim() : undefined;
+    const body: Record<string, unknown> = { messaging_product: 'whatsapp', to, type: media.kind };
+    if (media.kind === 'image') {
+        body.image = { id: media.mediaId, ...(caption ? { caption } : {}) };
+    } else {
+        body.document = {
+            id: media.mediaId,
+            ...(caption ? { caption } : {}),
+            ...(media.filename ? { filename: media.filename } : {}),
+        };
+    }
+
+    const response = await fetch(`${WHATSAPP_API_URL}/${phoneNumberId}/messages`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+        let errorPayload: unknown = null;
+        try { errorPayload = await response.json(); } catch { errorPayload = null; }
+        console.error('Error sending WhatsApp media:', JSON.stringify(errorPayload, null, 2));
+        throw makeWhatsAppApiError(errorPayload, response.status);
+    }
+
+    const raw = await response.json();
+    let waMessageId: string | null = null;
+    if (raw && typeof raw === 'object') {
+        const messages = (raw as Record<string, unknown>).messages;
+        if (Array.isArray(messages) && messages.length > 0) {
+            const first = messages[0];
+            if (first && typeof first === 'object') {
+                const id = (first as Record<string, unknown>).id;
+                if (typeof id === 'string' && id.length > 0) waMessageId = id;
+            }
+        }
+    }
+    return { waMessageId, raw };
+}
+
 // Human-friendly hints for common Meta error codes. Returned alongside the
 // raw Meta error so the dashboard UI can show a useful toast instead of
 // "Internal Server Error".
