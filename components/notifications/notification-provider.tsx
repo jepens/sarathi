@@ -185,22 +185,57 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
             }
         };
 
-        const channel = supabase
-            .channel('notif_inbound')
-            .on(
-                'postgres_changes',
-                { event: 'INSERT', schema: 'public', table: 'whatsapp_chats' },
-                (payload) => handle(payload.new as ChatRealtimeRow),
-            )
-            .on(
-                'postgres_changes',
-                { event: 'UPDATE', schema: 'public', table: 'whatsapp_chats' },
-                (payload) => handle(payload.new as ChatRealtimeRow),
-            )
-            .subscribe();
+        let channel: ReturnType<typeof supabase.channel> | undefined;
+        let authListener: { unsubscribe: () => void } | undefined;
+        let cancelled = false;
+
+        (async () => {
+            // RLS-gated postgres_changes only stream to a realtime socket that
+            // carries the signed-in user's JWT. supabase-js sets that token on auth
+            // events, but this effect can subscribe BEFORE the token has propagated
+            // — the channel then joins unauthenticated and silently receives
+            // NOTHING (whatsapp_chats RLS = is_org_member(org_id)). Set the token
+            // explicitly before subscribing, and refresh it whenever it rotates.
+            const {
+                data: { session },
+            } = await supabase.auth.getSession();
+            if (cancelled) return;
+            if (session?.access_token) {
+                await supabase.realtime.setAuth(session.access_token);
+            }
+            if (cancelled) return;
+
+            channel = supabase
+                .channel('notif_inbound')
+                .on(
+                    'postgres_changes',
+                    { event: 'INSERT', schema: 'public', table: 'whatsapp_chats' },
+                    (payload) => handle(payload.new as ChatRealtimeRow),
+                )
+                .on(
+                    'postgres_changes',
+                    { event: 'UPDATE', schema: 'public', table: 'whatsapp_chats' },
+                    (payload) => handle(payload.new as ChatRealtimeRow),
+                )
+                .subscribe((status, err) => {
+                    // Make a silent realtime failure observable in the console.
+                    const st: string = status;
+                    if (st === 'SUBSCRIBED') {
+                        console.info('[notif] realtime subscribed to whatsapp_chats');
+                    } else if (st === 'CHANNEL_ERROR' || st === 'TIMED_OUT' || st === 'CLOSED') {
+                        console.error(`[notif] realtime ${st}`, err ?? '');
+                    }
+                });
+
+            authListener = supabase.auth.onAuthStateChange((_event, s) => {
+                if (s?.access_token) void supabase.realtime.setAuth(s.access_token);
+            }).data.subscription;
+        })();
 
         return () => {
-            supabase.removeChannel(channel);
+            cancelled = true;
+            authListener?.unsubscribe();
+            if (channel) supabase.removeChannel(channel);
         };
     }, [router, bumpBadge]);
 
