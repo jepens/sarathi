@@ -19,6 +19,7 @@ export interface PortalClient {
 export interface HandoffLead {
     phone_number: string;
     contact_name: string | null;
+    company: string | null;
     email: string | null;
     event_interest: string | null;
     participant_count: number | null;
@@ -42,6 +43,7 @@ export interface HandoffBrief {
     eventGoals?: string;
     budgetRange?: string;
     contactName?: string;
+    company?: string;
     phone?: string;
     email?: string;
 }
@@ -115,6 +117,8 @@ export function buildBrief(lead: HandoffLead): HandoffBrief {
     if (br) brief.budgetRange = br;
     const cn = clean(lead.contact_name);
     if (cn) brief.contactName = cn;
+    const co = clean(lead.company);
+    if (co) brief.company = co;
     const ph = realPhone(lead.phone_number);
     if (ph) brief.phone = ph;
     const em = clean(lead.email);

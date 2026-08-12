@@ -8,6 +8,7 @@ import { resolveWhatsAppContext } from '@/lib/whatsapp/credentials';
 import { whatsappLogger } from '@/lib/utils/logger';
 import { logSystemMessage } from '@/lib/whatsapp/history';
 import { sendPushToOrg } from '@/lib/notifications/web-push';
+import { handleFlowReply } from '@/lib/whatsapp/flow-response';
 
 import { checkVerifyToken } from '@/lib/settings/app-settings';
 
@@ -336,6 +337,37 @@ export async function POST(request: Request) {
                         whatsappLogger.info(`Contact share captured for ${contactKey}: ${recovered}`);
                     } else {
                         whatsappLogger.warn(`Contact share from ${contactKey} had no usable phone`);
+                    }
+                    return new NextResponse('EVENT_RECEIVED', { status: 200 });
+                }
+
+                // ===== WhatsApp Flow submissions (interactive → nfm_reply) =====
+                // A customer submitted a Flow (e.g. "Brief Acara" — from the
+                // template button or an in-window flow message). Without this
+                // branch the submission would fall through unhandled: no history
+                // row, no lead, no confirmation, and no 24h-window reset. Full
+                // handling (history + CRM upsert + Nindra context via system
+                // message + deterministic confirmation) lives in
+                // lib/whatsapp/flow-response.ts.
+                if (messageType === 'interactive') {
+                    const interactive = message.interactive;
+                    if (interactive?.type === 'nfm_reply' && interactive.nfm_reply) {
+                        await handleFlowReply({
+                            supabase,
+                            orgId: waCtx.orgId,
+                            phoneNumberId: waCtx.phoneNumberId,
+                            accessToken: waCtx.accessToken,
+                            contactKey,
+                            replyTo: from,
+                            bsuid,
+                            waId,
+                            inboundWamid,
+                            nfmReply: interactive.nfm_reply,
+                        });
+                    } else {
+                        // Other interactive subtypes (button_reply, list_reply)
+                        // are not used by this app yet — log so they're visible.
+                        whatsappLogger.info(`Unhandled interactive subtype from ${contactKey}: ${interactive?.type ?? 'unknown'}`);
                     }
                     return new NextResponse('EVENT_RECEIVED', { status: 200 });
                 }

@@ -59,6 +59,8 @@ export const LEAD_SOURCE_OPTIONS: { value: LeadSource; label: string }[] = [
 const SOURCE_LABELS: Record<string, string> = {
     ...Object.fromEntries(LEAD_SOURCE_OPTIONS.map((o) => [o.value, o.label])),
     whatsapp: 'WhatsApp',
+    // Lead captured from the "Brief Acara" WhatsApp Flow (see lib/whatsapp/flow-response.ts).
+    whatsapp_flow: 'WhatsApp Flow',
 };
 
 /** Human label for any source value (incl. 'whatsapp' and null → "WhatsApp"). */
@@ -161,6 +163,7 @@ const stageField = z.preprocess(cleanEnum, z.enum(LEAD_STAGE_VALUES).default('ne
 // doesn't apply.
 export const leadFieldsSchema = z.object({
     contact_name: optionalText,
+    company: optionalText,
     phone_number: optionalPhone,
     email: optionalEmail,
     event_interest: optionalText,
@@ -197,6 +200,7 @@ export const LEAD_CSV_COLUMNS: {
     example: string;
 }[] = [
     { field: 'contact_name', header: 'nama', example: 'Budi Santoso' },
+    { field: 'company', header: 'instansi', example: 'PT Astra' },
     { field: 'phone_number', header: 'nomor_hp', example: '08123456789' },
     { field: 'email', header: 'email', example: 'budi@email.com' },
     { field: 'event_interest', header: 'jenis_acara', example: 'Pernikahan' },
@@ -227,6 +231,13 @@ const HEADER_LOOKUP: Record<string, LeadFieldKey> = {
     ),
     nama_lengkap: 'contact_name',
     name: 'contact_name',
+    instansi: 'company',
+    perusahaan: 'company',
+    organisasi: 'company',
+    institusi: 'company',
+    nama_perusahaan: 'company',
+    nama_instansi: 'company',
+    company: 'company',
     no_hp: 'phone_number',
     nohp: 'phone_number',
     hp: 'phone_number',
@@ -263,6 +274,7 @@ export function fieldForHeader(header: string): LeadFieldKey | null {
 // `Contact` shapes satisfy this.
 export interface LeadCsvSource {
     contact_name: string | null;
+    company: string | null;
     phone_number: string;
     email: string | null;
     event_interest: string | null;
@@ -282,6 +294,7 @@ export interface LeadCsvSource {
 export function leadToCsvRow(l: LeadCsvSource): Record<string, string> {
     return {
         nama: l.contact_name ?? '',
+        instansi: l.company ?? '',
         // Synthetic phone-less identities export as blank (not "manual:<uuid>").
         nomor_hp: isSyntheticPhone(l.phone_number) ? '' : l.phone_number,
         email: l.email ?? '',

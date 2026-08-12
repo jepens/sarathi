@@ -30,6 +30,7 @@ import {
 // dropdowns). Kept local — the only consumer.
 const FIELD_LABELS: Record<LeadFieldKey, string> = {
     contact_name: 'Nama',
+    company: 'Instansi',
     phone_number: 'Nomor HP',
     email: 'Email',
     event_interest: 'Jenis acara',

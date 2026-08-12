@@ -4,8 +4,8 @@
 // call to the Portal lives here (server-side) so PORTAL_INTAKE_TOKEN never ships
 // to the browser and there's no cross-origin call from the client.
 
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { createClient } from '@/lib/supabase/server';
-import { getCurrentOrgId } from '@/lib/settings/org-context';
 import { isPortalConfigured } from '@/lib/portal/config';
 import { postHandoff, PortalError } from '@/lib/portal/client';
 import {
@@ -16,12 +16,30 @@ import {
 } from '@/lib/portal/types';
 
 type HandoffResult =
-    | { ok: true; clientId: string; proposalUrl: string }
+    | { ok: true; clientId: string; proposalUrl: string; warning?: string }
     | { ok: false; error: string };
+
+// Persist the Portal link back onto the lead. Returns the update error (or null).
+// Idempotent — repeated handoffs just refresh the URL.
+async function persistLink(
+    supabase: SupabaseClient,
+    phone: string,
+    resp: { clientId: string; proposalUrl: string }
+): Promise<unknown> {
+    const { error } = await supabase
+        .from('whatsapp_chats')
+        .update({
+            portal_client_id: resp.clientId,
+            portal_last_proposal_url: resp.proposalUrl,
+            updated_at: new Date().toISOString(),
+        })
+        .eq('phone_number', phone);
+    return error ?? null;
+}
 
 // Exactly the lead columns the brief + identity need.
 const LEAD_SELECT =
-    'phone_number, contact_name, email, event_interest, participant_count, ' +
+    'phone_number, contact_name, company, email, event_interest, participant_count, ' +
     'location_pref, event_date_pref, event_goals, budget_range, portal_client_id';
 
 // The select string is a runtime const, so supabase-js can't infer the row
@@ -45,8 +63,13 @@ export async function handoffToPortal(raw: unknown): Promise<HandoffResult> {
     const input = parsed.data;
 
     const supabase = await createClient();
-    const orgId = await getCurrentOrgId(supabase);
-    if (!orgId) return { ok: false, error: 'Tidak ada organisasi aktif untuk akun ini' };
+    // Auth gate only. The handoff queries key off phone_number, never org, so a
+    // getCurrentOrgId() round-trip to app_settings would be dead I/O — getUser()
+    // is the same gate without the extra query.
+    const {
+        data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) return { ok: false, error: 'Sesi tidak valid — silakan login ulang.' };
 
     const { data, error } = await supabase
         .from('whatsapp_chats')
@@ -86,19 +109,24 @@ export async function handoffToPortal(raw: unknown): Promise<HandoffResult> {
         return { ok: false, error: msg };
     }
 
-    // Remember the link (idempotent — repeated handoffs just refresh the URL).
-    // A failure to persist here is non-fatal: the proposal already exists in the
-    // Portal, so surface the URL anyway and let the next handoff re-link.
-    const { error: updateError } = await supabase
-        .from('whatsapp_chats')
-        .update({
-            portal_client_id: resp.clientId,
-            portal_last_proposal_url: resp.proposalUrl,
-            updated_at: new Date().toISOString(),
-        })
-        .eq('phone_number', input.phone);
+    // Remember the link. The proposal already exists in the Portal, so a persist
+    // failure is non-fatal — but it's NOT harmless: an unlinked lead re-shows the
+    // picker on the next handoff, and "Buat klien baru" would create a DUPLICATE
+    // Portal client. So retry once, and if it still fails, surface a warning that
+    // tells the operator to reuse the SAME client next time (Portal dedups a
+    // repeat by the stable idempotency key → relinks instead of duplicating).
+    let updateError = await persistLink(supabase, input.phone, resp);
+    if (updateError) updateError = await persistLink(supabase, input.phone, resp);
     if (updateError) {
         console.error('Handoff succeeded but failed to persist portal_client_id:', updateError);
+        return {
+            ok: true,
+            clientId: resp.clientId,
+            proposalUrl: resp.proposalUrl,
+            warning:
+                'Proposal dibuat, tetapi tautan klien gagal disimpan. Saat membuat proposal ' +
+                'lagi untuk lead ini, pilih klien yang SAMA — jangan buat klien baru.',
+        };
     }
 
     return { ok: true, clientId: resp.clientId, proposalUrl: resp.proposalUrl };

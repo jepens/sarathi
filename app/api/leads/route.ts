@@ -10,7 +10,7 @@ import { isPortalConfigured } from '@/lib/portal/config';
 // every WhatsApp contact is implicitly a lead in the EO funnel.
 
 const LEAD_FIELDS =
-    'phone_number, contact_name, email, event_interest, participant_count, ' +
+    'phone_number, contact_name, company, email, event_interest, participant_count, ' +
     'location_pref, event_date_pref, event_goals, budget_range, lead_stage, ' +
     'assigned_to, source, tags, notes, last_message, last_message_at, updated_at, ' +
     'portal_client_id, portal_last_proposal_url';
