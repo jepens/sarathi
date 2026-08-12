@@ -18,7 +18,7 @@ import { useNotifications } from './notification-provider';
  *  - variant="icon" → compact icon button for the mobile top bar
  */
 export function NotificationBell({ variant = 'row' }: { variant?: 'row' | 'icon' }) {
-    const { supported, permission, active, soundOn, enable, disable, toggleSound } =
+    const { supported, permission, active, pushConfigured, soundOn, enable, disable, toggleSound } =
         useNotifications();
 
     const Icon = !supported || permission === 'denied' ? BellOff : active ? BellRing : Bell;
@@ -96,7 +96,9 @@ export function NotificationBell({ variant = 'row' }: { variant?: 'row' | 'icon'
                 <DropdownMenuSeparator />
                 <div className="px-2 py-1.5 text-[11px] leading-snug text-muted-foreground">
                     Notifikasi desktop muncul saat tab tidak aktif — persis seperti WhatsApp Web.
-                    Berlaku selama dashboard terbuka.
+                    {pushConfigured && active
+                        ? ' Dengan Web Push, notifikasi tetap masuk walau tab/aplikasi ditutup.'
+                        : ' Berlaku selama dashboard terbuka.'}
                 </div>
             </DropdownMenuContent>
         </DropdownMenu>

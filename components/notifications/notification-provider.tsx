@@ -15,6 +15,7 @@ import { createClient } from '@/lib/supabase/client';
 import { unlockAudio, playDing } from '@/lib/notifications/sound';
 import { setTitleBadge, setFaviconBadge, clearBadges } from '@/lib/notifications/badge';
 import { isNewInbound, type ChatRealtimeRow } from '@/lib/notifications/inbound';
+import { subscribeToPush, unsubscribeFromPush, isPushSupported } from '@/lib/notifications/push';
 import {
     subscribeNotifPrefs,
     getNotifPrefs,
@@ -25,11 +26,19 @@ import {
     type NotifPermission,
 } from '@/lib/notifications/prefs';
 
+// The VAPID public key is inlined at build time. When it's blank, Tier 2 (Web
+// Push — notifications with the app closed) is disabled and only the in-tab
+// Tier 1 path runs.
+const VAPID_PUBLIC_KEY = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || '';
+const PUSH_CONFIGURED = VAPID_PUBLIC_KEY.length > 0;
+
 interface NotificationState {
     supported: boolean;
     permission: NotifPermission;
     /** User has opted in AND the browser granted permission. */
     active: boolean;
+    /** Server-sent Web Push is configured (VAPID key present) → alerts even when closed. */
+    pushConfigured: boolean;
     soundOn: boolean;
     /** Ask for permission and turn desktop notifications on. */
     enable: () => Promise<void>;
@@ -89,6 +98,16 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
             window.removeEventListener('keydown', unlock);
         };
     }, []);
+
+    // Keep this device's push subscription registered with the server whenever the
+    // operator is opted in and permission stands. Subscriptions can rotate/expire,
+    // so re-registering on load (an idempotent upsert on the endpoint) heals a
+    // stale one. No setState here → clear of the no-setState-in-effect rule.
+    useEffect(() => {
+        if (!PUSH_CONFIGURED || !enabled || permission !== 'granted') return;
+        if (!isPushSupported()) return;
+        void subscribeToPush(VAPID_PUBLIC_KEY);
+    }, [enabled, permission]);
 
     // The realtime notifier: one subscription for the whole dashboard session.
     // It reads the latest prefs from the store (getNotifPrefs) and the current
@@ -192,11 +211,26 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         if (perm === 'granted') {
             setEnabledPref(true);
             unlockAudio();
+            // Register for background (app-closed) pushes too. Best-effort — the
+            // in-tab path already works, so a failed push subscription only costs
+            // the "even when closed" reach, which we surface to the operator.
+            if (PUSH_CONFIGURED && isPushSupported()) {
+                const ok = await subscribeToPush(VAPID_PUBLIC_KEY);
+                if (!ok) {
+                    toast('Notifikasi latar belum aktif', {
+                        description:
+                            'Notifikasi tetap muncul selama tab dashboard terbuka.',
+                    });
+                }
+            }
         }
         refreshNotifPrefs();
     }, []);
 
-    const disable = useCallback(() => setEnabledPref(false), []);
+    const disable = useCallback(() => {
+        setEnabledPref(false);
+        void unsubscribeFromPush();
+    }, []);
     const toggleSound = useCallback(() => setSoundPref(!getNotifPrefs().soundOn), []);
 
     const value = useMemo<NotificationState>(
@@ -204,6 +238,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
             supported: permission !== 'unsupported',
             permission,
             active: enabled && permission === 'granted',
+            pushConfigured: PUSH_CONFIGURED,
             soundOn,
             enable,
             disable,
