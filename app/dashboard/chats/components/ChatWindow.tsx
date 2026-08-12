@@ -130,7 +130,18 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
     });
     const [templateDialogOpen, setTemplateDialogOpen] = useState(false);
     const scrollRef = useRef<HTMLDivElement>(null);
+    const scrollContainerRef = useRef<HTMLDivElement>(null);
+    // True while the user is pinned to the bottom. Background refreshes (the 10s
+    // poll, realtime inserts) only auto-scroll when this holds — so scrolling up
+    // to read history is never yanked back down.
+    const atBottomRef = useRef(true);
     const supabase = createClient();
+
+    const handleScroll = useCallback(() => {
+        const el = scrollContainerRef.current;
+        if (!el) return;
+        atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    }, []);
 
     const fetchMessages = useCallback(async () => {
         // Fetch contact info
@@ -173,7 +184,9 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
 
     useEffect(() => {
         // New chat selected → show the message skeleton until its history loads,
-        // and drop the previous chat's messages so they don't flash here.
+        // and drop the previous chat's messages so they don't flash here. Start
+        // pinned to the bottom so the initial load lands on the latest message.
+        atBottomRef.current = true;
         setLoadingMsgs(true);
         setMessages([]);
         fetchMessages();
@@ -257,7 +270,9 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
     }, [phoneNumber, fetchMessages, supabase]);
 
     useEffect(() => {
-        if (scrollRef.current) {
+        // Follow new messages only when the user is already at the bottom; if
+        // they've scrolled up to read history, leave their scroll position alone.
+        if (atBottomRef.current && scrollRef.current) {
             scrollRef.current.scrollIntoView({ behavior: 'smooth' });
         }
     }, [messages]);
@@ -265,6 +280,9 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
     const handleSend = async () => {
         if (!newMessage.trim()) return;
 
+        // The admin just sent → jump to the bottom to show their new bubble, even
+        // if they'd scrolled up.
+        atBottomRef.current = true;
         setSending(true);
         try {
             const response = await fetch('/api/chat/send', {
@@ -412,7 +430,7 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
                 </div>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-4">
+            <div ref={scrollContainerRef} onScroll={handleScroll} className="flex-1 overflow-y-auto p-4">
                 <div className="flex flex-col space-y-4 pb-4">
                     {loadingMsgs && messages.length === 0 && <MessagesSkeleton />}
                     {Object.entries(groupedMessages).map(([date, msgs]) => (
