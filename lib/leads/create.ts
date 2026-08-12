@@ -30,6 +30,7 @@ export type CreateLeadResult = {
 // Stage/source/identity are handled separately below.
 const FILLABLE_COLUMNS = [
     'contact_name',
+    'company',
     'email',
     'event_interest',
     'participant_count',
@@ -45,13 +46,14 @@ type FillableColumn = (typeof FILLABLE_COLUMNS)[number];
 
 const EXISTING_SELECT =
     'phone_number, contact_name, contact_name_locked, contact_type, ' +
-    'email, event_interest, participant_count, location_pref, ' +
+    'company, email, event_interest, participant_count, location_pref, ' +
     'event_date_pref, event_goals, budget_range, assigned_to, notes, ' +
     'lead_stage, source';
 
 function incomingValues(input: LeadInput): Record<FillableColumn, unknown> {
     return {
         contact_name: input.contact_name ?? null,
+        company: input.company ?? null,
         email: input.email ?? null,
         event_interest: input.event_interest ?? null,
         participant_count: input.participant_count ?? null,

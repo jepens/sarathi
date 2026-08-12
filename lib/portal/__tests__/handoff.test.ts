@@ -11,6 +11,7 @@ import { getPortalConfig, isPortalConfigured } from '@/lib/portal/config';
 const baseLead: HandoffLead = {
     phone_number: '628123456789',
     contact_name: 'Budi',
+    company: 'PT Astra',
     email: 'budi@astra.co.id',
     event_interest: 'team_building',
     participant_count: 300,
@@ -30,6 +31,7 @@ describe('buildBrief', () => {
             eventGoals: 'memperkuat kolaborasi tim',
             budgetRange: '250jt',
             contactName: 'Budi',
+            company: 'PT Astra',
             phone: '628123456789',
             email: 'budi@astra.co.id',
         });
@@ -39,6 +41,7 @@ describe('buildBrief', () => {
         const sparse: HandoffLead = {
             phone_number: '628111',
             contact_name: '   ',
+            company: null,
             email: null,
             event_interest: 'gala',
             participant_count: null,

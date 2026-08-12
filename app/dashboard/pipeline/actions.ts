@@ -39,7 +39,7 @@ async function persistLink(
 
 // Exactly the lead columns the brief + identity need.
 const LEAD_SELECT =
-    'phone_number, contact_name, email, event_interest, participant_count, ' +
+    'phone_number, contact_name, company, email, event_interest, participant_count, ' +
     'location_pref, event_date_pref, event_goals, budget_range, portal_client_id';
 
 // The select string is a runtime const, so supabase-js can't infer the row

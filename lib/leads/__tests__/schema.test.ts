@@ -63,6 +63,7 @@ describe('fieldForHeader', () => {
 describe('leadToCsvRow (export ↔ import round-trip)', () => {
     const base: LeadCsvSource = {
         contact_name: 'Budi',
+        company: 'PT Astra',
         phone_number: '628123456789',
         email: 'b@x.co',
         event_interest: 'Wedding',
@@ -80,6 +81,7 @@ describe('leadToCsvRow (export ↔ import round-trip)', () => {
     it('maps to the same Indonesian headers as the import template', () => {
         expect(leadToCsvRow(base)).toEqual({
             nama: 'Budi',
+            instansi: 'PT Astra',
             nomor_hp: '628123456789',
             email: 'b@x.co',
             jenis_acara: 'Wedding',

@@ -38,6 +38,7 @@ import {
 export interface LeadEditData {
     phone_number: string;
     contact_name: string | null;
+    company: string | null;
     email: string | null;
     event_interest: string | null;
     participant_count: number | null;
@@ -53,6 +54,7 @@ export interface LeadEditData {
 
 interface LeadFormState {
     contact_name: string;
+    company: string;
     phone_number: string;
     email: string;
     event_interest: string;
@@ -69,6 +71,7 @@ interface LeadFormState {
 
 const EMPTY_FORM: LeadFormState = {
     contact_name: '',
+    company: '',
     phone_number: '',
     email: '',
     event_interest: '',
@@ -121,6 +124,7 @@ export function LeadDialog({ open, onOpenChange, onSuccess, leadToEdit }: LeadDi
         if (leadToEdit) {
             setForm({
                 contact_name: leadToEdit.contact_name ?? '',
+                company: leadToEdit.company ?? '',
                 phone_number: isSyntheticPhone(leadToEdit.phone_number)
                     ? ''
                     : leadToEdit.phone_number,
@@ -208,6 +212,7 @@ export function LeadDialog({ open, onOpenChange, onSuccess, leadToEdit }: LeadDi
         // once at creation, and the phone is the row's identity (PK).
         const body = {
             contact_name: form.contact_name.trim() || null,
+            company: form.company.trim() || null,
             email: form.email.trim() || null,
             event_interest: form.event_interest.trim() || null,
             participant_count:
@@ -307,6 +312,16 @@ export function LeadDialog({ open, onOpenChange, onSuccess, leadToEdit }: LeadDi
                                 </>
                             )}
                         </div>
+                    </div>
+
+                    <div className="space-y-2">
+                        <Label htmlFor="company">Instansi / Perusahaan</Label>
+                        <Input
+                            id="company"
+                            value={form.company}
+                            onChange={(e) => set('company', e.target.value)}
+                            placeholder="PT Astra, Kemenkeu, dll."
+                        />
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

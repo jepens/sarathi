@@ -1,0 +1,250 @@
+{
+  "version": "7.3",
+  "screens": [
+    {
+      "id": "ACARA",
+      "title": "Brief Acara",
+      "data": {},
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "TextBody",
+            "text": "Isi singkat saja — tim Sailendra akan menyiapkan penawaran yang pas untuk acara Anda."
+          },
+          {
+            "type": "Form",
+            "name": "form_acara",
+            "children": [
+              {
+                "type": "Dropdown",
+                "name": "jenis_acara",
+                "label": "Jenis acara",
+                "required": true,
+                "data-source": [
+                  {
+                    "id": "team_building",
+                    "title": "Team Building"
+                  },
+                  {
+                    "id": "capacity_building",
+                    "title": "Capacity Building"
+                  },
+                  {
+                    "id": "company_gathering",
+                    "title": "Company Gathering"
+                  },
+                  {
+                    "id": "family_gathering",
+                    "title": "Family Gathering"
+                  },
+                  {
+                    "id": "outing",
+                    "title": "Outing / Outbound"
+                  },
+                  {
+                    "id": "corporate_event",
+                    "title": "Corporate Event"
+                  },
+                  {
+                    "id": "lainnya",
+                    "title": "Lainnya"
+                  }
+                ]
+              },
+              {
+                "type": "Dropdown",
+                "name": "jumlah_peserta",
+                "label": "Jumlah peserta",
+                "required": true,
+                "data-source": [
+                  {
+                    "id": "lt_50",
+                    "title": "< 50 orang"
+                  },
+                  {
+                    "id": "50_100",
+                    "title": "50-100 orang"
+                  },
+                  {
+                    "id": "100_300",
+                    "title": "100-300 orang"
+                  },
+                  {
+                    "id": "gt_300",
+                    "title": "> 300 orang"
+                  }
+                ]
+              },
+              {
+                "type": "CalendarPicker",
+                "name": "tanggal_mulai",
+                "mode": "single",
+                "label": "Tanggal mulai",
+                "helper-text": "Perkiraan saja, bisa berubah"
+              },
+              {
+                "type": "CalendarPicker",
+                "name": "tanggal_selesai",
+                "mode": "single",
+                "label": "Tanggal selesai",
+                "helper-text": "Acara 1 hari: samakan dengan mulai"
+              },
+              {
+                "type": "TextInput",
+                "name": "lokasi",
+                "label": "Kota / lokasi",
+                "input-type": "text",
+                "required": true,
+                "helper-text": "Kota atau venue yang diinginkan"
+              },
+              {
+                "type": "Dropdown",
+                "name": "budget",
+                "label": "Perkiraan budget",
+                "required": false,
+                "data-source": [
+                  {
+                    "id": "lt_50jt",
+                    "title": "< Rp50 juta"
+                  },
+                  {
+                    "id": "50_100jt",
+                    "title": "Rp50-100 juta"
+                  },
+                  {
+                    "id": "100_250jt",
+                    "title": "Rp100-250 juta"
+                  },
+                  {
+                    "id": "gt_250jt",
+                    "title": "> Rp250 juta"
+                  },
+                  {
+                    "id": "tbd",
+                    "title": "Belum ditentukan"
+                  }
+                ]
+              },
+              {
+                "type": "Footer",
+                "label": "Lanjut",
+                "on-click-action": {
+                  "name": "navigate",
+                  "next": {
+                    "type": "screen",
+                    "name": "KONTAK"
+                  },
+                  "payload": {
+                    "jenis_acara": "${form.jenis_acara}",
+                    "jumlah_peserta": "${form.jumlah_peserta}",
+                    "lokasi": "${form.lokasi}",
+                    "budget": "${form.budget}",
+                    "tanggal_mulai": "${form.tanggal_mulai}",
+                    "tanggal_selesai": "${form.tanggal_selesai}"
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KONTAK",
+      "title": "Data Kontak",
+      "terminal": true,
+      "data": {
+        "jenis_acara": {
+          "type": "string",
+          "__example__": "team_building"
+        },
+        "jumlah_peserta": {
+          "type": "string",
+          "__example__": "50_100"
+        },
+        "lokasi": {
+          "type": "string",
+          "__example__": "Bandung"
+        },
+        "budget": {
+          "type": "string",
+          "__example__": "50_100jt"
+        },
+        "tanggal_mulai": {
+          "type": "string",
+          "__example__": "2026-09-01"
+        },
+        "tanggal_selesai": {
+          "type": "string",
+          "__example__": "2026-09-03"
+        }
+      },
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "TextBody",
+            "text": "Terakhir — data kontak untuk pengiriman penawaran."
+          },
+          {
+            "type": "Form",
+            "name": "form_kontak",
+            "children": [
+              {
+                "type": "TextInput",
+                "name": "nama_perusahaan",
+                "label": "Nama perusahaan",
+                "input-type": "text",
+                "required": true,
+                "helper-text": "Perusahaan / instansi / komunitas"
+              },
+              {
+                "type": "TextInput",
+                "name": "nama_pic",
+                "label": "Nama PIC",
+                "input-type": "text",
+                "required": true
+              },
+              {
+                "type": "TextInput",
+                "name": "email_pic",
+                "label": "Email PIC",
+                "input-type": "email",
+                "required": false,
+                "helper-text": "Untuk pengiriman proposal"
+              },
+              {
+                "type": "TextArea",
+                "name": "catatan",
+                "label": "Catatan tambahan",
+                "required": false,
+                "max-length": 300,
+                "helper-text": "Opsional"
+              },
+              {
+                "type": "Footer",
+                "label": "Kirim Brief",
+                "on-click-action": {
+                  "name": "complete",
+                  "payload": {
+                    "jenis_acara": "${data.jenis_acara}",
+                    "jumlah_peserta": "${data.jumlah_peserta}",
+                    "lokasi": "${data.lokasi}",
+                    "budget": "${data.budget}",
+                    "nama_perusahaan": "${form.nama_perusahaan}",
+                    "nama_pic": "${form.nama_pic}",
+                    "email_pic": "${form.email_pic}",
+                    "catatan": "${form.catatan}",
+                    "tanggal_mulai": "${data.tanggal_mulai}",
+                    "tanggal_selesai": "${data.tanggal_selesai}"
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -123,6 +123,10 @@ export function buildTools(p: BusinessProfile): ChatCompletionTool[] {
                         type: ['string', 'null'],
                         description: 'Customer first/full name as they introduced themselves. A bare honorific or greeting ("kak", "kakak", "pak", "bu", "mas", "mbak") is NOT a name — pass null until they give a real name.',
                     },
+                    company: {
+                        type: ['string', 'null'],
+                        description: 'Instansi/perusahaan/organisasi lead (mis. "PT Astra", "Kemenkeu", "Universitas Indonesia"). Untuk acara korporat/instansi. Pass null jika perorangan atau belum disebut.',
+                    },
                     email: {
                         type: ['string', 'null'],
                         description: `Customer's OWN email address (must look valid).${p.businessEmail ? ` NEVER pass ${p.businessName}'s own address ${p.businessEmail} — that is the company address ${p.assistantName} hands to vendors, not the customer's.` : ''}`,
@@ -176,7 +180,7 @@ export function buildTools(p: BusinessProfile): ChatCompletionTool[] {
                     },
                 },
                 required: [
-                    'name', 'email', 'event_interest', 'participant_count',
+                    'name', 'company', 'email', 'event_interest', 'participant_count',
                     'location_pref', 'event_date_pref', 'event_goals',
                     'budget_range', 'source', 'notes',
                     'contact_type', 'vendor_category', 'vendor_offering',
@@ -309,6 +313,7 @@ export async function checkAvailability(productName: string) {
 
 export interface SaveLeadInfoArgs {
     name?: string | null;
+    company?: string | null;
     email?: string | null;
     event_interest?: string | null;
     participant_count?: number | null;
@@ -500,6 +505,7 @@ export async function saveLeadInfo(
             patch.participant_count = Math.round(args.participant_count);
         }
 
+        maybeSet('company', args.company);
         maybeSet('event_interest', args.event_interest);
         maybeSet('location_pref', args.location_pref);
         maybeSet('event_date_pref', args.event_date_pref);
