@@ -4,7 +4,7 @@ import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Send, MoreVertical, Check, CheckCheck, AlertCircle, FileText, Store, Clock, ChevronLeft, Trash2, Paperclip, X, Loader2, Download, ImageOff } from 'lucide-react';
+import { Send, MoreVertical, Check, CheckCheck, AlertCircle, FileText, Store, Clock, ChevronLeft, Trash2, Paperclip, X, Loader2, Download, ImageOff, Mic, Film } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { SendTemplateDialog } from './SendTemplateDialog';
@@ -86,7 +86,7 @@ interface Message {
     error_code?: number | null;
     error_title?: string | null;
     error_detail?: string | null;
-    media_type?: 'image' | 'document' | null;
+    media_type?: 'image' | 'document' | 'audio' | 'video' | null;
     media_url?: string | null;
     media_mime?: string | null;
     media_filename?: string | null;
@@ -608,6 +608,38 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
                                                     <ImageOff className="h-8 w-8 shrink-0 text-[var(--wa-header-icon)]" />
                                                     <span className="min-w-0 flex-1 truncate text-sm">
                                                         {msg.media_filename || 'Foto'} — pratinjau tidak tersedia
+                                                    </span>
+                                                </div>
+                                            ))}
+                                        {msg.media_type === 'audio' &&
+                                            (msg.media_url ? (
+                                                <audio
+                                                    controls
+                                                    preload="none"
+                                                    src={msg.media_url}
+                                                    className="mb-1 h-10 w-56 max-w-full"
+                                                />
+                                            ) : (
+                                                <div className="mb-1 flex items-center gap-2 rounded-md bg-black/5 p-2 opacity-70 dark:bg-white/10">
+                                                    <Mic className="h-8 w-8 shrink-0 text-[var(--wa-header-icon)]" />
+                                                    <span className="min-w-0 flex-1 truncate text-sm">
+                                                        Pesan suara — tidak tersedia
+                                                    </span>
+                                                </div>
+                                            ))}
+                                        {msg.media_type === 'video' &&
+                                            (msg.media_url ? (
+                                                <video
+                                                    controls
+                                                    preload="metadata"
+                                                    src={msg.media_url}
+                                                    className="mb-1 max-h-64 w-auto max-w-full rounded-md"
+                                                />
+                                            ) : (
+                                                <div className="mb-1 flex items-center gap-2 rounded-md bg-black/5 p-2 opacity-70 dark:bg-white/10">
+                                                    <Film className="h-8 w-8 shrink-0 text-[var(--wa-header-icon)]" />
+                                                    <span className="min-w-0 flex-1 truncate text-sm">
+                                                        Video — tidak tersedia
                                                     </span>
                                                 </div>
                                             ))}

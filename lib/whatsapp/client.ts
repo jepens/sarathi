@@ -250,6 +250,63 @@ export async function sendWhatsAppMedia(
     return { waMessageId, raw };
 }
 
+// ---- Inbound media download (customer-sent photos / docs / voice / video) ----
+
+export interface DownloadedMedia {
+    bytes: Uint8Array;
+    mime: string;
+    size: number;
+}
+
+// Download inbound media the customer sent us. Meta's flow is two steps:
+//   1. GET /{media-id}          → JSON with a short-lived lookaside `url`
+//   2. GET {url}                → the raw bytes
+// BOTH calls require the Bearer token (the CDN 401s without it), and the
+// lookaside URL expires in ~5 minutes so we fetch it immediately. A User-Agent
+// is sent because Meta's CDN occasionally 400s header-less requests.
+export async function downloadWhatsAppMedia(
+    mediaId: string,
+    creds?: { phoneNumberId: string; accessToken: string },
+): Promise<DownloadedMedia> {
+    const accessToken = creds?.accessToken || (await getWhatsAppAccessToken());
+    if (!accessToken) {
+        throw new Error('WhatsApp not configured. Please configure in /dashboard/settings');
+    }
+
+    // Step 1 — resolve the media id to a temporary download URL.
+    const metaRes = await fetch(`${WHATSAPP_API_URL}/${mediaId}`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!metaRes.ok) {
+        let errorPayload: unknown = null;
+        try { errorPayload = await metaRes.json(); } catch { errorPayload = null; }
+        console.error('Error resolving WhatsApp media url:', JSON.stringify(errorPayload, null, 2));
+        throw makeWhatsAppApiError(errorPayload, metaRes.status);
+    }
+    const meta = await metaRes.json();
+    const metaObj = meta && typeof meta === 'object' ? (meta as Record<string, unknown>) : {};
+    const url = typeof metaObj.url === 'string' ? metaObj.url : null;
+    const mimeFromMeta = typeof metaObj.mime_type === 'string' ? metaObj.mime_type : null;
+    if (!url) {
+        throw new Error('Meta media lookup returned no download url');
+    }
+
+    // Step 2 — fetch the bytes from the lookaside URL.
+    const binRes = await fetch(url, {
+        headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'User-Agent': 'Sarathi/1.0 (+https://sailendra.co.id)',
+        },
+    });
+    if (!binRes.ok) {
+        console.error(`Error downloading WhatsApp media bytes: HTTP ${binRes.status}`);
+        throw makeWhatsAppApiError(null, binRes.status);
+    }
+    const bytes = new Uint8Array(await binRes.arrayBuffer());
+    const mime = mimeFromMeta || binRes.headers.get('content-type') || 'application/octet-stream';
+    return { bytes, mime, size: bytes.byteLength };
+}
+
 // Human-friendly hints for common Meta error codes. Returned alongside the
 // raw Meta error so the dashboard UI can show a useful toast instead of
 // "Internal Server Error".

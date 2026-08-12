@@ -3,7 +3,7 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { verifyWhatsAppSignature } from '@/lib/whatsapp/security';
 import { checkRateLimit } from '@/lib/whatsapp/rate-limiter-db';
 import { enqueueMessage, processQueue, getDebounceSeconds } from '@/lib/whatsapp/queue-db';
-import { sendWhatsAppMessage } from '@/lib/whatsapp/client';
+import { sendWhatsAppMessage, downloadWhatsAppMedia } from '@/lib/whatsapp/client';
 import { resolveWhatsAppContext } from '@/lib/whatsapp/credentials';
 import { whatsappLogger } from '@/lib/utils/logger';
 import { logSystemMessage } from '@/lib/whatsapp/history';
@@ -101,6 +101,166 @@ async function handleUserIdUpdate(
         } else {
             whatsappLogger.info(`user_id_update: moved bsuid ${oldId}→${newId} for ${data?.length ?? 0} contact(s)`);
         }
+    }
+}
+
+const CHAT_MEDIA_BUCKET = 'chat-media';
+
+type InboundMediaKind = 'image' | 'document' | 'audio' | 'video';
+
+// Storage object extension for an inbound file — keep the original where the
+// document carried a filename, else map from the mime Meta reported.
+function inboundMediaExt(mime: string, filename: string | null): string {
+    if (filename && filename.includes('.')) {
+        const e = filename.split('.').pop()!.toLowerCase().replace(/[^a-z0-9]/g, '');
+        if (e) return e;
+    }
+    const map: Record<string, string> = {
+        'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif',
+        'application/pdf': 'pdf',
+        'audio/ogg': 'ogg', 'audio/mpeg': 'mp3', 'audio/mp4': 'm4a', 'audio/aac': 'aac', 'audio/amr': 'amr',
+        'video/mp4': 'mp4', 'video/3gpp': '3gp',
+    };
+    return map[mime] || 'bin';
+}
+
+// One-line preview used for the chat-list `last_message` and the push body when
+// the customer didn't add a caption.
+function inboundMediaSummary(kind: InboundMediaKind, filename: string | null, isVoice: boolean): string {
+    switch (kind) {
+        case 'image': return '📷 Foto';
+        case 'video': return '🎬 Video';
+        case 'audio': return isVoice ? '🎤 Pesan suara' : '🎵 Audio';
+        case 'document': return `📎 ${filename || 'Dokumen'}`;
+    }
+}
+
+interface InboundMediaParams {
+    supabase: SupabaseClient;
+    orgId: string;
+    creds: { phoneNumberId: string; accessToken: string };
+    contactKey: string;
+    bsuid: string | null;
+    waId: string | null;
+    inboundWamid: string | null;
+    kind: InboundMediaKind;
+    mediaId: string;
+    caption: string | null;
+    filename: string | null;
+    isVoice: boolean;
+}
+
+// Store a customer-sent photo / document / voice note / video and notify the
+// admin. The AI is intentionally NOT invoked (it can't interpret media) — the
+// admin handles these in manual mode. Runs fire-and-forget from the webhook so
+// Meta still gets its fast 200; large downloads must not block the response.
+async function handleInboundMedia(params: InboundMediaParams): Promise<void> {
+    const { supabase, orgId, creds, contactKey, bsuid, waId, inboundWamid, kind, mediaId, caption, filename, isVoice } = params;
+    const captionText = caption?.trim() ? caption.trim() : '';
+    try {
+        // Dedup pre-check: Meta delivers webhooks at-least-once. If this wamid is
+        // already stored, skip so we don't re-download from Meta or upload a
+        // duplicate object to storage.
+        if (inboundWamid) {
+            const { data: existing } = await supabase
+                .from('whatsapp_messages')
+                .select('id')
+                .eq('wa_message_id', inboundWamid)
+                .maybeSingle<{ id: string }>();
+            if (existing) {
+                whatsappLogger.info(`Duplicate inbound media ${inboundWamid} — already stored, skipping`);
+                return;
+            }
+        }
+
+        // Pull the bytes from Meta (2-step download).
+        const media = await downloadWhatsAppMedia(mediaId, creds);
+        const mime = media.mime;
+
+        // Best-effort persist to our public bucket so the dashboard can render it
+        // inline (Meta's copy expires ~30 days). If the upload fails we still
+        // insert the row (null URL → placeholder in the UI). Sanitise the phone
+        // segment; orgId + the random UUID are safe.
+        const safePhone = contactKey.replace(/[^a-zA-Z0-9._-]/g, '_');
+        const path = `${orgId}/${safePhone}/${crypto.randomUUID()}.${inboundMediaExt(mime, filename)}`;
+        let mediaUrl: string | null = null;
+        const { error: upErr } = await supabase.storage
+            .from(CHAT_MEDIA_BUCKET)
+            .upload(path, media.bytes, { contentType: mime, upsert: false });
+        if (upErr) {
+            whatsappLogger.error('Inbound chat-media storage upload failed', upErr);
+        } else {
+            mediaUrl = supabase.storage.from(CHAT_MEDIA_BUCKET).getPublicUrl(path).data.publicUrl;
+        }
+
+        const summary = captionText || inboundMediaSummary(kind, filename, isVoice);
+        const nowIso = new Date().toISOString();
+
+        // Chat summary + 24h-window reset. last_inbound_at is set on the inbound
+        // path only. bsuid / verified_phone recorded when Meta revealed them.
+        // .select() returns the row so we get contact_name for the push in one trip.
+        const chatPatch: Record<string, unknown> = {
+            org_id: orgId,
+            phone_number: contactKey,
+            last_message: summary,
+            last_message_at: nowIso,
+            last_inbound_at: nowIso,
+            updated_at: nowIso,
+        };
+        if (bsuid) chatPatch.bsuid = bsuid;
+        if (waId) chatPatch.verified_phone = waId;
+        const { data: chatRow, error: chatErr } = await supabase
+            .from('whatsapp_chats')
+            .upsert(chatPatch, { onConflict: 'org_id,phone_number' })
+            .select('contact_name')
+            .maybeSingle<{ contact_name: string | null }>();
+        if (chatErr) whatsappLogger.error('Error updating chat summary (inbound media)', chatErr);
+
+        // Insert the message. wa_message_id makes this idempotent (unique index).
+        const { error: msgErr } = await supabase.from('whatsapp_messages').insert({
+            org_id: orgId,
+            phone_number: contactKey,
+            role: 'user',
+            content: captionText,
+            media_type: kind,
+            media_url: mediaUrl,
+            media_mime: mime,
+            media_filename: filename,
+            wa_message_id: inboundWamid,
+        });
+        if (msgErr) {
+            if (msgErr.code === '23505') {
+                // Raced with a redelivery that inserted first — remove the orphan
+                // object we just uploaded so storage doesn't accumulate dupes.
+                whatsappLogger.info(`Duplicate inbound media ${inboundWamid} on insert — cleaning orphan storage object`);
+                if (mediaUrl) {
+                    try { await supabase.storage.from(CHAT_MEDIA_BUCKET).remove([path]); } catch { /* best-effort */ }
+                }
+                return;
+            }
+            whatsappLogger.error('Error inserting inbound media message', msgErr);
+            return;
+        }
+
+        whatsappLogger.info(`Inbound ${kind} stored for ${contactKey}`);
+
+        // Tier 2 — Web Push fan-out. Gated on a present wamid (its unique index
+        // dedups redeliveries, so each message pushes once). Best-effort; no-op
+        // unless VAPID is configured.
+        if (inboundWamid) {
+            try {
+                await sendPushToOrg(supabase, orgId, {
+                    title: chatRow?.contact_name || contactKey,
+                    body: summary,
+                    phone: contactKey,
+                    url: `/dashboard/chats?phone=${encodeURIComponent(contactKey)}`,
+                });
+            } catch (pushErr) {
+                whatsappLogger.error('Web push fan-out failed (inbound media)', pushErr);
+            }
+        }
+    } catch (err) {
+        whatsappLogger.error('Error handling inbound media', err);
     }
 }
 
@@ -369,6 +529,44 @@ export async function POST(request: Request) {
                         // are not used by this app yet — log so they're visible.
                         whatsappLogger.info(`Unhandled interactive subtype from ${contactKey}: ${interactive?.type ?? 'unknown'}`);
                     }
+                    return new NextResponse('EVENT_RECEIVED', { status: 200 });
+                }
+
+                // ===== Inbound media (customer sent a photo / document / voice note / video) =====
+                // The AI can't "see" media, so it stays silent (manual mode): we
+                // download the file, store it in chat-media, insert a role:'user'
+                // row, and notify the admin. A sticker is a webp image → stored as
+                // 'image'. Fire-and-forget so Meta gets its fast 200; media
+                // downloads (up to video) can be slow.
+                if (messageType === 'image' || messageType === 'document' || messageType === 'audio'
+                    || messageType === 'video' || messageType === 'sticker') {
+                    const mediaObj = message[messageType] ?? {};
+                    const mediaId: string | null = typeof mediaObj.id === 'string' ? mediaObj.id : null;
+                    if (!mediaId) {
+                        whatsappLogger.warn(`Inbound ${messageType} from ${contactKey} had no media id — skipping`);
+                        return new NextResponse('EVENT_RECEIVED', { status: 200 });
+                    }
+                    const kind: InboundMediaKind = messageType === 'sticker' ? 'image' : messageType;
+                    const caption: string | null = typeof mediaObj.caption === 'string' ? mediaObj.caption : null;
+                    const filename: string | null =
+                        messageType === 'document' && typeof mediaObj.filename === 'string' ? mediaObj.filename : null;
+                    const isVoice = messageType === 'audio' && mediaObj.voice === true;
+
+                    void handleInboundMedia({
+                        supabase,
+                        orgId: waCtx.orgId,
+                        creds: { phoneNumberId: waCtx.phoneNumberId, accessToken: waCtx.accessToken },
+                        contactKey,
+                        bsuid,
+                        waId,
+                        inboundWamid,
+                        kind,
+                        mediaId,
+                        caption,
+                        filename,
+                        isVoice,
+                    });
+
                     return new NextResponse('EVENT_RECEIVED', { status: 200 });
                 }
 
