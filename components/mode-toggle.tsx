@@ -17,7 +17,7 @@ import { cn } from "@/lib/utils"
 // render), so it renders identically on the server and the first client paint —
 // no hydration mismatch and no setState-in-effect mounted guard (which the repo
 // lints against). setTheme runs only from the click handlers.
-export function ModeToggle({ className }: { className?: string }) {
+export function ModeToggle({ className, collapsed = false }: { className?: string; collapsed?: boolean }) {
     const { setTheme } = useTheme()
 
     return (
@@ -25,8 +25,10 @@ export function ModeToggle({ className }: { className?: string }) {
             <DropdownMenuTrigger asChild>
                 <Button
                     variant="ghost"
+                    title={collapsed ? "Tema" : undefined}
                     className={cn(
-                        "w-full justify-start gap-2 font-normal text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground",
+                        "w-full gap-2 font-normal text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground",
+                        collapsed ? "justify-center px-0" : "justify-start",
                         className
                     )}
                 >
@@ -34,7 +36,7 @@ export function ModeToggle({ className }: { className?: string }) {
                         <Sun className="absolute inset-0 size-4 rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
                         <Moon className="absolute inset-0 size-4 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
                     </span>
-                    Tema
+                    {!collapsed && "Tema"}
                     <span className="sr-only">Ganti tema terang / gelap</span>
                 </Button>
             </DropdownMenuTrigger>
