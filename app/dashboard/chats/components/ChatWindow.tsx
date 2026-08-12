@@ -1,10 +1,10 @@
 'use client';
 
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Send, MoreVertical, Check, CheckCheck, AlertCircle, FileText, Store, Clock, ChevronLeft, Trash2 } from 'lucide-react';
+import { Send, MoreVertical, Check, CheckCheck, AlertCircle, FileText, Store, Clock, ChevronLeft, Trash2, Paperclip, X, Loader2, Download, ImageOff } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { SendTemplateDialog } from './SendTemplateDialog';
@@ -86,6 +86,10 @@ interface Message {
     error_code?: number | null;
     error_title?: string | null;
     error_detail?: string | null;
+    media_type?: 'image' | 'document' | null;
+    media_url?: string | null;
+    media_mime?: string | null;
+    media_filename?: string | null;
 }
 
 interface ChatWindowProps {
@@ -145,6 +149,9 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
     const [templateDialogOpen, setTemplateDialogOpen] = useState(false);
     const [deleteOpen, setDeleteOpen] = useState(false);
     const [deleting, setDeleting] = useState(false);
+    const [pendingFile, setPendingFile] = useState<File | null>(null);
+    const [uploadingMedia, setUploadingMedia] = useState(false);
+    const fileInputRef = useRef<HTMLInputElement>(null);
     const scrollRef = useRef<HTMLDivElement>(null);
     const scrollContainerRef = useRef<HTMLDivElement>(null);
     // True while the user is pinned to the bottom. Background refreshes (the 10s
@@ -371,6 +378,55 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
         }
     };
 
+    // Object URL for the pending image preview — memoized + revoked so we don't
+    // leak a new blob URL on every render.
+    const previewUrl = useMemo(
+        () => (pendingFile && pendingFile.type.startsWith('image/') ? URL.createObjectURL(pendingFile) : null),
+        [pendingFile],
+    );
+    useEffect(() => {
+        return () => {
+            if (previewUrl) URL.revokeObjectURL(previewUrl);
+        };
+    }, [previewUrl]);
+
+    const onPickFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const f = e.target.files?.[0];
+        e.target.value = ''; // let the same file be re-picked after cancel
+        if (!f) return;
+        const isImage = f.type.startsWith('image/');
+        const max = isImage ? 5 * 1024 * 1024 : 100 * 1024 * 1024;
+        if (f.size > max) {
+            toast.error(`File terlalu besar (maks ${isImage ? '5' : '100'} MB).`);
+            return;
+        }
+        setPendingFile(f);
+    };
+
+    const handleSendMedia = async () => {
+        if (!pendingFile) return;
+        setUploadingMedia(true);
+        atBottomRef.current = true;
+        try {
+            const fd = new FormData();
+            fd.append('phone_number', phoneNumber);
+            fd.append('file', pendingFile);
+            if (newMessage.trim()) fd.append('caption', newMessage.trim());
+            const res = await fetch('/api/chat/send-media', { method: 'POST', body: fd });
+            if (!res.ok) {
+                const payload = (await res.json().catch(() => ({}))) as { error?: string };
+                throw new Error(payload.error || `Gagal kirim (HTTP ${res.status})`);
+            }
+            setPendingFile(null);
+            setNewMessage('');
+            await fetchMessages();
+        } catch (e) {
+            toast.error(e instanceof Error ? e.message : 'Gagal mengirim file', { duration: 10_000 });
+        } finally {
+            setUploadingMedia(false);
+        }
+    };
+
     const groupedMessages = messages.reduce((acc, msg) => {
         const date = new Date(msg.created_at).toDateString();
         if (!acc[date]) acc[date] = [];
@@ -524,7 +580,47 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
                                                     : "bg-[var(--wa-bubble-out)] self-end text-[var(--wa-text)] rounded-tr-none"
                                         )}
                                     >
-                                        <p className="leading-relaxed whitespace-pre-wrap">{msg.content}</p>
+                                        {msg.media_type === 'image' &&
+                                            (msg.media_url ? (
+                                                <a href={msg.media_url} target="_blank" rel="noopener noreferrer" className="mb-1 block">
+                                                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                                                    <img
+                                                        src={msg.media_url}
+                                                        alt={msg.media_filename || 'Gambar'}
+                                                        loading="lazy"
+                                                        className="max-h-64 w-auto max-w-full rounded-md object-cover"
+                                                    />
+                                                </a>
+                                            ) : (
+                                                // Storage copy failed but the photo WAS delivered — show a
+                                                // placeholder so the bubble isn't blank (mirrors the doc card).
+                                                <div className="mb-1 flex items-center gap-2 rounded-md bg-black/5 p-2 opacity-70 dark:bg-white/10">
+                                                    <ImageOff className="h-8 w-8 shrink-0 text-[var(--wa-header-icon)]" />
+                                                    <span className="min-w-0 flex-1 truncate text-sm">
+                                                        {msg.media_filename || 'Foto'} — pratinjau tidak tersedia
+                                                    </span>
+                                                </div>
+                                            ))}
+                                        {msg.media_type === 'document' && (
+                                            <a
+                                                href={msg.media_url ?? undefined}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                className={cn(
+                                                    'mb-1 flex items-center gap-2 rounded-md bg-black/5 p-2 dark:bg-white/10',
+                                                    !msg.media_url && 'pointer-events-none opacity-70'
+                                                )}
+                                            >
+                                                <FileText className="h-8 w-8 shrink-0 text-[var(--wa-header-icon)]" />
+                                                <span className="min-w-0 flex-1 truncate text-sm">
+                                                    {msg.media_filename || 'Dokumen'}
+                                                </span>
+                                                {msg.media_url && <Download className="h-4 w-4 shrink-0" />}
+                                            </a>
+                                        )}
+                                        {msg.content && (
+                                            <p className="leading-relaxed whitespace-pre-wrap">{msg.content}</p>
+                                        )}
                                         <div className="flex items-center justify-end gap-1 mt-1 text-[10px] text-[var(--wa-text-muted)]">
                                             <span>
                                                 {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
@@ -570,6 +666,31 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
                         </span>
                     </div>
                 )}
+                {pendingFile && (
+                    <div className="flex items-center gap-2 rounded-md border bg-[var(--wa-search)] p-2">
+                        {previewUrl ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img src={previewUrl} alt="pratinjau" className="h-12 w-12 rounded object-cover" />
+                        ) : (
+                            <FileText className="h-9 w-9 text-[var(--wa-header-icon)]" />
+                        )}
+                        <div className="min-w-0 flex-1">
+                            <p className="truncate text-sm text-[var(--wa-text)]">{pendingFile.name}</p>
+                            <p className="text-xs text-[var(--wa-text-muted)]">
+                                {(pendingFile.size / 1024).toFixed(0)} KB · siap dikirim
+                            </p>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={() => setPendingFile(null)}
+                            disabled={uploadingMedia}
+                            aria-label="Batalkan lampiran"
+                            className="rounded-full p-1 text-[var(--wa-header-icon)] hover:bg-black/10 disabled:opacity-50 dark:hover:bg-white/10"
+                        >
+                            <X className="h-4 w-4" />
+                        </button>
+                    </div>
+                )}
                 <div className="flex items-center gap-2">
                     <Button
                         type="button"
@@ -587,27 +708,56 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
                     >
                         <FileText className="h-5 w-5" />
                     </Button>
+                    <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept="image/jpeg,image/png,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt"
+                        className="hidden"
+                        onChange={onPickFile}
+                    />
+                    <Button
+                        type="button"
+                        size="icon"
+                        variant="ghost"
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={windowExpired || uploadingMedia}
+                        title="Lampirkan foto atau file"
+                        aria-label="Lampirkan file"
+                        className="h-12 w-12 rounded-lg shrink-0 text-[var(--wa-header-icon)] hover:text-[var(--wa-text)] hover:bg-[var(--wa-hover)]"
+                    >
+                        <Paperclip className="h-5 w-5" />
+                    </Button>
                     <form
-                        onSubmit={(e) => { e.preventDefault(); handleSend(); }}
+                        onSubmit={(e) => { e.preventDefault(); if (pendingFile) { handleSendMedia(); } else { handleSend(); } }}
                         className="flex gap-2 w-full"
                     >
                         <Input
                             value={newMessage}
                             onChange={(e) => setNewMessage(e.target.value)}
-                            placeholder={windowExpired ? 'Window 24 jam habis — kirim template message' : 'Type a message'}
-                            disabled={sending || windowExpired}
+                            placeholder={
+                                pendingFile
+                                    ? 'Tambah caption (opsional)…'
+                                    : windowExpired
+                                        ? 'Window 24 jam habis — kirim template message'
+                                        : 'Type a message'
+                            }
+                            disabled={sending || uploadingMedia || (windowExpired && !pendingFile)}
                             className="bg-[var(--wa-search)] border-none focus-visible:ring-0 rounded-lg py-6 text-[var(--wa-text)] disabled:opacity-60"
                         />
                         <Button
                             type="submit"
                             size="icon"
-                            disabled={sending || !newMessage.trim() || windowExpired}
+                            disabled={sending || uploadingMedia || windowExpired || (!pendingFile && !newMessage.trim())}
                             className={cn(
                                 "h-12 w-12 rounded-lg shrink-0 transition-all",
-                                newMessage.trim() && !windowExpired ? "bg-[#00a884] hover:bg-[#008f6f]" : "bg-transparent text-muted-foreground hover:bg-transparent"
+                                (pendingFile || newMessage.trim()) && !windowExpired ? "bg-[#00a884] hover:bg-[#008f6f]" : "bg-transparent text-muted-foreground hover:bg-transparent"
                             )}
                         >
-                            <Send className={cn("h-5 w-5", newMessage.trim() && !windowExpired ? "text-white" : "text-muted-foreground")} />
+                            {uploadingMedia ? (
+                                <Loader2 className="h-5 w-5 animate-spin text-white" />
+                            ) : (
+                                <Send className={cn("h-5 w-5", (pendingFile || newMessage.trim()) && !windowExpired ? "text-white" : "text-muted-foreground")} />
+                            )}
                         </Button>
                     </form>
                 </div>
