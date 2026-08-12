@@ -2,7 +2,7 @@
 // Deliberately conservative: it does NOT cache Next.js's hashed assets (which
 // would risk serving stale code) — it only intercepts top-level navigations and
 // serves a cached offline page when the network is unavailable.
-const CACHE = 'sarathi-v1';
+const CACHE = 'sarathi-v2';
 const OFFLINE_URL = '/offline.html';
 
 self.addEventListener('install', (event) => {
@@ -32,5 +32,33 @@ self.addEventListener('fetch', (event) => {
             const cached = await cache.match(OFFLINE_URL);
             return cached ?? Response.error();
         })
+    );
+});
+
+// Focus (or open) the app on the right conversation when a message notification
+// is tapped. Notifications are shown via registration.showNotification() from
+// the in-app notifier (see components/notifications), which stamps data.url.
+self.addEventListener('notificationclick', (event) => {
+    event.notification.close();
+    const data = event.notification.data || {};
+    const url = data.url || '/dashboard/chats';
+    event.waitUntil(
+        (async () => {
+            const all = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+            for (const client of all) {
+                if ('focus' in client) {
+                    await client.focus();
+                    if ('navigate' in client) {
+                        try {
+                            await client.navigate(url);
+                        } catch {
+                            /* navigation not permitted — the focus alone is enough */
+                        }
+                    }
+                    return;
+                }
+            }
+            if (self.clients.openWindow) await self.clients.openWindow(url);
+        })()
     );
 });

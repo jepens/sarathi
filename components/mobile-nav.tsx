@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button"
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet"
 import { SidebarNav } from "@/components/sidebar"
 import { Brand } from "@/components/brand"
+import { NotificationBell } from "@/components/notifications/notification-bell"
 
 /**
  * Mobile-only top bar + slide-in nav drawer. Below md the desktop rail is hidden
@@ -42,6 +43,9 @@ export function MobileNav() {
                     <Menu className="size-5" />
                 </Button>
                 <Brand />
+                <div className="ml-auto">
+                    <NotificationBell variant="icon" />
+                </div>
             </header>
 
             <Sheet open={open} onOpenChange={setOpen}>
