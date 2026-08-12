@@ -7,6 +7,7 @@ import { sendWhatsAppMessage } from '@/lib/whatsapp/client';
 import { resolveWhatsAppContext } from '@/lib/whatsapp/credentials';
 import { whatsappLogger } from '@/lib/utils/logger';
 import { logSystemMessage } from '@/lib/whatsapp/history';
+import { sendPushToOrg } from '@/lib/notifications/web-push';
 import { handleFlowReply } from '@/lib/whatsapp/flow-response';
 
 import { checkVerifyToken } from '@/lib/settings/app-settings';
@@ -394,10 +395,10 @@ export async function POST(request: Request) {
                     // skipped. New contacts have no row yet → treated as enabled.
                     const { data: aiRow } = await supabase
                         .from('whatsapp_chats')
-                        .select('ai_enabled')
+                        .select('ai_enabled, contact_name')
                         .eq('org_id', waCtx.orgId)
                         .eq('phone_number', contactKey)
-                        .maybeSingle();
+                        .maybeSingle<{ ai_enabled: boolean | null; contact_name: string | null }>();
                     const aiEnabled = aiRow?.ai_enabled !== false;
 
                     if (aiEnabled) {
@@ -479,6 +480,30 @@ export async function POST(request: Request) {
                                 }
                             } else {
                                 whatsappLogger.info(`User message inserted for ${contactKey}`);
+
+                                // Tier 2 — Web Push fan-out. Alert every subscribed
+                                // admin device even when the dashboard is closed.
+                                // Gated on BOTH a present wamid AND the successful
+                                // insert above: the wamid unique index dedups Meta's
+                                // at-least-once redeliveries (23505), so each message
+                                // pushes exactly once. A wamid-less message (rare, and
+                                // logged as an anomaly above) has no idempotency key —
+                                // its insert isn't deduped, so we skip the push rather
+                                // than risk a double-notify on redelivery. Best-effort:
+                                // a push failure must never affect message storage.
+                                // No-op unless VAPID keys are configured.
+                                if (inboundWamid) {
+                                    try {
+                                        await sendPushToOrg(supabase, waCtx.orgId, {
+                                            title: aiRow?.contact_name || contactKey,
+                                            body: messageBody,
+                                            phone: contactKey,
+                                            url: `/dashboard/chats?phone=${encodeURIComponent(contactKey)}`,
+                                        });
+                                    } catch (pushErr) {
+                                        whatsappLogger.error('Web push fan-out failed', pushErr);
+                                    }
+                                }
                             }
 
                         } catch (err) {

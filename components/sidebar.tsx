@@ -26,6 +26,7 @@ import { createClient } from "@/lib/supabase/client"
 import { ModeToggle } from "@/components/mode-toggle"
 import { Brand } from "@/components/brand"
 import { FollowupBadge } from "@/components/followup-badge"
+import { NotificationBell } from "@/components/notifications/notification-bell"
 
 type NavItem = {
     href: string
@@ -131,6 +132,7 @@ export function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
                 </div>
             </div>
             <div className="space-y-1 px-3 py-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+                <NotificationBell />
                 <ModeToggle />
                 <Button
                     variant="ghost"
