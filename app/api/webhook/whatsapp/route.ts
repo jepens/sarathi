@@ -244,6 +244,10 @@ async function handleInboundMedia(params: InboundMediaParams): Promise<void> {
 
         whatsappLogger.info(`Inbound ${kind} stored for ${contactKey}`);
 
+        // Per-chat unread badge: atomic increment (best-effort).
+        const { error: unreadErr } = await supabase.rpc('bump_unread', { p_org: orgId, p_phone: contactKey });
+        if (unreadErr) whatsappLogger.error('Failed to bump unread_count (inbound media)', unreadErr);
+
         // Tier 2 — Web Push fan-out. Gated on a present wamid (its unique index
         // dedups redeliveries, so each message pushes once). Best-effort; no-op
         // unless VAPID is configured.
@@ -678,6 +682,15 @@ export async function POST(request: Request) {
                                 }
                             } else {
                                 whatsappLogger.info(`User message inserted for ${contactKey}`);
+
+                                // Per-chat unread badge: atomic increment (only on
+                                // a genuinely-new, non-duplicate insert). Best-effort
+                                // — a failure must not affect message storage.
+                                const { error: unreadErr } = await supabase.rpc('bump_unread', {
+                                    p_org: waCtx.orgId,
+                                    p_phone: contactKey,
+                                });
+                                if (unreadErr) whatsappLogger.error('Failed to bump unread_count', unreadErr);
 
                                 // Tier 2 — Web Push fan-out. Alert every subscribed
                                 // admin device even when the dashboard is closed.

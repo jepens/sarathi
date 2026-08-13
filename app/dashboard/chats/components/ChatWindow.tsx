@@ -206,6 +206,19 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
         setLoadingMsgs(false);
     }, [phoneNumber, supabase]);
 
+    // Mark this conversation read → clears its unread badge in the chat list.
+    // Opening the chat (or a new inbound arriving while it's open) is the "read"
+    // signal; the webhook increments unread_count on every inbound. The
+    // `.gt(0)` guard skips a needless write (and list refetch) when already 0.
+    // Best-effort: a failure just leaves the badge until the next open.
+    const markChatRead = useCallback(async () => {
+        await supabase
+            .from('whatsapp_chats')
+            .update({ unread_count: 0 })
+            .eq('phone_number', phoneNumber)
+            .gt('unread_count', 0);
+    }, [phoneNumber, supabase]);
+
     useEffect(() => {
         // New chat selected → show the message skeleton until its history loads,
         // and drop the previous chat's messages so they don't flash here. Start
@@ -214,6 +227,8 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
         setLoadingMsgs(true);
         setMessages([]);
         fetchMessages();
+        // Opening the chat clears its unread badge.
+        void markChatRead();
 
         // Subscribe to real-time changes. INSERT = new message; UPDATE =
         // delivery-status change (sent → delivered → read, or failed) pushed
@@ -233,6 +248,9 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
                 setMessages(prev =>
                     prev.some(m => m.id === incoming.id) ? prev : [...prev, incoming]
                 );
+                // A customer message arriving while the chat is open is read
+                // immediately — keep the badge cleared (the webhook just bumped it).
+                if (incoming.role === 'user') void markChatRead();
             })
             .on('postgres_changes', {
                 event: 'UPDATE',
@@ -291,7 +309,7 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
             supabase.removeChannel(channel);
             clearInterval(pollInterval);
         };
-    }, [phoneNumber, fetchMessages, supabase]);
+    }, [phoneNumber, fetchMessages, markChatRead, supabase]);
 
     useEffect(() => {
         // Follow new messages only when the user is already at the bottom; if

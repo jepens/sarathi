@@ -178,15 +178,26 @@ export function ChatList({ selectedPhone, onSelect }: ChatListProps) {
                                         <p className={cn("text-[13px] truncate leading-5", reply ? "text-[var(--wa-text)] font-medium" : "text-[var(--wa-text-muted)]")}>
                                             {chat.last_message}
                                         </p>
-                                        {isWindowExpired(chat.last_inbound_at) && (
-                                            <span
-                                                title="Lebih dari 24 jam sejak pesan terakhir customer. Balasan biasa akan ditolak Meta (kode 131047) — pakai template message."
-                                                className="shrink-0 inline-flex items-center gap-1 rounded-full bg-amber-100 text-amber-800 border border-amber-300 px-1.5 py-0.5 text-[10px] font-medium leading-none dark:bg-amber-500/15 dark:text-amber-300 dark:border-amber-500/30"
-                                            >
-                                                <Clock className="h-2.5 w-2.5" />
-                                                Perlu template
-                                            </span>
-                                        )}
+                                        <span className="flex shrink-0 items-center gap-1">
+                                            {isWindowExpired(chat.last_inbound_at) && (
+                                                <span
+                                                    title="Lebih dari 24 jam sejak pesan terakhir customer. Balasan biasa akan ditolak Meta (kode 131047) — pakai template message."
+                                                    className="inline-flex items-center gap-1 rounded-full bg-amber-100 text-amber-800 border border-amber-300 px-1.5 py-0.5 text-[10px] font-medium leading-none dark:bg-amber-500/15 dark:text-amber-300 dark:border-amber-500/30"
+                                                >
+                                                    <Clock className="h-2.5 w-2.5" />
+                                                    Perlu template
+                                                </span>
+                                            )}
+                                            {/* Unread badge — hidden for the open chat (it's being read). */}
+                                            {chat.unread_count > 0 && chat.phone_number !== selectedPhone && (
+                                                <span
+                                                    className="inline-flex min-w-5 items-center justify-center rounded-full bg-emerald-500 px-1.5 py-0.5 text-[11px] font-semibold leading-none text-white"
+                                                    aria-label={`${chat.unread_count} pesan belum dibaca`}
+                                                >
+                                                    {chat.unread_count > 99 ? '99+' : chat.unread_count}
+                                                </span>
+                                            )}
+                                        </span>
                                     </div>
                                 </div>
                             </button>
