@@ -13,6 +13,7 @@ import { getCurrentOrgId } from "@/lib/settings/org-context";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceOrServerClient } from "@/lib/supabase/service";
 import { WhatsAppCredentials } from "./components/WhatsAppCredentials";
+import { QuickRepliesEditor } from "./components/QuickRepliesEditor";
 import { resolvePublicOrigin } from "@/lib/utils/public-url";
 import { headers } from "next/headers";
 
@@ -60,6 +61,7 @@ export default async function SettingsPage() {
                         />
                     </div>
                 }
+                quickRepliesTab={<QuickRepliesEditor />}
                 aiTab={
                     <div className="p-4 text-center text-muted-foreground">
                         AI configuration is managed via environment variables (.env)
