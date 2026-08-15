@@ -648,7 +648,7 @@ export async function scheduleMeeting(
         // lock). Returns the new row's id, or null when the day is already full.
         // Done BEFORE creating the Zoom room so a full day never wastes one.
         const { startUtcIso, endUtcIso } = jakartaDayRangeUtc(meetingDate);
-        const { data: reservedId, error: reserveErr } = await supabase.rpc('reserve_meeting_slot', {
+        const { data: reserve, error: reserveErr } = await supabase.rpc('reserve_meeting_slot', {
             p_org: orgId,
             p_phone: phoneNumber,
             p_name: customerName,
@@ -659,20 +659,47 @@ export async function scheduleMeeting(
             p_max: MAX_MEETINGS_PER_DAY,
         });
         if (reserveErr) throw reserveErr;
-        if (!reservedId) {
+        const reservation = (reserve ?? {}) as {
+            meeting_id: string | null;
+            created: boolean;
+            full: boolean;
+        };
+        if (reservation.full || !reservation.meeting_id) {
             return JSON.stringify({
                 ok: false,
                 error: 'Kuota meeting untuk tanggal itu sudah penuh (maksimal 4 per hari). Tawarkan tanggal lain kepada customer.',
             });
         }
-        const meetingId = reservedId as string;
+        const meetingId = reservation.meeting_id;
+        const alreadyBooked = !reservation.created;
 
-        // Auto-provision a Zoom link when configured; otherwise the row keeps its
-        // 'pending-link' placeholder for the admin to fill in. A Zoom failure is
-        // non-fatal — the booking still succeeds as pending.
-        let joinUrl: string | null = null;
+        // For an idempotent hit, read what link the earlier attempt stored. We
+        // (re)create Zoom + email ONLY when there's no real link yet — so a repeat
+        // call whose first attempt died mid-flow self-heals (finishes the link +
+        // email + stage bump) instead of returning a half-done booking, while a
+        // fully-booked repeat just re-shares the link (no duplicate Zoom / email).
+        // A fresh reservation is always 'pending-link', so skip the read there.
+        let priorLink: string | null = null;
+        if (alreadyBooked) {
+            const { data: existingRow } = await supabase
+                .from('orders')
+                .select('meeting_link')
+                .eq('id', meetingId)
+                .eq('org_id', orgId)
+                .maybeSingle();
+            priorLink =
+                existingRow?.meeting_link && existingRow.meeting_link !== 'pending-link'
+                    ? existingRow.meeting_link
+                    : null;
+        }
+
+        // Auto-provision a Zoom link when none is stored yet and Zoom is
+        // configured; otherwise keep the 'pending-link' placeholder. A Zoom
+        // failure is non-fatal — the booking still succeeds as pending.
+        let joinUrl: string | null = priorLink;
         let meetingPassword: string | null = null;
-        if (getZoomConfig()) {
+        let justCreatedLink = false;
+        if (!joinUrl && getZoomConfig()) {
             try {
                 const zoom = await createZoomMeeting({
                     topic: title,
@@ -683,28 +710,30 @@ export async function scheduleMeeting(
                 });
                 joinUrl = zoom.joinUrl;
                 meetingPassword = zoom.password;
+                justCreatedLink = true;
             } catch (zoomErr) {
                 console.error('Zoom meeting creation failed, keeping pending-link:', zoomErr);
             }
         }
-        // Persist the real duration (so the calendar renders the correct block
-        // length) and, when we got one, the Zoom link. Runs unconditionally so
+
+        // Persist the real duration (calendar block length) and, when we just
+        // created one this run, the Zoom link. Runs unconditionally so
         // meeting_duration_min is stored even on the pending-link fallback.
         const orderPatch: Record<string, unknown> = { meeting_duration_min: durationMin };
-        if (joinUrl) orderPatch.meeting_link = joinUrl;
+        if (justCreatedLink && joinUrl) orderPatch.meeting_link = joinUrl;
         await supabase
             .from('orders')
             .update(orderPatch)
             .eq('id', meetingId)
             .eq('org_id', orgId);
 
-        // Email the invite (+ .ics) to sales + the customer when we have a link.
-        // Track whether the CUSTOMER specifically received it, so the bot never
-        // claims "emailed to you" when only sales was on the recipient list.
-        // Non-fatal — a mail failure never fails the booking.
+        // Email the invite (+ .ics) ONLY when we just created the link this run,
+        // so an idempotent hit that already had a link doesn't re-email. Track
+        // whether the CUSTOMER specifically received it. Non-fatal — a mail
+        // failure never fails the booking.
         let customerEmailed = false;
         let salesNotified = false;
-        if (joinUrl) {
+        if (justCreatedLink && joinUrl) {
             try {
                 const notify = await sendMeetingInvite({
                     uid: `meeting-${meetingId}@sarathi`,
@@ -727,17 +756,17 @@ export async function scheduleMeeting(
             }
         }
 
-        // Move the lead to 'scheduled' and append an audit line so MJ sees
-        // context when they pick up the meeting.
+        // Ensure the lead is 'scheduled' (idempotent — safe to repeat on a retry)
+        // and add an audit line only for a fresh booking, not on every repeat.
         const stamp = new Date().toISOString();
-        const line = `[${stamp}] meeting booked for ${meetingDate.toISOString()} (${title})${notes ? ` — ${notes}` : ''}`;
+        const chatPatch: Record<string, unknown> = { lead_stage: 'scheduled', updated_at: stamp };
+        if (!alreadyBooked) {
+            const line = `[${stamp}] meeting booked for ${meetingDate.toISOString()} (${title})${notes ? ` — ${notes}` : ''}`;
+            chatPatch.notes = chat?.notes ? `${chat.notes}\n${line}` : line;
+        }
         await supabase
             .from('whatsapp_chats')
-            .update({
-                lead_stage: 'scheduled',
-                notes: chat?.notes ? `${chat.notes}\n${line}` : line,
-                updated_at: stamp,
-            })
+            .update(chatPatch)
             .eq('org_id', orgId)
             .eq('phone_number', phoneNumber);
 
@@ -750,6 +779,7 @@ export async function scheduleMeeting(
             link_status: joinUrl ? 'created' : 'pending',
             customer_emailed: customerEmailed,
             sales_notified: salesNotified,
+            already_booked: alreadyBooked,
             stage: 'scheduled',
         });
     } catch (error) {
