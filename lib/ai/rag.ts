@@ -478,7 +478,18 @@ WHEN CALLING create_order:
 • On failure the tool returns { ok: false, error }. Apologise and relay the error in Bahasa Indonesia.
 `;
 
+        // The model has no inherent sense of "today", so it can't turn "besok"
+        // / "Senin depan" into a correct date for schedule_meeting. Inject the
+        // current WIB time so relative dates resolve to the right instant.
+        const nowWib = new Intl.DateTimeFormat('id-ID', {
+            timeZone: 'Asia/Jakarta',
+            dateStyle: 'full',
+            timeStyle: 'short',
+        }).format(new Date());
+
         const systemPrompt = `${baseSystemMessage}
+
+Waktu saat ini: **${nowWib} WIB**. Gunakan ini untuk menghitung tanggal/jam relatif (mis. "besok", "Senin depan", "minggu ini") saat menjadwalkan meeting. Saat memanggil schedule_meeting, kirim meeting_at sebagai ISO 8601 lengkap dengan offset +07:00 (mis. "2026-06-03T14:00:00+07:00").
 ${phoneNumber ? leadCaptureInstruction : ''}
 ${orderInstruction}
 
