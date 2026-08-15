@@ -1,22 +1,23 @@
 'use client';
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { MessageSquare, Bot, Package, Settings, Building2, Zap, Tag } from "lucide-react";
+import { MessageSquare, Bot, Package, Settings, Building2, Zap, Tag, Palette } from "lucide-react";
 
 interface SettingsTabsProps {
     businessProfileTab: React.ReactNode;
     whatsappTab: React.ReactNode;
     quickRepliesTab: React.ReactNode;
     labelsTab: React.ReactNode;
+    appearanceTab: React.ReactNode;
     aiTab: React.ReactNode;
     shippingTab: React.ReactNode;
     systemMessageTab: React.ReactNode;
 }
 
-export function SettingsTabs({ businessProfileTab, whatsappTab, quickRepliesTab, labelsTab, aiTab, shippingTab, systemMessageTab }: SettingsTabsProps) {
+export function SettingsTabs({ businessProfileTab, whatsappTab, quickRepliesTab, labelsTab, appearanceTab, aiTab, shippingTab, systemMessageTab }: SettingsTabsProps) {
     return (
         <Tabs defaultValue="business" className="w-full">
-            {/* flex + overflow-x-auto so the 7 tabs never overlap: each grows to
+            {/* flex + overflow-x-auto so the tabs never overlap: each grows to
                 fill on wide screens (flex-1) but never shrinks below its label
                 (min-w-max), and the row scrolls horizontally when too narrow
                 instead of colliding. */}
@@ -49,6 +50,10 @@ export function SettingsTabs({ businessProfileTab, whatsappTab, quickRepliesTab,
                     <Settings className="w-4 h-4" />
                     <span className="hidden sm:inline">System</span>
                 </TabsTrigger>
+                <TabsTrigger value="appearance" className="flex flex-1 min-w-max items-center gap-2">
+                    <Palette className="w-4 h-4" />
+                    <span className="hidden sm:inline">Tampilan</span>
+                </TabsTrigger>
             </TabsList>
 
             <TabsContent value="business" className="mt-6">
@@ -77,6 +82,10 @@ export function SettingsTabs({ businessProfileTab, whatsappTab, quickRepliesTab,
 
             <TabsContent value="system" className="mt-6">
                 {systemMessageTab}
+            </TabsContent>
+
+            <TabsContent value="appearance" className="mt-6">
+                {appearanceTab}
             </TabsContent>
         </Tabs>
     );
