@@ -4,7 +4,7 @@ import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Send, MoreVertical, Check, CheckCheck, AlertCircle, FileText, Store, Clock, ChevronLeft, Trash2, Paperclip, X, Loader2, Download, ImageOff, Mic, Film, Zap, Smile, Search, ChevronUp, ChevronDown } from 'lucide-react';
+import { Send, MoreVertical, Check, CheckCheck, AlertCircle, FileText, Store, Clock, ChevronLeft, Trash2, Paperclip, X, Loader2, Download, ImageOff, Mic, Film, Zap, Smile, Search, ChevronUp, ChevronDown, Reply } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { SendTemplateDialog } from './SendTemplateDialog';
@@ -28,6 +28,7 @@ import {
 import { QuickReplyMenu } from './QuickReplyMenu';
 import { EmojiPickerPanel } from './EmojiPicker';
 import { HighlightedText } from './HighlightedText';
+import { QuotedMessage } from './QuotedMessage';
 import {
     applyQuickReplyVars,
     parseSlashQuery,
@@ -99,6 +100,8 @@ interface Message {
     media_url?: string | null;
     media_mime?: string | null;
     media_filename?: string | null;
+    wa_message_id?: string | null;
+    reply_to_wamid?: string | null;
 }
 
 interface ChatWindowProps {
@@ -160,6 +163,8 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
     const [deleting, setDeleting] = useState(false);
     const [pendingFile, setPendingFile] = useState<File | null>(null);
     const [uploadingMedia, setUploadingMedia] = useState(false);
+    // Reply / quote: the message currently being replied to (null = normal send).
+    const [replyingTo, setReplyingTo] = useState<Message | null>(null);
     const [lightbox, setLightbox] = useState<{ url: string; name: string } | null>(null);
     const [contactCompany, setContactCompany] = useState<string | null>(null);
     // Quick replies (balasan cepat): the full list + the two ways to invoke them
@@ -283,6 +288,7 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
         setEmojiOpen(false);
         setSearchOpen(false);
         setSearchQuery('');
+        setReplyingTo(null);
 
         // Subscribe to real-time changes. INSERT = new message; UPDATE =
         // delivery-status change (sent → delivered → read, or failed) pushed
@@ -388,7 +394,8 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     phone_number: phoneNumber,
-                    message: newMessage
+                    message: newMessage,
+                    context_message_id: replyingTo?.wa_message_id ?? null,
                 })
             });
 
@@ -410,6 +417,7 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
             }
 
             setNewMessage('');
+            setReplyingTo(null);
             // Force-refresh the message list immediately so the admin sees
             // their sent bubble appear. We can't rely on realtime alone
             // (only just enabled it) and the 10s polling interval feels
@@ -476,6 +484,8 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
             return;
         }
         setPendingFile(f);
+        // Reply is text-only for now; attaching a file exits reply mode.
+        setReplyingTo(null);
     };
 
     const handleSendMedia = async () => {
@@ -502,6 +512,8 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
             }
             setPendingFile(null);
             setNewMessage('');
+            // Defensive: never let a reply context linger into the next text send.
+            setReplyingTo(null);
             await fetchMessages();
         } catch (e) {
             toast.error(e instanceof Error ? e.message : 'Gagal mengirim file', { duration: 10_000 });
@@ -624,6 +636,41 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
         atBottomRef.current = false;
         document.getElementById(`msg-${currentMatchId}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
     }, [currentMatchId, searchOpen]);
+
+    // ---- Reply / quote ----
+    // Resolve a quoted message locally by matching reply_to_wamid to wa_message_id.
+    const messageByWamid = useMemo(() => {
+        const map = new Map<string, Message>();
+        for (const m of messages) if (m.wa_message_id) map.set(m.wa_message_id, m);
+        return map;
+    }, [messages]);
+
+    const messageSnippet = (m: Message): string => {
+        if (m.content && m.content.trim()) return m.content;
+        switch (m.media_type) {
+            case 'image': return '📷 Foto';
+            case 'video': return '🎬 Video';
+            case 'audio': return '🎤 Pesan suara';
+            case 'document': return `📎 ${m.media_filename || 'Dokumen'}`;
+            default: return 'Pesan';
+        }
+    };
+    const senderLabel = (m: Message): string =>
+        m.role === 'assistant' ? 'Anda' : m.role === 'system' ? 'Sistem' : contactName || phoneNumber;
+
+    const startReply = (m: Message) => {
+        setReplyingTo(m);
+        // Reply is text-only, so it's mutually exclusive with a pending attachment.
+        setPendingFile(null);
+        setEmojiOpen(false);
+        setQrPickerOpen(false);
+        requestAnimationFrame(() => composerRef.current?.focus());
+    };
+
+    const scrollToMessage = (id: string) => {
+        atBottomRef.current = false;
+        document.getElementById(`msg-${id}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    };
 
     const insertQuickReply = (qr: QuickReply) => {
         const text = applyQuickReplyVars(qr.content, qrVars);
@@ -868,12 +915,15 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
 
                                 const isOutbound = msg.role === 'assistant';
                                 const failed = isOutbound && msg.status === 'failed';
+                                const replyParent = msg.reply_to_wamid
+                                    ? messageByWamid.get(msg.reply_to_wamid)
+                                    : undefined;
                                 return (
                                     <div
                                         id={`msg-${msg.id}`}
                                         key={msg.id}
                                         className={cn(
-                                            "max-w-[80%] rounded-lg p-2 px-3 text-sm shadow-sm relative",
+                                            "group max-w-[80%] rounded-lg p-2 px-3 text-sm shadow-sm relative",
                                             msg.role === 'user'
                                                 ? "bg-[var(--wa-bubble-in)] self-start text-[var(--wa-text)] rounded-tl-none"
                                                 : failed
@@ -881,6 +931,34 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
                                                     : "bg-[var(--wa-bubble-out)] self-end text-[var(--wa-text)] rounded-tr-none"
                                         )}
                                     >
+                                        {/* Reply affordance (hover). Only for messages that carry a wamid —
+                                            the WhatsApp reply-context needs one — and while the 24h window is open. */}
+                                        {msg.wa_message_id && !windowExpired && (
+                                            <button
+                                                type="button"
+                                                onClick={() => startReply(msg)}
+                                                aria-label="Balas pesan ini"
+                                                title="Balas"
+                                                className="absolute -top-2.5 right-1 z-10 rounded-full border bg-[var(--wa-panel)] p-1 text-[var(--wa-header-icon)] opacity-0 shadow-sm transition-opacity hover:text-[var(--wa-text)] group-hover:opacity-100"
+                                            >
+                                                <Reply className="h-3.5 w-3.5" />
+                                            </button>
+                                        )}
+                                        {msg.reply_to_wamid &&
+                                            (replyParent ? (
+                                                <QuotedMessage
+                                                    className="mb-1"
+                                                    sender={senderLabel(replyParent)}
+                                                    snippet={messageSnippet(replyParent)}
+                                                    onClick={() => scrollToMessage(replyParent.id)}
+                                                />
+                                            ) : (
+                                                <QuotedMessage
+                                                    className="mb-1"
+                                                    sender="Pesan dikutip"
+                                                    snippet="Pesan tidak tersedia"
+                                                />
+                                            ))}
                                         {msg.media_type === 'image' &&
                                             (msg.media_url ? (
                                                 <button
@@ -1065,6 +1143,24 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
                         <span>
                             Lebih dari 24 jam sejak pesan terakhir customer — balasan biasa akan ditolak Meta. Gunakan <strong>template message</strong>.
                         </span>
+                    </div>
+                )}
+                {replyingTo && (
+                    <div className="flex items-start gap-2 rounded-md border bg-[var(--wa-search)] p-2">
+                        <div className="min-w-0 flex-1">
+                            <QuotedMessage
+                                sender={`Membalas ${senderLabel(replyingTo)}`}
+                                snippet={messageSnippet(replyingTo)}
+                            />
+                        </div>
+                        <button
+                            type="button"
+                            onClick={() => setReplyingTo(null)}
+                            aria-label="Batalkan balasan"
+                            className="mt-0.5 rounded-full p-1 text-[var(--wa-header-icon)] hover:bg-black/10 dark:hover:bg-white/10"
+                        >
+                            <X className="h-4 w-4" />
+                        </button>
                     </div>
                 )}
                 {pendingFile && (
