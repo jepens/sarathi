@@ -4,7 +4,7 @@ import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Send, MoreVertical, Check, CheckCheck, AlertCircle, FileText, Store, Clock, ChevronLeft, Trash2, Paperclip, X, Loader2, Download, ImageOff, Mic, Film } from 'lucide-react';
+import { Send, MoreVertical, Check, CheckCheck, AlertCircle, FileText, Store, Clock, ChevronLeft, Trash2, Paperclip, X, Loader2, Download, ImageOff, Mic, Film, Zap } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { SendTemplateDialog } from './SendTemplateDialog';
@@ -25,6 +25,13 @@ import {
     DialogHeader,
     DialogTitle,
 } from '@/components/ui/dialog';
+import { QuickReplyMenu } from './QuickReplyMenu';
+import {
+    applyQuickReplyVars,
+    parseSlashQuery,
+    filterQuickReplies,
+    type QuickReply,
+} from '@/lib/quick-replies';
 
 const STAGE_LABELS: Record<string, string> = {
     new: 'Baru',
@@ -152,7 +159,16 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
     const [pendingFile, setPendingFile] = useState<File | null>(null);
     const [uploadingMedia, setUploadingMedia] = useState(false);
     const [lightbox, setLightbox] = useState<{ url: string; name: string } | null>(null);
+    const [contactCompany, setContactCompany] = useState<string | null>(null);
+    // Quick replies (balasan cepat): the full list + the two ways to invoke them
+    // — the ⚡ picker (searchable) and the "/" autocomplete (keyboard-driven).
+    const [quickReplies, setQuickReplies] = useState<QuickReply[]>([]);
+    const [qrPickerOpen, setQrPickerOpen] = useState(false);
+    const [qrPickerSearch, setQrPickerSearch] = useState('');
+    const [qrHighlight, setQrHighlight] = useState(0);
+    const [slashDismissed, setSlashDismissed] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const composerRef = useRef<HTMLInputElement>(null);
     const scrollRef = useRef<HTMLDivElement>(null);
     const scrollContainerRef = useRef<HTMLDivElement>(null);
     // True while the user is pinned to the bottom. Background refreshes (the 10s
@@ -171,13 +187,14 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
         // Fetch contact info
         const { data: contactData } = await supabase
             .from('whatsapp_chats')
-            .select('contact_name, contact_type, last_message_at, last_inbound_at, lead_stage, event_interest, participant_count, location_pref, vendor_category, vendor_offering, ai_enabled')
+            .select('contact_name, contact_type, company, last_message_at, last_inbound_at, lead_stage, event_interest, participant_count, location_pref, vendor_category, vendor_offering, ai_enabled')
             .eq('phone_number', phoneNumber)
             .single();
 
         if (contactData) {
             setContactName(contactData.contact_name);
             setContactType(contactData.contact_type);
+            setContactCompany(contactData.company);
             setLastMessageAt(contactData.last_message_at);
             setLastInboundAt(contactData.last_inbound_at);
             setCrm({
@@ -219,6 +236,20 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
             .gt('unread_count', 0);
     }, [phoneNumber, supabase]);
 
+    // Quick replies are org-global (not per-chat). Load on mount, and refresh
+    // whenever the operator invokes them (see the rising-edge effect below) so
+    // replies authored in Settings appear without a full page reload.
+    const fetchQuickReplies = useCallback(async () => {
+        const { data } = await supabase
+            .from('quick_replies')
+            .select('id, shortcut, content')
+            .order('shortcut', { ascending: true });
+        if (data) setQuickReplies(data as QuickReply[]);
+    }, [supabase]);
+    useEffect(() => {
+        void fetchQuickReplies();
+    }, [fetchQuickReplies]);
+
     useEffect(() => {
         // New chat selected → show the message skeleton until its history loads,
         // and drop the previous chat's messages so they don't flash here. Start
@@ -229,6 +260,15 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
         fetchMessages();
         // Opening the chat clears its unread badge.
         void markChatRead();
+        // Switching chats: reset the composer + quick-reply UI so a typed draft,
+        // an attached file, or an open "/" menu never bleeds into — and gets sent
+        // to — the next customer.
+        setNewMessage('');
+        setPendingFile(null);
+        setQrPickerOpen(false);
+        setQrPickerSearch('');
+        setSlashDismissed(false);
+        setQrHighlight(0);
 
         // Subscribe to real-time changes. INSERT = new message; UPDATE =
         // delivery-status change (sent → delivered → read, or failed) pushed
@@ -274,6 +314,7 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
                 const row = payload.new as {
                     contact_name: string | null;
                     contact_type: string | null;
+                    company: string | null;
                     last_message_at: string | null;
                     last_inbound_at: string | null;
                     lead_stage: string | null;
@@ -286,6 +327,7 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
                 };
                 setContactName(row.contact_name);
                 setContactType(row.contact_type);
+                setContactCompany(row.company);
                 setLastMessageAt(row.last_message_at);
                 setLastInboundAt(row.last_inbound_at);
                 setCrm({
@@ -424,6 +466,14 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
 
     const handleSendMedia = async () => {
         if (!pendingFile) return;
+        // The 24h window can lapse after a file was attached (windowExpired is
+        // recomputed each render). Media is a free-form message, so a send now
+        // would be rejected by Meta (131047) — block it here so the Enter key
+        // agrees with the already-disabled Send button.
+        if (isWindowExpired(lastInboundAt)) {
+            toast.error('Window 24 jam sudah habis — gunakan template message untuk mengirim lampiran.');
+            return;
+        }
         setUploadingMedia(true);
         atBottomRef.current = true;
         try {
@@ -468,6 +518,60 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
     };
 
     const windowExpired = isWindowExpired(lastInboundAt);
+
+    // ---- Quick replies: derived menu state + insert/keyboard handlers ----
+    const qrVars = { nama: contactName, perusahaan: contactCompany, event: crm.event_interest };
+    const slashQuery = parseSlashQuery(newMessage);
+    const slashItems =
+        slashQuery !== null ? filterQuickReplies(quickReplies, slashQuery, { prefix: true }) : [];
+    // The "/" menu shows only when the picker isn't open, the input is a bare
+    // slash token, there are matches, and Esc hasn't dismissed it.
+    const slashOpen = !qrPickerOpen && slashQuery !== null && slashItems.length > 0 && !slashDismissed;
+    const pickerItems = filterQuickReplies(quickReplies, qrPickerSearch);
+
+    // Refresh the list on the rising edge of "quick replies invoked" — the picker
+    // opening OR a "/" command starting. Keyed on slashQuery !== null (NOT
+    // slashOpen): a stale list would keep slashOpen false and never trigger a
+    // refresh, so a newly authored "/promo" would stay invisible.
+    const slashActive = slashQuery !== null;
+    useEffect(() => {
+        if (qrPickerOpen || slashActive) void fetchQuickReplies();
+    }, [qrPickerOpen, slashActive, fetchQuickReplies]);
+
+    const insertQuickReply = (qr: QuickReply) => {
+        const text = applyQuickReplyVars(qr.content, qrVars);
+        setNewMessage((prev) => {
+            // Slash path: the whole input is the "/shortcut" token → replace it.
+            if (parseSlashQuery(prev) !== null) return text;
+            // Picker path with an existing draft → append so typed text isn't lost.
+            if (prev.trim()) return prev.endsWith(' ') ? prev + text : `${prev} ${text}`;
+            return text;
+        });
+        setQrPickerOpen(false);
+        setQrPickerSearch('');
+        setQrHighlight(0);
+        // Return focus to the composer so the admin can edit/send right away.
+        requestAnimationFrame(() => composerRef.current?.focus());
+    };
+
+    const onComposerKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+        if (!slashOpen) return;
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            setQrHighlight((h) => Math.min(h + 1, slashItems.length - 1));
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            setQrHighlight((h) => Math.max(h - 1, 0));
+        } else if (e.key === 'Enter') {
+            // Select the highlighted reply instead of submitting the form.
+            e.preventDefault();
+            const pick = slashItems[Math.min(qrHighlight, slashItems.length - 1)];
+            if (pick) insertQuickReply(pick);
+        } else if (e.key === 'Escape') {
+            e.preventDefault();
+            setSlashDismissed(true);
+        }
+    };
 
     return (
         <div className="flex flex-col h-full bg-[var(--wa-paper)]">
@@ -717,7 +821,48 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
                 </div>
             </div>
 
-            <div className="p-3 bg-[var(--wa-panel)] flex flex-col gap-2 flex-shrink-0">
+            <div className="relative p-3 bg-[var(--wa-panel)] flex flex-col gap-2 flex-shrink-0">
+                {(qrPickerOpen || slashOpen) && (
+                    <>
+                        {qrPickerOpen && (
+                            <div
+                                className="fixed inset-0 z-40"
+                                onClick={() => setQrPickerOpen(false)}
+                                aria-hidden
+                            />
+                        )}
+                        <div className="absolute bottom-full left-3 right-3 z-50 mb-2 overflow-hidden rounded-lg border bg-[var(--wa-panel)] shadow-lg">
+                            {qrPickerOpen && (
+                                <div className="border-b p-2">
+                                    <Input
+                                        autoFocus
+                                        value={qrPickerSearch}
+                                        onChange={(e) => { setQrPickerSearch(e.target.value); setQrHighlight(0); }}
+                                        placeholder="Cari balasan cepat…"
+                                        className="h-9 border-none bg-[var(--wa-search)] text-[var(--wa-text)] focus-visible:ring-0"
+                                    />
+                                </div>
+                            )}
+                            {slashOpen && (
+                                <div className="border-b px-3 py-1.5 text-[11px] text-[var(--wa-text-muted)]">
+                                    Balasan cepat — ↑↓ pilih · Enter sisipkan · Esc tutup
+                                </div>
+                            )}
+                            {quickReplies.length === 0 ? (
+                                <div className="px-3 py-3 text-sm text-[var(--wa-text-muted)]">
+                                    Belum ada balasan cepat. Tambah di <strong>Settings → Balasan Cepat</strong>.
+                                </div>
+                            ) : (
+                                <QuickReplyMenu
+                                    items={qrPickerOpen ? pickerItems : slashItems}
+                                    highlight={qrHighlight}
+                                    onSelect={insertQuickReply}
+                                    onHover={(i) => setQrHighlight(i)}
+                                />
+                            )}
+                        </div>
+                    </>
+                )}
                 {windowExpired && (
                     <div className="flex items-center gap-2 rounded-md border border-amber-300 bg-amber-100 px-2.5 py-1.5 text-[12px] text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/15 dark:text-amber-200">
                         <Clock className="h-3.5 w-3.5 shrink-0" />
@@ -787,13 +932,30 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
                     >
                         <Paperclip className="h-5 w-5" />
                     </Button>
+                    <Button
+                        type="button"
+                        size="icon"
+                        variant="ghost"
+                        onClick={() => { setQrPickerOpen((o) => !o); setQrPickerSearch(''); setQrHighlight(0); }}
+                        disabled={windowExpired || uploadingMedia}
+                        title="Balasan cepat (atau ketik / di awal pesan)"
+                        aria-label="Balasan cepat"
+                        className={cn(
+                            "h-12 w-12 rounded-lg shrink-0 hover:text-[var(--wa-text)] hover:bg-[var(--wa-hover)]",
+                            qrPickerOpen ? "text-[var(--wa-text)] bg-[var(--wa-hover)]" : "text-[var(--wa-header-icon)]"
+                        )}
+                    >
+                        <Zap className="h-5 w-5" />
+                    </Button>
                     <form
                         onSubmit={(e) => { e.preventDefault(); if (pendingFile) { handleSendMedia(); } else { handleSend(); } }}
                         className="flex gap-2 w-full"
                     >
                         <Input
+                            ref={composerRef}
                             value={newMessage}
-                            onChange={(e) => setNewMessage(e.target.value)}
+                            onChange={(e) => { setNewMessage(e.target.value); setSlashDismissed(false); setQrHighlight(0); }}
+                            onKeyDown={onComposerKeyDown}
                             placeholder={
                                 pendingFile
                                     ? 'Tambah caption (opsional)…'
