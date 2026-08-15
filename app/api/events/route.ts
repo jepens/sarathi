@@ -29,6 +29,7 @@ interface OrderEventRow {
     total_amount: number | null;
     status: string | null;
     meeting_link: string | null;
+    meeting_duration_min: number | null;
 }
 
 function pad(n: number) {
@@ -53,11 +54,11 @@ function plainDateInJakarta(iso: string): string {
 }
 
 // Build a ZonedDateTime ISO string anchored to Asia/Jakarta for a given UTC
-// timestamp, optionally adding hours. Output format is the canonical
+// timestamp, optionally adding minutes. Output format is the canonical
 // Temporal.ZonedDateTime.from() input — e.g. "2026-05-27T14:00:00+07:00[Asia/Jakarta]".
-function zonedDateTimeInJakarta(iso: string, addHours = 0): string {
+function zonedDateTimeInJakarta(iso: string, addMinutes = 0): string {
     const date = new Date(iso);
-    date.setHours(date.getHours() + addHours);
+    date.setMinutes(date.getMinutes() + addMinutes);
     const parts = new Intl.DateTimeFormat('en-GB', {
         timeZone: EVENT_TZ,
         year: 'numeric',
@@ -107,7 +108,7 @@ export async function GET(request: Request) {
     const { data, error } = await supabase
         .from('orders')
         .select(
-            'id, customer_name, customer_phone, event_date, headcount, venue, event_type, total_amount, status, meeting_link'
+            'id, customer_name, customer_phone, event_date, headcount, venue, event_type, total_amount, status, meeting_link, meeting_duration_min'
         )
         .not('event_date', 'is', null)
         .gte('event_date', start)
@@ -131,9 +132,11 @@ export async function GET(request: Request) {
         let startStr: string;
         let endStr: string;
         if (isMeeting) {
-            // Meetings: 1-hour ZonedDateTime block anchored at the stored time.
+            // Meetings: a ZonedDateTime block whose length is the stored meeting
+            // duration (older rows without one fall back to 60 minutes).
+            const durationMin = r.meeting_duration_min ?? 60;
             startStr = zonedDateTimeInJakarta(eventDateIso, 0);
-            endStr = zonedDateTimeInJakarta(eventDateIso, 1);
+            endStr = zonedDateTimeInJakarta(eventDateIso, durationMin);
         } else {
             // Events: PlainDate all-day block. Schedule X expects end to be
             // the day *after* the last day for single-day all-day events.
