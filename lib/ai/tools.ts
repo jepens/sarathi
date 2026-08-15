@@ -687,13 +687,16 @@ export async function scheduleMeeting(
                 console.error('Zoom meeting creation failed, keeping pending-link:', zoomErr);
             }
         }
-        if (joinUrl) {
-            await supabase
-                .from('orders')
-                .update({ meeting_link: joinUrl })
-                .eq('id', meetingId)
-                .eq('org_id', orgId);
-        }
+        // Persist the real duration (so the calendar renders the correct block
+        // length) and, when we got one, the Zoom link. Runs unconditionally so
+        // meeting_duration_min is stored even on the pending-link fallback.
+        const orderPatch: Record<string, unknown> = { meeting_duration_min: durationMin };
+        if (joinUrl) orderPatch.meeting_link = joinUrl;
+        await supabase
+            .from('orders')
+            .update(orderPatch)
+            .eq('id', meetingId)
+            .eq('org_id', orgId);
 
         // Email the invite (+ .ics) to sales + the customer when we have a link.
         // Track whether the CUSTOMER specifically received it, so the bot never
