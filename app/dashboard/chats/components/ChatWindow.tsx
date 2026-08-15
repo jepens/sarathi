@@ -4,7 +4,7 @@ import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Send, MoreVertical, Check, CheckCheck, AlertCircle, FileText, Store, Clock, ChevronLeft, Trash2, Paperclip, X, Loader2, Download, ImageOff, Mic, Film, Zap, Smile } from 'lucide-react';
+import { Send, MoreVertical, Check, CheckCheck, AlertCircle, FileText, Store, Clock, ChevronLeft, Trash2, Paperclip, X, Loader2, Download, ImageOff, Mic, Film, Zap, Smile, Search, ChevronUp, ChevronDown } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { SendTemplateDialog } from './SendTemplateDialog';
@@ -27,6 +27,7 @@ import {
 } from '@/components/ui/dialog';
 import { QuickReplyMenu } from './QuickReplyMenu';
 import { EmojiPickerPanel } from './EmojiPicker';
+import { HighlightedText } from './HighlightedText';
 import {
     applyQuickReplyVars,
     parseSlashQuery,
@@ -169,8 +170,16 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
     const [qrHighlight, setQrHighlight] = useState(0);
     const [slashDismissed, setSlashDismissed] = useState(false);
     const [emojiOpen, setEmojiOpen] = useState(false);
+    // In-conversation search.
+    const [searchOpen, setSearchOpen] = useState(false);
+    const [searchQuery, setSearchQuery] = useState('');
+    const [matchIndex, setMatchIndex] = useState(0);
+    // The normalized query that `matchIndex` was last aligned to (see the
+    // render-time reset below).
+    const [indexedQuery, setIndexedQuery] = useState('');
     const fileInputRef = useRef<HTMLInputElement>(null);
     const composerRef = useRef<HTMLInputElement>(null);
+    const searchInputRef = useRef<HTMLInputElement>(null);
     const scrollRef = useRef<HTMLDivElement>(null);
     const scrollContainerRef = useRef<HTMLDivElement>(null);
     // True while the user is pinned to the bottom. Background refreshes (the 10s
@@ -272,6 +281,8 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
         setSlashDismissed(false);
         setQrHighlight(0);
         setEmojiOpen(false);
+        setSearchOpen(false);
+        setSearchQuery('');
 
         // Subscribe to real-time changes. INSERT = new message; UPDATE =
         // delivery-status change (sent → delivered → read, or failed) pushed
@@ -564,6 +575,56 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
         return () => document.removeEventListener('keydown', onKey);
     }, [emojiOpen]);
 
+    // ---- In-conversation search: matches + navigation + scroll-to-hit ----
+    const normalizedQuery = searchQuery.trim().toLowerCase();
+    const searchMatchIds = useMemo(() => {
+        if (!normalizedQuery) return [] as string[];
+        return messages
+            .filter((m) => m.content && m.content.toLowerCase().includes(normalizedQuery))
+            .map((m) => m.id);
+    }, [messages, normalizedQuery]);
+    const matchCount = searchMatchIds.length;
+    const clampedMatchIndex = matchCount ? Math.max(0, Math.min(matchIndex, matchCount - 1)) : 0;
+    const currentMatchId = matchCount ? searchMatchIds[clampedMatchIndex] : null;
+
+    // Reset the selection to the most recent (bottom-most) hit whenever the
+    // NORMALIZED query changes — done during render (React's "reset state when a
+    // value changes" pattern) so it happens synchronously before the scroll
+    // effect runs (no stale-index double-scroll), and a whitespace-only edit,
+    // which leaves normalizedQuery unchanged, is a no-op.
+    if (indexedQuery !== normalizedQuery) {
+        setIndexedQuery(normalizedQuery);
+        setMatchIndex(matchCount ? matchCount - 1 : 0);
+    }
+
+    const closeSearch = () => {
+        setSearchOpen(false);
+        setSearchQuery('');
+    };
+    // Both handlers floor at 0 and no-op when there are no matches, so the index
+    // can never go negative (which would strand the counter at "0/N").
+    const gotoPrevMatch = () =>
+        setMatchIndex((i) => (matchCount ? Math.max(0, Math.min(i, matchCount - 1) - 1) : 0));
+    const gotoNextMatch = () =>
+        setMatchIndex((i) =>
+            matchCount ? Math.min(matchCount - 1, Math.max(0, Math.min(i, matchCount - 1)) + 1) : 0,
+        );
+
+    // Focus the search field when the bar opens.
+    useEffect(() => {
+        if (searchOpen) requestAnimationFrame(() => searchInputRef.current?.focus());
+    }, [searchOpen]);
+
+    // Scroll the current hit into view whenever the RESOLVED target message
+    // changes. Keyed on the message id (not matchIndex/query) so it fires once
+    // per real target change and stays put on the 10s poll — the id is stable
+    // while the same hit remains selected.
+    useEffect(() => {
+        if (!searchOpen || !currentMatchId) return;
+        atBottomRef.current = false;
+        document.getElementById(`msg-${currentMatchId}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }, [currentMatchId, searchOpen]);
+
     const insertQuickReply = (qr: QuickReply) => {
         const text = applyQuickReplyVars(qr.content, qrVars);
         setNewMessage((prev) => {
@@ -658,6 +719,14 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
                     </div>
                 </div>
                 <div className="flex gap-4 text-[var(--wa-header-icon)] shrink-0">
+                    <button
+                        type="button"
+                        aria-label="Cari dalam percakapan"
+                        onClick={() => setSearchOpen(true)}
+                        className="rounded-full p-1 hover:bg-black/5 dark:hover:bg-white/10"
+                    >
+                        <Search className="h-5 w-5 cursor-pointer hover:text-[var(--wa-text)]" />
+                    </button>
                     <DropdownMenu>
                         <DropdownMenuTrigger asChild>
                             <button
@@ -680,6 +749,57 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
                     </DropdownMenu>
                 </div>
             </div>
+
+            {searchOpen && (
+                <div className="flex items-center gap-2 border-b bg-[var(--wa-panel)] px-3 py-2">
+                    <Search className="h-4 w-4 shrink-0 text-[var(--wa-text-muted)]" />
+                    <input
+                        ref={searchInputRef}
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        onKeyDown={(e) => {
+                            if (e.key === 'Escape') closeSearch();
+                            else if (e.key === 'Enter') {
+                                e.preventDefault();
+                                if (matchCount === 0) return;
+                                if (e.shiftKey) gotoNextMatch();
+                                else gotoPrevMatch();
+                            }
+                        }}
+                        placeholder="Cari dalam percakapan…"
+                        className="min-w-0 flex-1 bg-transparent text-sm text-[var(--wa-text)] outline-none placeholder:text-[var(--wa-text-muted)]"
+                    />
+                    <span className="shrink-0 text-xs tabular-nums text-[var(--wa-text-muted)]">
+                        {matchCount ? `${clampedMatchIndex + 1}/${matchCount}` : searchQuery.trim() ? '0/0' : ''}
+                    </span>
+                    <button
+                        type="button"
+                        onClick={gotoPrevMatch}
+                        disabled={matchCount === 0}
+                        aria-label="Hasil sebelumnya"
+                        className="rounded-full p-1 text-[var(--wa-header-icon)] hover:bg-black/5 disabled:opacity-40 dark:hover:bg-white/10"
+                    >
+                        <ChevronUp className="h-4 w-4" />
+                    </button>
+                    <button
+                        type="button"
+                        onClick={gotoNextMatch}
+                        disabled={matchCount === 0}
+                        aria-label="Hasil berikutnya"
+                        className="rounded-full p-1 text-[var(--wa-header-icon)] hover:bg-black/5 disabled:opacity-40 dark:hover:bg-white/10"
+                    >
+                        <ChevronDown className="h-4 w-4" />
+                    </button>
+                    <button
+                        type="button"
+                        onClick={closeSearch}
+                        aria-label="Tutup pencarian"
+                        className="rounded-full p-1 text-[var(--wa-header-icon)] hover:bg-black/5 dark:hover:bg-white/10"
+                    >
+                        <X className="h-4 w-4" />
+                    </button>
+                </div>
+            )}
 
             {/* CRM context + AI/Manual takeover toggle */}
             <div className="px-3 py-1.5 bg-[var(--wa-crm)] border-b flex items-center justify-between gap-3">
@@ -734,9 +854,13 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
                             {msgs.map((msg) => {
                                 if (msg.role === 'system') {
                                     return (
-                                        <div key={msg.id} className="flex justify-center my-2">
+                                        <div id={`msg-${msg.id}`} key={msg.id} className="flex justify-center my-2">
                                             <span className="bg-[#ffeecd] text-yellow-800 dark:bg-yellow-500/15 dark:text-yellow-200 text-xs px-3 py-1 rounded-lg text-center shadow-sm max-w-[80%]">
-                                                {msg.content}
+                                                {searchOpen && searchQuery.trim() ? (
+                                                    <HighlightedText text={msg.content} query={searchQuery} active={msg.id === currentMatchId} />
+                                                ) : (
+                                                    msg.content
+                                                )}
                                             </span>
                                         </div>
                                     );
@@ -746,6 +870,7 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
                                 const failed = isOutbound && msg.status === 'failed';
                                 return (
                                     <div
+                                        id={`msg-${msg.id}`}
                                         key={msg.id}
                                         className={cn(
                                             "max-w-[80%] rounded-lg p-2 px-3 text-sm shadow-sm relative",
@@ -836,7 +961,13 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
                                             </a>
                                         )}
                                         {msg.content && (
-                                            <p className="leading-relaxed whitespace-pre-wrap">{msg.content}</p>
+                                            <p className="leading-relaxed whitespace-pre-wrap">
+                                                {searchOpen && searchQuery.trim() ? (
+                                                    <HighlightedText text={msg.content} query={searchQuery} active={msg.id === currentMatchId} />
+                                                ) : (
+                                                    msg.content
+                                                )}
+                                            </p>
                                         )}
                                         <div className="flex items-center justify-end gap-1 mt-1 text-[10px] text-[var(--wa-text-muted)]">
                                             <span>
