@@ -4,7 +4,7 @@ import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Send, MoreVertical, Check, CheckCheck, AlertCircle, FileText, Store, Clock, ChevronLeft, Trash2, Paperclip, X, Loader2, Download, ImageOff, Mic, Film, Zap } from 'lucide-react';
+import { Send, MoreVertical, Check, CheckCheck, AlertCircle, FileText, Store, Clock, ChevronLeft, Trash2, Paperclip, X, Loader2, Download, ImageOff, Mic, Film, Zap, Smile } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { SendTemplateDialog } from './SendTemplateDialog';
@@ -26,6 +26,7 @@ import {
     DialogTitle,
 } from '@/components/ui/dialog';
 import { QuickReplyMenu } from './QuickReplyMenu';
+import { EmojiPickerPanel } from './EmojiPicker';
 import {
     applyQuickReplyVars,
     parseSlashQuery,
@@ -167,6 +168,7 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
     const [qrPickerSearch, setQrPickerSearch] = useState('');
     const [qrHighlight, setQrHighlight] = useState(0);
     const [slashDismissed, setSlashDismissed] = useState(false);
+    const [emojiOpen, setEmojiOpen] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const composerRef = useRef<HTMLInputElement>(null);
     const scrollRef = useRef<HTMLDivElement>(null);
@@ -269,6 +271,7 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
         setQrPickerSearch('');
         setSlashDismissed(false);
         setQrHighlight(0);
+        setEmojiOpen(false);
 
         // Subscribe to real-time changes. INSERT = new message; UPDATE =
         // delivery-status change (sent → delivered → read, or failed) pushed
@@ -524,9 +527,11 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
     const slashQuery = parseSlashQuery(newMessage);
     const slashItems =
         slashQuery !== null ? filterQuickReplies(quickReplies, slashQuery, { prefix: true }) : [];
-    // The "/" menu shows only when the picker isn't open, the input is a bare
-    // slash token, there are matches, and Esc hasn't dismissed it.
-    const slashOpen = !qrPickerOpen && slashQuery !== null && slashItems.length > 0 && !slashDismissed;
+    // The "/" menu shows only when neither the ⚡ picker nor the emoji panel is
+    // open, the input is a bare slash token, there are matches, and Esc hasn't
+    // dismissed it.
+    const slashOpen =
+        !qrPickerOpen && !emojiOpen && slashQuery !== null && slashItems.length > 0 && !slashDismissed;
     const pickerItems = filterQuickReplies(quickReplies, qrPickerSearch);
 
     // Refresh the list on the rising edge of "quick replies invoked" — the picker
@@ -537,6 +542,27 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
     useEffect(() => {
         if (qrPickerOpen || slashActive) void fetchQuickReplies();
     }, [qrPickerOpen, slashActive, fetchQuickReplies]);
+
+    // Close the emoji / quick-reply panels if the 24h window lapses — otherwise
+    // they'd hover over a now-disabled composer.
+    useEffect(() => {
+        if (windowExpired) {
+            setEmojiOpen(false);
+            setQrPickerOpen(false);
+        }
+    }, [windowExpired]);
+
+    // Escape closes the emoji panel from anywhere. The picker never holds focus
+    // (Frimousse doesn't auto-focus and its emoji buttons preventDefault focus),
+    // so a panel-scoped keydown handler wouldn't fire — use a document listener.
+    useEffect(() => {
+        if (!emojiOpen) return;
+        const onKey = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') setEmojiOpen(false);
+        };
+        document.addEventListener('keydown', onKey);
+        return () => document.removeEventListener('keydown', onKey);
+    }, [emojiOpen]);
 
     const insertQuickReply = (qr: QuickReply) => {
         const text = applyQuickReplyVars(qr.content, qrVars);
@@ -552,6 +578,33 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
         setQrHighlight(0);
         // Return focus to the composer so the admin can edit/send right away.
         requestAnimationFrame(() => composerRef.current?.focus());
+    };
+
+    // Splice an emoji into the composer at the caret (not just append), then put
+    // the cursor right after it. selectionStart/End and setSelectionRange share
+    // UTF-16 offsets, so multi-code-unit emoji land correctly. The panel stays
+    // open so several emoji can be added in a row.
+    const insertAtCaret = (text: string) => {
+        const el = composerRef.current;
+        // Composer disabled (sending / window expired) — don't insert into a field
+        // that can't be sent or is about to be cleared.
+        if (el?.disabled) return;
+        if (!el) {
+            setNewMessage((prev) => prev + text);
+            return;
+        }
+        const start = el.selectionStart ?? el.value.length;
+        const end = el.selectionEnd ?? el.value.length;
+        setNewMessage((prev) => prev.slice(0, start) + text + prev.slice(end));
+        requestAnimationFrame(() => {
+            el.focus();
+            const pos = start + text.length;
+            try {
+                el.setSelectionRange(pos, pos);
+            } catch {
+                /* setSelectionRange can throw on some inputs — ignore */
+            }
+        });
     };
 
     const onComposerKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -863,6 +916,18 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
                         </div>
                     </>
                 )}
+                {emojiOpen && (
+                    <>
+                        <div
+                            className="fixed inset-0 z-40"
+                            onClick={() => setEmojiOpen(false)}
+                            aria-hidden
+                        />
+                        <div className="absolute bottom-full left-3 z-50 mb-2 w-80 max-w-[calc(100%-1.5rem)] overflow-hidden rounded-lg border shadow-lg">
+                            <EmojiPickerPanel onPick={insertAtCaret} />
+                        </div>
+                    </>
+                )}
                 {windowExpired && (
                     <div className="flex items-center gap-2 rounded-md border border-amber-300 bg-amber-100 px-2.5 py-1.5 text-[12px] text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/15 dark:text-amber-200">
                         <Clock className="h-3.5 w-3.5 shrink-0" />
@@ -896,7 +961,10 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
                         </button>
                     </div>
                 )}
-                <div className="flex items-center gap-2">
+                {/* z-50 lifts the toolbar above the panel backdrop (z-40) so a single
+                    click on any button acts immediately (e.g. switching pickers) instead
+                    of only closing the open panel. */}
+                <div className="relative z-50 flex items-center gap-2">
                     <Button
                         type="button"
                         size="icon"
@@ -936,7 +1004,7 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
                         type="button"
                         size="icon"
                         variant="ghost"
-                        onClick={() => { setQrPickerOpen((o) => !o); setQrPickerSearch(''); setQrHighlight(0); }}
+                        onClick={() => { setQrPickerOpen((o) => !o); setQrPickerSearch(''); setQrHighlight(0); setEmojiOpen(false); }}
                         disabled={windowExpired || uploadingMedia}
                         title="Balasan cepat (atau ketik / di awal pesan)"
                         aria-label="Balasan cepat"
@@ -946,6 +1014,23 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
                         )}
                     >
                         <Zap className="h-5 w-5" />
+                    </Button>
+                    <Button
+                        type="button"
+                        size="icon"
+                        variant="ghost"
+                        onClick={() => { setEmojiOpen((o) => !o); setQrPickerOpen(false); }}
+                        disabled={windowExpired || uploadingMedia || sending}
+                        title="Emoji"
+                        aria-label="Emoji"
+                        aria-haspopup="dialog"
+                        aria-expanded={emojiOpen}
+                        className={cn(
+                            "h-12 w-12 rounded-lg shrink-0 hover:text-[var(--wa-text)] hover:bg-[var(--wa-hover)]",
+                            emojiOpen ? "text-[var(--wa-text)] bg-[var(--wa-hover)]" : "text-[var(--wa-header-icon)]"
+                        )}
+                    >
+                        <Smile className="h-5 w-5" />
                     </Button>
                     <form
                         onSubmit={(e) => { e.preventDefault(); if (pendingFile) { handleSendMedia(); } else { handleSend(); } }}
