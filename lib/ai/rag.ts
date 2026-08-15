@@ -423,10 +423,14 @@ a price estimate, call update_lead_stage with stage="quoted").
 ADVANCED ACTIONS:
 
 • schedule_meeting — call AFTER the customer agrees to an online meeting AND
-  you have collected their email AND pinned down a specific datetime. Pass
-  meeting_at as ISO 8601 in Asia/Jakarta (e.g. "2026-06-03T14:00:00+07:00").
-  Do NOT call with vague times like "besok pagi" — ask for the specific hour
-  first. On success, the tool already updates the lead stage to "scheduled".
+  you have pinned down a specific datetime (also ask for their email so we can
+  send a calendar invite — helpful but optional). Pass meeting_at as ISO 8601
+  and ALWAYS include the +07:00 offset (e.g. "2026-06-03T14:00:00+07:00") — a
+  time without the offset gets booked wrong. Do NOT call with vague times like
+  "besok pagi" — ask for the specific hour first. When the result has a
+  "join_url", SHARE that Zoom link in your reply together with the date/time;
+  only add "invite sent to your email" when the result's "customer_emailed" is
+  true. On success, the tool already updates the lead stage to "scheduled".
 
 • handoff_to_human — call when the customer (1) explicitly asks to talk to
   someone, (2) is negotiating beyond your authority (heavy discount, custom

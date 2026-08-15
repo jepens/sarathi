@@ -2,6 +2,15 @@ import { createClient } from '@/lib/supabase/server';
 import { createServiceOrServerClient } from '@/lib/supabase/service';
 import { ChatCompletionTool } from 'openai/resources/chat/completions';
 import { type BusinessProfile } from '@/lib/settings/business-profile';
+import {
+    validateMeetingWindow,
+    jakartaDayRangeUtc,
+    meetingTitle,
+    normalizeMeetingIso,
+    MAX_MEETINGS_PER_DAY,
+} from '@/lib/meetings/rules';
+import { getZoomConfig, createZoomMeeting } from '@/lib/zoom/client';
+import { sendMeetingInvite } from '@/lib/meetings/notify';
 
 // Lead pipeline stages — kept in sync with the CHECK constraint on
 // whatsapp_chats.lead_stage (see migration 0002_eo_pivot_schema.sql).
@@ -220,7 +229,7 @@ export function buildTools(p: BusinessProfile): ChatCompletionTool[] {
         function: {
             name: 'schedule_meeting',
             description:
-                `Book an online consultation meeting with the human sales lead (${p.handoffName}). Call this AFTER you have confirmed a specific date/time with the customer AND collected their email. The meeting is added to the company calendar; an actual meeting link is provisioned by the admin after the booking. On success, also call update_lead_stage with stage="scheduled".`,
+                `Book an online consultation meeting with the human sales lead (${p.handoffName}). Call this AFTER you have confirmed a specific date/time (business hours 10:00–22:00 WIB) with the customer. On success the tool reserves the slot, auto-creates a Zoom link, and emails a calendar invite. HOW TO REPLY based on the result JSON: if "join_url" is present, SHARE THAT LINK DIRECTLY in your WhatsApp reply together with the date/time — this is the primary way the customer receives it (do not just say "check your email"); when "customer_emailed" is also true, add that a calendar invite was sent to their email too. If "link_status" is "pending" (no join_url), tell the customer the team will send the link shortly. If it returns ok:false (outside business hours, or that day is already full), apologise and offer another time. On success also call update_lead_stage with stage="scheduled".`,
             parameters: {
                 type: 'object',
                 properties: {
@@ -596,10 +605,10 @@ export async function scheduleMeeting(
     try {
         const supabase = await createServiceOrServerClient();
 
-        // Validate the ISO datetime here so a malformed value from the model
-        // produces a clear error rather than getting written to Postgres and
-        // surfacing as a calendar render bug later.
-        const meetingDate = new Date(meetingAtIso);
+        // Normalize the model's datetime to WIB when it omits an offset (a common
+        // LLM slip) so a naive value isn't parsed in the host TZ (UTC in prod) and
+        // silently booked 7 hours off. Then validate it's a real future datetime.
+        const meetingDate = new Date(normalizeMeetingIso(meetingAtIso));
         if (Number.isNaN(meetingDate.getTime())) {
             return JSON.stringify({
                 ok: false,
@@ -613,46 +622,112 @@ export async function scheduleMeeting(
             });
         }
 
-        // Pull the contact's name so the order row is human-readable in the
-        // dashboard without a join.
+        const durationMin = resolveMeetingDuration();
+
+        // Business hours: the meeting must start ≥10:00 and end ≤22:00 WIB.
+        const windowCheck = validateMeetingWindow(meetingDate, durationMin);
+        if (!windowCheck.ok) {
+            return JSON.stringify({ ok: false, error: windowCheck.error });
+        }
+
+        // Pull the contact context for the meeting title + invite.
         const { data: chat } = await supabase
             .from('whatsapp_chats')
-            .select('contact_name, notes')
+            .select('contact_name, notes, company, event_interest, email')
             .eq('org_id', orgId)
             .eq('phone_number', phoneNumber)
             .maybeSingle();
 
         const customerName = chat?.contact_name ?? 'Klien';
+        // "COMPANY - Event", e.g. "SIEMENS - Employee Gathering 2026".
+        const title = meetingTitle(chat?.company, chat?.event_interest, customerName);
+        const deliveryInfo = notes ? `Online meeting — ${notes}` : 'Online meeting';
 
-        // Insert as an order row of type=service, status=scheduled. The actual
-        // meeting URL is left null — admin fills it in once they generate a
-        // Zoom/GMeet link. The calendar still shows the booking time.
-        const { data: inserted, error: insertErr } = await supabase
-            .from('orders')
-            .insert({
-                org_id: orgId,
-                customer_phone: phoneNumber,
-                customer_name: customerName,
-                items: [],
-                total_amount: 0,
-                status: 'scheduled',
-                order_type: 'service',
-                event_date: meetingDate.toISOString(),
-                meeting_link: 'pending-link', // sentinel so calendar treats this as 'meetings'
-                delivery_info: notes
-                    ? `Online meeting — ${notes}`
-                    : 'Online meeting (link pending)',
-            })
-            .select('id')
-            .single();
+        // Reserve the slot ATOMICALLY — enforces max 4/WIB-day even under
+        // concurrent bookings (migration 0054 counts + inserts under an advisory
+        // lock). Returns the new row's id, or null when the day is already full.
+        // Done BEFORE creating the Zoom room so a full day never wastes one.
+        const { startUtcIso, endUtcIso } = jakartaDayRangeUtc(meetingDate);
+        const { data: reservedId, error: reserveErr } = await supabase.rpc('reserve_meeting_slot', {
+            p_org: orgId,
+            p_phone: phoneNumber,
+            p_name: customerName,
+            p_event_date: meetingDate.toISOString(),
+            p_delivery_info: deliveryInfo,
+            p_day_start: startUtcIso,
+            p_day_end: endUtcIso,
+            p_max: MAX_MEETINGS_PER_DAY,
+        });
+        if (reserveErr) throw reserveErr;
+        if (!reservedId) {
+            return JSON.stringify({
+                ok: false,
+                error: 'Kuota meeting untuk tanggal itu sudah penuh (maksimal 4 per hari). Tawarkan tanggal lain kepada customer.',
+            });
+        }
+        const meetingId = reservedId as string;
 
-        if (insertErr) throw insertErr;
-        if (!inserted) throw new Error('Insert returned no row');
+        // Auto-provision a Zoom link when configured; otherwise the row keeps its
+        // 'pending-link' placeholder for the admin to fill in. A Zoom failure is
+        // non-fatal — the booking still succeeds as pending.
+        let joinUrl: string | null = null;
+        let meetingPassword: string | null = null;
+        if (getZoomConfig()) {
+            try {
+                const zoom = await createZoomMeeting({
+                    topic: title,
+                    start: meetingDate,
+                    durationMin,
+                    timezone: 'Asia/Jakarta',
+                    agenda: notes,
+                });
+                joinUrl = zoom.joinUrl;
+                meetingPassword = zoom.password;
+            } catch (zoomErr) {
+                console.error('Zoom meeting creation failed, keeping pending-link:', zoomErr);
+            }
+        }
+        if (joinUrl) {
+            await supabase
+                .from('orders')
+                .update({ meeting_link: joinUrl })
+                .eq('id', meetingId)
+                .eq('org_id', orgId);
+        }
+
+        // Email the invite (+ .ics) to sales + the customer when we have a link.
+        // Track whether the CUSTOMER specifically received it, so the bot never
+        // claims "emailed to you" when only sales was on the recipient list.
+        // Non-fatal — a mail failure never fails the booking.
+        let customerEmailed = false;
+        let salesNotified = false;
+        if (joinUrl) {
+            try {
+                const notify = await sendMeetingInvite({
+                    uid: `meeting-${meetingId}@sarathi`,
+                    title,
+                    start: meetingDate,
+                    durationMin,
+                    joinUrl,
+                    meetingPassword,
+                    notes,
+                    customer: { name: chat?.contact_name, email: chat?.email },
+                });
+                salesNotified = notify.sent;
+                const custEmail = chat?.email?.trim().toLowerCase();
+                customerEmailed = notify.sent && !!custEmail && notify.recipients.includes(custEmail);
+                if (!notify.sent && notify.skippedReason) {
+                    console.warn('Meeting invite email skipped:', notify.skippedReason);
+                }
+            } catch (mailErr) {
+                console.error('Meeting invite email failed:', mailErr);
+            }
+        }
 
         // Move the lead to 'scheduled' and append an audit line so MJ sees
         // context when they pick up the meeting.
         const stamp = new Date().toISOString();
-        const line = `[${stamp}] meeting booked for ${meetingDate.toISOString()}${notes ? ` — ${notes}` : ''}`;
+        const line = `[${stamp}] meeting booked for ${meetingDate.toISOString()} (${title})${notes ? ` — ${notes}` : ''}`;
         await supabase
             .from('whatsapp_chats')
             .update({
@@ -665,8 +740,13 @@ export async function scheduleMeeting(
 
         return JSON.stringify({
             ok: true,
-            meeting_id: inserted.id,
+            meeting_id: meetingId,
             meeting_at: meetingDate.toISOString(),
+            title,
+            join_url: joinUrl,
+            link_status: joinUrl ? 'created' : 'pending',
+            customer_emailed: customerEmailed,
+            sales_notified: salesNotified,
             stage: 'scheduled',
         });
     } catch (error) {
@@ -674,6 +754,14 @@ export async function scheduleMeeting(
         const msg = error instanceof Error ? error.message : 'Failed to schedule meeting';
         return JSON.stringify({ ok: false, error: msg });
     }
+}
+
+// Meeting length in minutes, from MEETING_DURATION_MIN. Defaults to 40 (the hard
+// cap on a free Zoom account); raise to 60 on Zoom Pro. Clamped to a sane range.
+function resolveMeetingDuration(): number {
+    const n = parseInt(process.env.MEETING_DURATION_MIN ?? '', 10);
+    if (Number.isFinite(n) && n >= 10 && n <= 240) return n;
+    return 40;
 }
 
 export async function handoffToHuman(
