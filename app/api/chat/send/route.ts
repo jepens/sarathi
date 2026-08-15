@@ -12,6 +12,13 @@ export async function POST(request: Request) {
         const body = await request.json();
         phone_number = body.phone_number;
         message = body.message;
+        // Optional: reply to an earlier message (its wamid). Meta shows the reply
+        // quoted on the customer's phone; we also store it so the dashboard can
+        // render the quote.
+        const contextMessageId: string | null =
+            typeof body.context_message_id === 'string' && body.context_message_id
+                ? body.context_message_id
+                : null;
 
         if (!phone_number || !message) {
             return NextResponse.json(
@@ -40,7 +47,7 @@ export async function POST(request: Request) {
         // don't want a phantom assistant message stored locally that the
         // customer never actually received. Capture wamid so the webhook
         // status callback can later flip this row to delivered/read/failed.
-        const sendResult = await sendWhatsAppMessage(phone_number, message);
+        const sendResult = await sendWhatsAppMessage(phone_number, message, undefined, contextMessageId);
 
         const { error: chatError } = await supabase
             .from('whatsapp_chats')
@@ -62,6 +69,7 @@ export async function POST(request: Request) {
                 role: 'assistant',
                 content: message,
                 wa_message_id: sendResult.waMessageId,
+                reply_to_wamid: contextMessageId,
                 status: 'sent',
                 status_updated_at: new Date().toISOString(),
             });

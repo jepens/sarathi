@@ -64,6 +64,9 @@ export async function sendWhatsAppMessage(
     to: string,
     text: string,
     creds?: { phoneNumberId: string; accessToken: string },
+    // When set, the message is sent as a reply to this wamid — the customer's
+    // WhatsApp then shows it quoted (RFC: context.message_id).
+    contextMessageId?: string | null,
 ): Promise<SendWhatsAppResult> {
     // Per-tenant credentials when provided (webhook/queue), else fall back to
     // the env credentials (manual/legacy callers, single-tenant Sailendra).
@@ -83,6 +86,7 @@ export async function sendWhatsAppMessage(
         body: JSON.stringify({
             messaging_product: 'whatsapp',
             to: to,
+            ...(contextMessageId ? { context: { message_id: contextMessageId } } : {}),
             // Normalise Markdown → WhatsApp formatting so customers never see
             // stray "**bold**" / "# heading" syntax (the model leaks it even
             // with the prompt rule in place).

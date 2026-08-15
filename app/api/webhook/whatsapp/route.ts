@@ -143,6 +143,7 @@ interface InboundMediaParams {
     bsuid: string | null;
     waId: string | null;
     inboundWamid: string | null;
+    replyToWamid: string | null;
     kind: InboundMediaKind;
     mediaId: string;
     caption: string | null;
@@ -155,7 +156,7 @@ interface InboundMediaParams {
 // admin handles these in manual mode. Runs fire-and-forget from the webhook so
 // Meta still gets its fast 200; large downloads must not block the response.
 async function handleInboundMedia(params: InboundMediaParams): Promise<void> {
-    const { supabase, orgId, creds, contactKey, bsuid, waId, inboundWamid, kind, mediaId, caption, filename, isVoice } = params;
+    const { supabase, orgId, creds, contactKey, bsuid, waId, inboundWamid, replyToWamid, kind, mediaId, caption, filename, isVoice } = params;
     const captionText = caption?.trim() ? caption.trim() : '';
     try {
         // Dedup pre-check: Meta delivers webhooks at-least-once. If this wamid is
@@ -227,6 +228,7 @@ async function handleInboundMedia(params: InboundMediaParams): Promise<void> {
             media_mime: mime,
             media_filename: filename,
             wa_message_id: inboundWamid,
+            reply_to_wamid: replyToWamid,
         });
         if (msgErr) {
             if (msgErr.code === '23505') {
@@ -438,6 +440,10 @@ export async function POST(request: Request) {
                 // at-least-once, so this is our idempotency key: a redelivery of
                 // the same message must not enqueue (or store) it twice.
                 const inboundWamid: string | null = typeof message.id === 'string' ? message.id : null;
+                // If the customer replied to one of our messages, Meta includes
+                // the quoted message's wamid in message.context.id.
+                const inboundContextId: string | null =
+                    message.context && typeof message.context.id === 'string' ? message.context.id : null;
                 if (!inboundWamid) {
                     // Well-formed messages always carry a wamid; a missing one
                     // means our at-least-once dedup (keyed on wamid) is bypassed
@@ -564,6 +570,7 @@ export async function POST(request: Request) {
                         bsuid,
                         waId,
                         inboundWamid,
+                        replyToWamid: inboundContextId,
                         kind,
                         mediaId,
                         caption,
@@ -671,7 +678,8 @@ export async function POST(request: Request) {
                                     phone_number: contactKey,
                                     role: 'user',
                                     content: messageBody,
-                                    wa_message_id: inboundWamid
+                                    wa_message_id: inboundWamid,
+                                    reply_to_wamid: inboundContextId,
                                 });
 
                             if (msgError) {
