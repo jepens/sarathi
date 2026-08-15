@@ -29,6 +29,7 @@ import { QuickReplyMenu } from './QuickReplyMenu';
 import { EmojiPickerPanel } from './EmojiPicker';
 import { HighlightedText } from './HighlightedText';
 import { QuotedMessage } from './QuotedMessage';
+import { ChatLabelsBar } from './ChatLabelsBar';
 import {
     applyQuickReplyVars,
     parseSlashQuery,
@@ -796,6 +797,8 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
                     </DropdownMenu>
                 </div>
             </div>
+
+            <ChatLabelsBar phoneNumber={phoneNumber} />
 
             {searchOpen && (
                 <div className="flex items-center gap-2 border-b bg-[var(--wa-panel)] px-3 py-2">

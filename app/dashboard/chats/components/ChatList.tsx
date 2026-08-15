@@ -3,10 +3,12 @@
 import { useEffect, useState, useCallback } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { Input } from '@/components/ui/input';
-import { Search, Clock, Store } from 'lucide-react';
+import { Search, Clock, Store, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { ContactTypeBadge } from '@/components/dashboard/ContactTypeBadge';
+import { LabelBadge } from '@/components/dashboard/LabelBadge';
 import { Skeleton } from '@/components/ui/skeleton';
+import { sortLabels, type Label } from '@/lib/labels';
 
 interface Chat {
     phone_number: string;
@@ -46,6 +48,11 @@ export function ChatList({ selectedPhone, onSelect }: ChatListProps) {
     const [chats, setChats] = useState<Chat[]>([]);
     const [search, setSearch] = useState('');
     const [loading, setLoading] = useState(true);
+    // Labels: the org-wide palette + a phone_number -> Label[] map for the chips,
+    // and the currently-selected filter (null = show all).
+    const [labels, setLabels] = useState<Label[]>([]);
+    const [labelsByPhone, setLabelsByPhone] = useState<Map<string, Label[]>>(new Map());
+    const [activeLabelId, setActiveLabelId] = useState<string | null>(null);
     const supabase = createClient();
 
     const fetchChats = useCallback(async () => {
@@ -66,36 +73,88 @@ export function ChatList({ selectedPhone, onSelect }: ChatListProps) {
         setLoading(false);
     }, [supabase]);
 
-    useEffect(() => {
-        const loadChats = async () => {
-            await fetchChats();
-        };
-        loadChats();
+    const fetchLabelData = useCallback(async () => {
+        // Labels are few — one query. Assignments scale with chats × labels and
+        // can exceed PostgREST's default 1000-row cap; page through them so the
+        // chips + filter stay complete instead of silently truncating (a dropped
+        // assignment would make a labeled chat vanish from its filter).
+        const labelsRes = await supabase.from('labels').select('id, name, color');
+        const sorted = sortLabels(labelsRes.data ?? []);
+        setLabels(sorted);
+        const byId = new Map(sorted.map((l) => [l.id, l] as const));
 
-        // Subscribe to real-time changes
+        const byPhone = new Map<string, Label[]>();
+        const PAGE = 1000;
+        for (let from = 0; ; from += PAGE) {
+            const { data, error } = await supabase
+                .from('chat_labels')
+                .select('phone_number, label_id')
+                .range(from, from + PAGE - 1);
+            if (error || !data) break;
+            for (const row of data) {
+                const lbl = byId.get(row.label_id as string);
+                if (!lbl) continue; // assignment to a since-deleted label
+                const arr = byPhone.get(row.phone_number as string);
+                if (arr) arr.push(lbl);
+                else byPhone.set(row.phone_number as string, [lbl]);
+            }
+            if (data.length < PAGE) break;
+        }
+        // Stable per-row order (by name) regardless of assignment insert order.
+        for (const [phone, arr] of byPhone) byPhone.set(phone, sortLabels(arr));
+        setLabelsByPhone(byPhone);
+    }, [supabase]);
+
+    useEffect(() => {
+        const load = async () => {
+            await Promise.all([fetchChats(), fetchLabelData()]);
+        };
+        load();
+
+        // Subscribe to real-time changes (chats + labels + assignments).
         const channel = supabase
             .channel('whatsapp_chats_changes')
             .on('postgres_changes', { event: '*', schema: 'public', table: 'whatsapp_chats' }, () => {
                 fetchChats();
+            })
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'labels' }, () => {
+                fetchLabelData();
+            })
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'chat_labels' }, () => {
+                fetchLabelData();
             })
             .subscribe();
 
         // Polling fallback - refresh every 30 seconds
         const pollInterval = setInterval(() => {
             fetchChats();
+            fetchLabelData();
         }, 30000);
 
         return () => {
             supabase.removeChannel(channel);
             clearInterval(pollInterval);
         };
-    }, [fetchChats, supabase]);
+    }, [fetchChats, fetchLabelData, supabase]);
 
-    const filteredChats = chats.filter(chat =>
-        chat.phone_number.includes(search) ||
-        (chat.contact_name && chat.contact_name.toLowerCase().includes(search.toLowerCase())) ||
-        chat.last_message?.toLowerCase().includes(search.toLowerCase())
-    );
+    // Derive (don't store) the effective filter: a selection pointing at a
+    // since-deleted label is treated as "show all", so we never need a
+    // setState-in-effect to reconcile it.
+    const effectiveLabelId =
+        activeLabelId && labels.some((l) => l.id === activeLabelId) ? activeLabelId : null;
+
+    const q = search.toLowerCase();
+    const filteredChats = chats.filter((chat) => {
+        if (effectiveLabelId) {
+            const rowLabels = labelsByPhone.get(chat.phone_number);
+            if (!rowLabels || !rowLabels.some((l) => l.id === effectiveLabelId)) return false;
+        }
+        return (
+            chat.phone_number.includes(search) ||
+            (chat.contact_name && chat.contact_name.toLowerCase().includes(q)) ||
+            chat.last_message?.toLowerCase().includes(q)
+        );
+    });
 
     function formatTime(dateString: string) {
         const date = new Date(dateString);
@@ -121,6 +180,42 @@ export function ChatList({ selectedPhone, onSelect }: ChatListProps) {
                     />
                 </div>
             </div>
+
+            {labels.length > 0 && (
+                <div className="flex items-center gap-1.5 overflow-x-auto border-b bg-[var(--wa-panel)] px-3 py-2 flex-shrink-0">
+                    {labels.map((l) => {
+                        const active = effectiveLabelId === l.id;
+                        return (
+                            <button
+                                key={l.id}
+                                type="button"
+                                onClick={() => setActiveLabelId(active ? null : l.id)}
+                                aria-pressed={active}
+                                className={cn(
+                                    'shrink-0 rounded-full transition',
+                                    active
+                                        ? 'ring-2 ring-emerald-500'
+                                        : effectiveLabelId
+                                          ? 'opacity-50 hover:opacity-100'
+                                          : 'hover:opacity-80',
+                                )}
+                            >
+                                <LabelBadge label={l} size="xs" />
+                            </button>
+                        );
+                    })}
+                    {effectiveLabelId && (
+                        <button
+                            type="button"
+                            onClick={() => setActiveLabelId(null)}
+                            className="shrink-0 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] text-[var(--wa-text-muted)] hover:text-[var(--wa-text)]"
+                        >
+                            <X className="h-3 w-3" />
+                            Hapus filter
+                        </button>
+                    )}
+                </div>
+            )}
 
             <div className="flex-1 overflow-y-auto">
                 {loading ? (
@@ -199,6 +294,22 @@ export function ChatList({ selectedPhone, onSelect }: ChatListProps) {
                                             )}
                                         </span>
                                     </div>
+                                    {(() => {
+                                        const rowLabels = labelsByPhone.get(chat.phone_number);
+                                        if (!rowLabels || rowLabels.length === 0) return null;
+                                        return (
+                                            <div className="mt-1 flex items-center gap-1 overflow-hidden">
+                                                {rowLabels.slice(0, 3).map((l) => (
+                                                    <LabelBadge key={l.id} label={l} size="xs" className="max-w-28" />
+                                                ))}
+                                                {rowLabels.length > 3 && (
+                                                    <span className="text-[10px] font-medium text-[var(--wa-text-muted)]">
+                                                        +{rowLabels.length - 3}
+                                                    </span>
+                                                )}
+                                            </div>
+                                        );
+                                    })()}
                                 </div>
                             </button>
                             );
