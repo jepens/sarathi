@@ -6,6 +6,9 @@ export const MEETING_TZ = 'Asia/Jakarta'; // Sailendra operates from Indonesia (
 export const MEETING_OPEN_HOUR = 10; // earliest a meeting may START (10:00 WIB)
 export const MEETING_CLOSE_HOUR = 22; // latest a meeting may END (22:00 WIB)
 export const MAX_MEETINGS_PER_DAY = 4;
+// Minimum gap (minutes) required between two meetings so they aren't back-to-back.
+// Enforced in the reserve_meeting_slot RPC's overlap check (migration 0057).
+export const MEETING_BUFFER_MIN = 15;
 
 export interface JakartaParts {
     year: string;

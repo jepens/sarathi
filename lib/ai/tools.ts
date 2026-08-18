@@ -8,6 +8,7 @@ import {
     meetingTitle,
     normalizeMeetingIso,
     MAX_MEETINGS_PER_DAY,
+    MEETING_BUFFER_MIN,
 } from '@/lib/meetings/rules';
 import { getZoomConfig, createZoomMeeting } from '@/lib/zoom/client';
 import { sendMeetingInvite } from '@/lib/meetings/notify';
@@ -229,7 +230,7 @@ export function buildTools(p: BusinessProfile): ChatCompletionTool[] {
         function: {
             name: 'schedule_meeting',
             description:
-                `Book an online consultation meeting with the human sales lead (${p.handoffName}). Call this AFTER you have confirmed a specific date/time (business hours 10:00–22:00 WIB) with the customer. On success the tool reserves the slot, auto-creates a Zoom link, and emails a calendar invite. HOW TO REPLY based on the result JSON: if "join_url" is present, SHARE THAT LINK DIRECTLY in your WhatsApp reply together with the date/time — this is the primary way the customer receives it (do not just say "check your email"); when "customer_emailed" is also true, add that a calendar invite was sent to their email too. If "link_status" is "pending" (no join_url), tell the customer the team will send the link shortly. If it returns ok:false (outside business hours, or that day is already full), apologise and offer another time. On success also call update_lead_stage with stage="scheduled".`,
+                `Book an online consultation meeting with the human sales lead (${p.handoffName}). Call this AFTER you have confirmed a specific date/time (business hours 10:00–22:00 WIB) with the customer. On success the tool reserves the slot, auto-creates a Zoom link, and emails a calendar invite. HOW TO REPLY based on the result JSON: if "join_url" is present, SHARE THAT LINK DIRECTLY in your WhatsApp reply together with the date/time — this is the primary way the customer receives it (do not just say "check your email"); when "customer_emailed" is also true, add that a calendar invite was sent to their email too. If "link_status" is "pending" (no join_url), tell the customer the team will send the link shortly. If it returns ok:false (outside business hours, the requested time clashes with another meeting, or that day is already full), apologise and offer another time. On success also call update_lead_stage with stage="scheduled".`,
             parameters: {
                 type: 'object',
                 properties: {
@@ -657,13 +658,22 @@ export async function scheduleMeeting(
             p_day_start: startUtcIso,
             p_day_end: endUtcIso,
             p_max: MAX_MEETINGS_PER_DAY,
+            p_duration_min: durationMin,
+            p_buffer_min: MEETING_BUFFER_MIN,
         });
         if (reserveErr) throw reserveErr;
         const reservation = (reserve ?? {}) as {
             meeting_id: string | null;
             created: boolean;
             full: boolean;
+            conflict: boolean;
         };
+        if (reservation.conflict) {
+            return JSON.stringify({
+                ok: false,
+                error: `Jam itu bentrok dengan jadwal meeting lain (butuh jeda minimal ${MEETING_BUFFER_MIN} menit antar-meeting). Tawarkan jam lain kepada customer.`,
+            });
+        }
         if (reservation.full || !reservation.meeting_id) {
             return JSON.stringify({
                 ok: false,
@@ -716,16 +726,16 @@ export async function scheduleMeeting(
             }
         }
 
-        // Persist the real duration (calendar block length) and, when we just
-        // created one this run, the Zoom link. Runs unconditionally so
-        // meeting_duration_min is stored even on the pending-link fallback.
-        const orderPatch: Record<string, unknown> = { meeting_duration_min: durationMin };
-        if (justCreatedLink && joinUrl) orderPatch.meeting_link = joinUrl;
-        await supabase
-            .from('orders')
-            .update(orderPatch)
-            .eq('id', meetingId)
-            .eq('org_id', orgId);
+        // Store the Zoom link when we just created one this run. The duration is
+        // already persisted by the reserve RPC at insert time, so there's nothing
+        // else to update on the pending-link fallback.
+        if (justCreatedLink && joinUrl) {
+            await supabase
+                .from('orders')
+                .update({ meeting_link: joinUrl })
+                .eq('id', meetingId)
+                .eq('org_id', orgId);
+        }
 
         // Email the invite (+ .ics) ONLY when we just created the link this run,
         // so an idempotent hit that already had a link doesn't re-email. Track
