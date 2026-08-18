@@ -112,10 +112,17 @@ export function TestChatPreview() {
             </CardHeader>
             <CardContent className="space-y-4">
                 {/* Info Banner */}
-                <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-3 text-sm">
-                    <p className="text-blue-200">
-                        💡 <strong>Tip:</strong> Test your System Message changes here before they go live.
-                        The AI will use current Knowledge Base, Products, and System Message settings.
+                <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-3 text-sm space-y-2">
+                    <p className="text-blue-800 dark:text-blue-200">
+                        💡 <strong>Tip:</strong> This sandbox uses the <strong>currently active</strong>{' '}
+                        System Message, Knowledge Base, and Products — the same ones the live WhatsApp
+                        bot uses. Saving the System Message takes effect for real customers immediately
+                        (there is no separate staging).
+                    </p>
+                    <p className="text-blue-800 dark:text-blue-200">
+                        ⚠️ The preview runs without a contact, so data-writing tools (schedule a
+                        meeting/Zoom, save lead, create order, hand off to a human) are{' '}
+                        <strong>disabled here</strong> — test those in a real WhatsApp chat.
                     </p>
                 </div>
 
