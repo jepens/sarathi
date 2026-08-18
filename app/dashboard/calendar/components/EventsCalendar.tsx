@@ -67,6 +67,11 @@ function toCalendarEvents(apiEvents: ApiEvent[]) {
 
 type CalendarEvent = ReturnType<typeof toCalendarEvents>[number];
 
+// Sailendra operates from Indonesia (WIB). Schedule X renders ZonedDateTime
+// events in the calendar's configured timezone; without this it defaults to UTC
+// and shows meeting times 7 hours early (e.g. a 21:00 WIB meeting as 14:00).
+const CALENDAR_TZ = 'Asia/Jakarta';
+
 const CALENDARS = {
     events: {
         colorName: 'events',
@@ -159,6 +164,7 @@ function CalendarView({ events, isDark }: { events: CalendarEvent[]; isDark: boo
     const calendar = useNextCalendarApp({
         views: [...views],
         defaultView: monthGrid.name,
+        timezone: CALENDAR_TZ,
         events,
         calendars: CALENDARS,
         isDark,
