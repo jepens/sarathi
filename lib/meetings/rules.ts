@@ -17,6 +17,7 @@ export interface JakartaParts {
     hour: number;
     minute: number;
     dateKey: string; // 'YYYY-MM-DD' in WIB
+    weekday: number; // 0=Sunday … 6=Saturday, for the WIB calendar date
 }
 
 // Break a Date into its Asia/Jakarta wall-clock parts. Uses Intl (not the raw
@@ -37,6 +38,11 @@ export function jakartaParts(date: Date): JakartaParts {
     const year = get('year');
     const month = get('month');
     const day = get('day');
+    // Day-of-week of the WIB calendar date. A date's weekday is a pure calendar
+    // fact, so reading getUTCDay() off midnight-UTC of that same Y-M-D is correct
+    // regardless of timezone (no offset can shift the day label without also
+    // changing the date, which we've already resolved in WIB above).
+    const weekday = new Date(`${year}-${month}-${day}T00:00:00Z`).getUTCDay();
     return {
         year,
         month,
@@ -44,6 +50,7 @@ export function jakartaParts(date: Date): JakartaParts {
         hour: Number(hour),
         minute: Number(get('minute')),
         dateKey: `${year}-${month}-${day}`,
+        weekday,
     };
 }
 
@@ -84,6 +91,25 @@ export function validateMeetingWindow(start: Date, durationMin: number): SlotChe
     }
     if (endMin > closeMin) {
         return { ok: false, error: 'Meeting harus selesai sebelum pukul 22:00 WIB. Tawarkan jam yang lebih awal.' };
+    }
+    return { ok: true };
+}
+
+// Saturday (6) and Sunday (0) in WIB are treated as holidays — no consultations
+// are booked on weekends. Evaluated on the WIB calendar date.
+export function isWeekend(date: Date): boolean {
+    const { weekday } = jakartaParts(date);
+    return weekday === 0 || weekday === 6;
+}
+
+// Meeting must fall on a working day (Mon–Fri) in WIB. On a weekend the booking
+// is refused so the AI can offer the nearest weekday instead.
+export function validateMeetingDay(start: Date): SlotCheck {
+    if (isWeekend(start)) {
+        return {
+            ok: false,
+            error: 'Meeting hanya tersedia pada hari kerja (Senin–Jumat). Sabtu–Minggu libur. Tawarkan hari kerja terdekat.',
+        };
     }
     return { ok: true };
 }

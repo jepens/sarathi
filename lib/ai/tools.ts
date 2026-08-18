@@ -4,6 +4,7 @@ import { ChatCompletionTool } from 'openai/resources/chat/completions';
 import { type BusinessProfile } from '@/lib/settings/business-profile';
 import {
     validateMeetingWindow,
+    validateMeetingDay,
     jakartaDayRangeUtc,
     meetingTitle,
     normalizeMeetingIso,
@@ -230,14 +231,14 @@ export function buildTools(p: BusinessProfile): ChatCompletionTool[] {
         function: {
             name: 'schedule_meeting',
             description:
-                `Book an online consultation meeting with the human sales lead (${p.handoffName}). Call this AFTER you have confirmed a specific date/time (business hours 10:00–22:00 WIB) with the customer. On success the tool reserves the slot, auto-creates a Zoom link, and emails a calendar invite. HOW TO REPLY based on the result JSON: if "join_url" is present, SHARE THAT LINK DIRECTLY in your WhatsApp reply together with the date/time — this is the primary way the customer receives it (do not just say "check your email"); when "customer_emailed" is also true, add that a calendar invite was sent to their email too. If "link_status" is "pending" (no join_url), tell the customer the team will send the link shortly. If it returns ok:false (outside business hours, the requested time clashes with another meeting, or that day is already full), apologise and offer another time. On success also call update_lead_stage with stage="scheduled".`,
+                `Book an online consultation meeting with the human sales lead (${p.handoffName}). Call this AFTER you have confirmed a specific date/time with the customer. Meetings run ONLY on weekdays (Senin–Jumat) during business hours 10:00–22:00 WIB — Sabtu & Minggu are closed, so never propose a weekend. On success the tool reserves the slot, auto-creates a Zoom link, and emails a calendar invite. HOW TO REPLY based on the result JSON: if "join_url" is present, SHARE THAT LINK DIRECTLY in your WhatsApp reply together with the date/time — this is the primary way the customer receives it (do not just say "check your email"); when "customer_emailed" is also true, add that a calendar invite was sent to their email too. If "link_status" is "pending" (no join_url), tell the customer the team will send the link shortly. If it returns ok:false (a weekend, outside business hours, the requested time clashes with another meeting, or that day is already full), apologise and offer another WORKING-DAY time. On success also call update_lead_stage with stage="scheduled".`,
             parameters: {
                 type: 'object',
                 properties: {
                     meeting_at: {
                         type: 'string',
                         description:
-                            'Meeting start time as ISO 8601 datetime in Asia/Jakarta (e.g. "2026-06-03T14:00:00+07:00"). MUST be a real future datetime — do NOT use placeholders like "TBD". If the customer only gave a vague time ("besok pagi"), pin it down first.',
+                            'Meeting start time as ISO 8601 datetime in Asia/Jakarta (e.g. "2026-06-03T14:00:00+07:00"). MUST be a real future datetime on a WEEKDAY (Mon–Fri) — never a Saturday/Sunday. Do NOT use placeholders like "TBD". If the customer only gave a vague time ("besok pagi"), pin it down first.',
                     },
                     notes: {
                         type: ['string', 'null'],
@@ -624,6 +625,12 @@ export async function scheduleMeeting(
         }
 
         const durationMin = resolveMeetingDuration();
+
+        // Working days only: Saturday & Sunday are treated as holidays.
+        const dayCheck = validateMeetingDay(meetingDate);
+        if (!dayCheck.ok) {
+            return JSON.stringify({ ok: false, error: dayCheck.error });
+        }
 
         // Business hours: the meeting must start ≥10:00 and end ≤22:00 WIB.
         const windowCheck = validateMeetingWindow(meetingDate, durationMin);
