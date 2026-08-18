@@ -3,6 +3,8 @@ import {
     jakartaParts,
     jakartaDayRangeUtc,
     validateMeetingWindow,
+    validateMeetingDay,
+    isWeekend,
     isDayFull,
     meetingTitle,
     normalizeMeetingIso,
@@ -23,6 +25,35 @@ describe('jakartaParts', () => {
         const p = jakartaParts(new Date('2026-06-02T20:00:00Z'));
         expect(p.dateKey).toBe('2026-06-03');
         expect(p.hour).toBe(3);
+    });
+
+    it('exposes the WIB weekday (0=Sun … 6=Sat)', () => {
+        expect(jakartaParts(new Date('2026-06-03T14:00:00+07:00')).weekday).toBe(3); // Wed
+        expect(jakartaParts(new Date('2026-06-06T14:00:00+07:00')).weekday).toBe(6); // Sat
+        expect(jakartaParts(new Date('2026-06-07T14:00:00+07:00')).weekday).toBe(0); // Sun
+        // A late-Friday-WIB time that is still Saturday in UTC stays Friday (weekday 5).
+        expect(jakartaParts(new Date('2026-06-05T23:00:00+07:00')).weekday).toBe(5); // Fri
+    });
+});
+
+describe('validateMeetingDay / isWeekend', () => {
+    it('accepts a weekday', () => {
+        expect(validateMeetingDay(new Date('2026-06-03T14:00:00+07:00'))).toEqual({ ok: true }); // Wed
+        expect(isWeekend(new Date('2026-06-03T14:00:00+07:00'))).toBe(false);
+    });
+
+    it('rejects Saturday and Sunday (WIB)', () => {
+        expect(isWeekend(new Date('2026-06-06T14:00:00+07:00'))).toBe(true); // Sat
+        expect(isWeekend(new Date('2026-06-07T14:00:00+07:00'))).toBe(true); // Sun
+        expect(validateMeetingDay(new Date('2026-06-06T14:00:00+07:00')).ok).toBe(false);
+        expect(validateMeetingDay(new Date('2026-06-07T14:00:00+07:00')).ok).toBe(false);
+    });
+
+    it('judges the weekend by the WIB date, not UTC', () => {
+        // Sat 01:00 WIB == Fri 18:00 UTC — still a weekend in WIB.
+        expect(isWeekend(new Date('2026-06-06T01:00:00+07:00'))).toBe(true);
+        // Fri 23:00 WIB == Sat 16:00 UTC — still Friday in WIB, so allowed.
+        expect(isWeekend(new Date('2026-06-05T23:00:00+07:00'))).toBe(false);
     });
 });
 
