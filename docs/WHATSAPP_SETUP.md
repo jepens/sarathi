@@ -73,6 +73,10 @@ Deploy to Vercel, Netlify, or your VPS. Get your production URL (e.g., `https://
 4. Click **Verify and Save**
 5. Subscribe to webhook fields:
    - ✅ `messages` (required)
+   - ✅ `user_id_update` (required) — keeps a contact threaded when they change
+     number or adopt a WhatsApp username (Business-Scoped User ID / BSUID). The
+     handler is already wired; without this subscription Meta never delivers the
+     event and chat/lead history can fork.
 
 ## Step 6: Test the Integration
 

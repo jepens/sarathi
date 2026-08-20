@@ -1,5 +1,6 @@
 import { getWhatsAppAccessToken, getWhatsAppPhoneNumberId } from '@/lib/settings/app-settings';
 import { toWhatsAppText } from './format';
+import { buildRecipient } from './recipient';
 
 const WHATSAPP_API_URL = 'https://graph.facebook.com/v21.0';
 
@@ -85,7 +86,9 @@ export async function sendWhatsAppMessage(
         },
         body: JSON.stringify({
             messaging_product: 'whatsapp',
-            to: to,
+            // `to` for a dialable phone, `recipient` for a BSUID (Meta rejects a
+            // BSUID in `to`). See lib/whatsapp/recipient.ts.
+            ...buildRecipient(to),
             ...(contextMessageId ? { context: { message_id: contextMessageId } } : {}),
             // Normalise Markdown → WhatsApp formatting so customers never see
             // stray "**bold**" / "# heading" syntax (the model leaks it even
@@ -215,7 +218,7 @@ export async function sendWhatsAppMedia(
     }
 
     const caption = media.caption?.trim() ? media.caption.trim() : undefined;
-    const body: Record<string, unknown> = { messaging_product: 'whatsapp', to, type: media.kind };
+    const body: Record<string, unknown> = { messaging_product: 'whatsapp', ...buildRecipient(to), type: media.kind };
     if (media.kind === 'image') {
         body.image = { id: media.mediaId, ...(caption ? { caption } : {}) };
     } else {

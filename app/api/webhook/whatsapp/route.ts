@@ -4,6 +4,7 @@ import { verifyWhatsAppSignature } from '@/lib/whatsapp/security';
 import { checkRateLimit } from '@/lib/whatsapp/rate-limiter-db';
 import { enqueueMessage, processQueue, getDebounceSeconds } from '@/lib/whatsapp/queue-db';
 import { sendWhatsAppMessage, downloadWhatsAppMedia } from '@/lib/whatsapp/client';
+import { resolveSendTarget } from '@/lib/whatsapp/recipient';
 import { resolveWhatsAppContext } from '@/lib/whatsapp/credentials';
 import { whatsappLogger } from '@/lib/utils/logger';
 import { logSystemMessage } from '@/lib/whatsapp/history';
@@ -19,14 +20,16 @@ import { checkVerifyToken } from '@/lib/settings/app-settings';
 // on phone_number (hybrid strategy), so when a returning customer arrives
 // with a BSUID we've seen before, re-thread them into their existing
 // conversation by reusing the phone_number we already have. Otherwise fall
-// back to `from` (a phone today, possibly a BSUID later — either works as a
-// key, and Meta accepts a BSUID as the `to` for replies from June 2026).
+// back to `from` (a phone today, or a BSUID once usernames roll out — either
+// works as a stable PK; the send layer routes a BSUID via `recipient`, since
+// Meta rejects a BSUID in the `to` field). Returns null only when we have
+// NEITHER a `from` nor a BSUID — the caller then acks and skips.
 async function resolveContactKey(
     supabase: SupabaseClient,
     orgId: string,
-    from: string,
+    from: string | null | undefined,
     bsuid: string | null
-): Promise<string> {
+): Promise<string | null> {
     if (bsuid) {
         // Scope the bsuid lookup to this org: the webhook uses a service-role
         // client (RLS bypassed), so without org_id a bsuid that two tenants
@@ -39,7 +42,10 @@ async function resolveContactKey(
             .maybeSingle<{ phone_number: string }>();
         if (data?.phone_number) return data.phone_number;
     }
-    return from;
+    // A phone-hidden NEW customer arrives with no phone (from omitted) but a
+    // BSUID — fall back to the BSUID verbatim so contactKey is never nullish
+    // for a routable message.
+    return from || bsuid || null;
 }
 
 // A real phone number is all digits, 8-15 long (E.164 without the +). A BSUID
@@ -468,10 +474,19 @@ export async function POST(request: Request) {
                     null;
 
                 // Canonical CRM key — reuse an existing contact's phone_number
-                // when we recognise the BSUID; otherwise use `from`.
+                // when we recognise the BSUID; otherwise use `from`, else the
+                // BSUID verbatim.
                 const contactKey = await resolveContactKey(supabase, waCtx.orgId, from, bsuid);
 
-                whatsappLogger.info(`Message details - From: ${from}, BSUID: ${bsuid ?? 'none'}, Key: ${contactKey}, Type: ${messageType}`);
+                // A phone-hidden payload with neither a phone nor a BSUID is
+                // unroutable — ack so Meta doesn't retry-storm, and skip (never
+                // let an undefined key reach the phone_number PK writes below).
+                if (!contactKey) {
+                    whatsappLogger.warn(`Inbound ${messageType} message has no usable identity (no phone, no BSUID) — acking without processing`);
+                    return new NextResponse('EVENT_RECEIVED', { status: 200 });
+                }
+
+                whatsappLogger.info(`Message details - From: ${from ?? 'none'}, BSUID: ${bsuid ?? 'none'}, Key: ${contactKey}, Type: ${messageType}`);
 
                 // ===== Phase C: explicit contact share (REQUEST_CONTACT_INFO) =====
                 // When a customer taps the REQUEST_CONTACT_INFO button (or sends
@@ -528,7 +543,6 @@ export async function POST(request: Request) {
                             phoneNumberId: waCtx.phoneNumberId,
                             accessToken: waCtx.accessToken,
                             contactKey,
-                            replyTo: from,
                             bsuid,
                             waId,
                             inboundWamid,
@@ -592,7 +606,8 @@ export async function POST(request: Request) {
                     const allowed = await checkRateLimit(`${waCtx.orgId}:${contactKey}`, supabase);
                     if (!allowed) {
                         whatsappLogger.warn(`Rate limit exceeded for ${contactKey}`);
-                        await sendWhatsAppMessage(from, 'Mohon tunggu sebentar sebelum mengirim pesan lagi.', { phoneNumberId: waCtx.phoneNumberId, accessToken: waCtx.accessToken });
+                        const warnTarget = await resolveSendTarget(supabase, waCtx.orgId, contactKey);
+                        await sendWhatsAppMessage(warnTarget, 'Mohon tunggu sebentar sebelum mengirim pesan lagi.', { phoneNumberId: waCtx.phoneNumberId, accessToken: waCtx.accessToken });
                         await logSystemMessage(waCtx.orgId, contactKey, 'Rate limit exceeded. User warned.');
                         return new NextResponse('EVENT_RECEIVED', { status: 200 });
                     }

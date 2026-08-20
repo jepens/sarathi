@@ -5,6 +5,7 @@ import {
 } from '@/lib/settings/app-settings';
 import { makeWhatsAppApiError } from '@/lib/whatsapp/client';
 import type { SendWhatsAppResult } from '@/lib/whatsapp/client';
+import { buildRecipient } from '@/lib/whatsapp/recipient';
 
 const WHATSAPP_API_URL = 'https://graph.facebook.com/v21.0';
 
@@ -213,7 +214,8 @@ export async function sendTemplateMessage(opts: SendTemplateOptions): Promise<Se
 
     const body = {
         messaging_product: 'whatsapp',
-        to: opts.to,
+        // Phone → `to`; BSUID → `recipient` (see lib/whatsapp/recipient.ts).
+        ...buildRecipient(opts.to),
         type: 'template',
         template: {
             name: opts.templateName,

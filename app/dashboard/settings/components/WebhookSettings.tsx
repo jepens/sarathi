@@ -32,7 +32,12 @@ export function WebhookSettings({ webhookUrl, verifyToken }: WebhookSettingsProp
                 </CardTitle>
                 <CardDescription>
                     Di Meta App → WhatsApp → Configuration, isi Callback URL & Verify
-                    Token berikut, lalu subscribe ke field <span className="font-mono">messages</span>.
+                    Token berikut, lalu subscribe ke field{' '}
+                    <span className="font-mono">messages</span> dan{' '}
+                    <span className="font-mono">user_id_update</span>. Field{' '}
+                    <span className="font-mono">user_id_update</span> menjaga kontak tetap
+                    tersambung saat customer mengganti nomor / mulai memakai username WhatsApp
+                    (Business-Scoped User ID). Tanpa langganan ini, riwayat chat bisa terpecah.
                 </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
