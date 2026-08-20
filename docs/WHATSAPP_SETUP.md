@@ -73,10 +73,12 @@ Deploy to Vercel, Netlify, or your VPS. Get your production URL (e.g., `https://
 4. Click **Verify and Save**
 5. Subscribe to webhook fields:
    - ✅ `messages` (required)
-   - ✅ `user_id_update` (required) — keeps a contact threaded when they change
-     number or adopt a WhatsApp username (Business-Scoped User ID / BSUID). The
-     handler is already wired; without this subscription Meta never delivers the
-     event and chat/lead history can fork.
+   - ✅ `user_id_update` (subscribe WHEN AVAILABLE) — keeps a contact threaded
+     when they change number or adopt a WhatsApp username (Business-Scoped User
+     ID / BSUID). Meta is still rolling this field out, so it may not appear in
+     your Webhook Fields list yet — subscribe it once it does. The handler is
+     already wired; until the field is available + subscribed, Meta doesn't
+     deliver the event (BSUID-change continuity is simply inactive — low risk).
 
 ## Step 6: Test the Integration
 
