@@ -190,6 +190,9 @@ interface SendTemplateOptions {
 export async function sendTemplateMessage(opts: SendTemplateOptions): Promise<SendWhatsAppResult> {
     const phoneNumberId = await getWhatsAppPhoneNumberId();
     const accessToken = await getWhatsAppAccessToken();
+    if (!phoneNumberId || !accessToken) {
+        throw new Error('WhatsApp not configured. Please configure in /dashboard/settings');
+    }
 
     const components: Array<Record<string, unknown>> = [];
     if (opts.variables && opts.variables.length > 0) {
