@@ -8,6 +8,7 @@ import {
     jakartaDayRangeUtc,
     meetingTitle,
     normalizeMeetingIso,
+    meetingSlotsOverlap,
     MAX_MEETINGS_PER_DAY,
     MEETING_BUFFER_MIN,
 } from '@/lib/meetings/rules';
@@ -222,6 +223,27 @@ export function buildTools(p: BusinessProfile): ChatCompletionTool[] {
                     },
                 },
                 required: ['stage', 'reason'],
+                additionalProperties: false,
+            },
+            strict: true,
+        },
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'check_meeting_availability',
+            description:
+                `Check whether an online meeting slot is FREE — call this BEFORE proposing or confirming a time to the customer. Read-only: it does NOT book anything. Enforces the same rules as booking: weekdays only (Senin–Jumat), 10:00–22:00 WIB, no clash with another meeting (15-minute buffer), max 4/day. Result JSON: { available: boolean, reason: string }. If available is false, relay the reason and offer another working-day time — never confirm a slot you haven't checked. If true, show the confirmation summary and wait for the customer's agreement before calling schedule_meeting.`,
+            parameters: {
+                type: 'object',
+                properties: {
+                    meeting_at: {
+                        type: 'string',
+                        description:
+                            'Requested meeting start as ISO 8601 in Asia/Jakarta WITH the +07:00 offset (e.g. "2026-06-03T14:00:00+07:00"). Must be a concrete future weekday datetime.',
+                    },
+                },
+                required: ['meeting_at'],
                 additionalProperties: false,
             },
             strict: true,
@@ -599,6 +621,72 @@ export async function updateLeadStage(
 
 // --- Meeting / handoff / proposal executors ---------------------------------
 
+// Read-only availability check for a proposed meeting slot. Applies the SAME
+// rules as the atomic booking (weekday, business hours, conflict with buffer,
+// daily cap) but writes nothing — so the AI can verify a slot BEFORE showing the
+// confirmation summary, instead of promising a slot that turns out to be taken.
+// The reserve RPC remains the final authority against races at booking time.
+export async function checkMeetingAvailability(
+    orgId: string,
+    meetingAtIso: string
+): Promise<string> {
+    try {
+        const meetingDate = new Date(normalizeMeetingIso(meetingAtIso));
+        if (Number.isNaN(meetingDate.getTime())) {
+            return JSON.stringify({ available: false, reason: `Format tanggal/jam tidak valid: ${meetingAtIso}` });
+        }
+        if (meetingDate.getTime() < Date.now() - 60_000) {
+            return JSON.stringify({ available: false, reason: 'Jam itu sudah lewat. Tawarkan waktu yang akan datang.' });
+        }
+        const dayCheck = validateMeetingDay(meetingDate);
+        if (!dayCheck.ok) {
+            return JSON.stringify({ available: false, reason: dayCheck.error });
+        }
+        const durationMin = resolveMeetingDuration();
+        const windowCheck = validateMeetingWindow(meetingDate, durationMin);
+        if (!windowCheck.ok) {
+            return JSON.stringify({ available: false, reason: windowCheck.error });
+        }
+
+        const supabase = await createServiceOrServerClient();
+        const { startUtcIso, endUtcIso } = jakartaDayRangeUtc(meetingDate);
+        const { data: existing, error } = await supabase
+            .from('orders')
+            .select('event_date, meeting_duration_min')
+            .eq('org_id', orgId)
+            .eq('order_type', 'service')
+            .not('meeting_link', 'is', null)
+            .gte('event_date', startUtcIso)
+            .lt('event_date', endUtcIso);
+        if (error) throw error;
+
+        const rows = existing ?? [];
+        if (rows.length >= MAX_MEETINGS_PER_DAY) {
+            return JSON.stringify({ available: false, reason: `Kuota meeting hari itu sudah penuh (maksimal ${MAX_MEETINGS_PER_DAY}/hari). Tawarkan tanggal lain.` });
+        }
+        const reqMs = meetingDate.getTime();
+        const clash = rows.some((r) =>
+            meetingSlotsOverlap(
+                new Date(r.event_date as string).getTime(),
+                (r.meeting_duration_min as number | null) ?? 60,
+                reqMs,
+                durationMin,
+                MEETING_BUFFER_MIN,
+            ),
+        );
+        if (clash) {
+            return JSON.stringify({ available: false, reason: `Jam itu bentrok dengan meeting lain (butuh jeda minimal ${MEETING_BUFFER_MIN} menit antar-meeting). Tawarkan jam lain.` });
+        }
+
+        return JSON.stringify({ available: true, reason: 'Slot tersedia — silakan konfirmasi ke customer lalu jadwalkan.', meeting_at: meetingDate.toISOString() });
+    } catch (err) {
+        // Keep the raw detail in the log only — the "reason" is relayed to the
+        // customer, so return a generic localized message, not an internal error.
+        console.error('Error in checkMeetingAvailability:', err);
+        return JSON.stringify({ available: false, reason: 'Maaf, gagal cek ketersediaan slot. Coba lagi sebentar ya.' });
+    }
+}
+
 export async function scheduleMeeting(
     orgId: string,
     phoneNumber: string,
@@ -646,6 +734,20 @@ export async function scheduleMeeting(
             .eq('org_id', orgId)
             .eq('phone_number', phoneNumber)
             .maybeSingle();
+
+        // Require the customer's NAME and COMPANY/INSTANSI on file before booking
+        // — collected earlier via conversation / save_lead_info. Backstop for the
+        // system-message rule so a meeting is never scheduled for an unidentified
+        // lead even if the model skips ahead.
+        const missingIdentity: string[] = [];
+        if (!chat?.contact_name?.trim()) missingIdentity.push('nama');
+        if (!chat?.company?.trim()) missingIdentity.push('perusahaan/instansi');
+        if (missingIdentity.length > 0) {
+            return JSON.stringify({
+                ok: false,
+                error: `Minta ${missingIdentity.join(' & ')} customer dulu (simpan via save_lead_info) sebelum menjadwalkan meeting.`,
+            });
+        }
 
         const customerName = chat?.contact_name ?? 'Klien';
         // "COMPANY - Event", e.g. "SIEMENS - Employee Gathering 2026".

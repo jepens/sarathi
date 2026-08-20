@@ -118,6 +118,25 @@ export function isDayFull(existingCount: number): boolean {
     return existingCount >= MAX_MEETINGS_PER_DAY;
 }
 
+// Does a requested meeting slot clash with an existing one? Mirrors the SQL
+// overlap check in reserve_meeting_slot (migration 0057): the existing meeting
+// occupies [exStart, exStart+exDur); the requested slot is padded by the buffer
+// on BOTH sides — [reqStart-buffer, reqStart+reqDur+buffer). Ranges are
+// half-open, so a gap of exactly `bufferMin` does NOT clash. Used by the
+// read-only availability pre-check so it matches the atomic booking guard.
+export function meetingSlotsOverlap(
+    exStartMs: number,
+    exDurMin: number,
+    reqStartMs: number,
+    reqDurMin: number,
+    bufferMin: number,
+): boolean {
+    const exEnd = exStartMs + exDurMin * 60_000;
+    const reqStart = reqStartMs - bufferMin * 60_000;
+    const reqEnd = reqStartMs + (reqDurMin + bufferMin) * 60_000;
+    return exStartMs < reqEnd && reqStart < exEnd;
+}
+
 // "COMPANY - Event", e.g. "SIEMENS - Employee Gathering 2026". Falls back to the
 // contact name (then a generic label) when the company is unknown, and drops the
 // event half when there's no event on file yet.

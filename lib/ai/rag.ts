@@ -7,6 +7,7 @@ import { getDefaultOrgId } from '@/lib/settings/org-context';
 import {
     buildTools,
     checkAvailability,
+    checkMeetingAvailability,
     listProducts,
     saveLeadInfo,
     updateLeadStage,
@@ -422,15 +423,37 @@ a price estimate, call update_lead_stage with stage="quoted").
 
 ADVANCED ACTIONS:
 
-• schedule_meeting — call AFTER the customer agrees to an online meeting AND
-  you have pinned down a specific datetime (also ask for their email so we can
-  send a calendar invite — helpful but optional). Pass meeting_at as ISO 8601
-  and ALWAYS include the +07:00 offset (e.g. "2026-06-03T14:00:00+07:00") — a
-  time without the offset gets booked wrong. Do NOT call with vague times like
-  "besok pagi" — ask for the specific hour first. When the result has a
-  "join_url", SHARE that Zoom link in your reply together with the date/time;
-  only add "invite sent to your email" when the result's "customer_emailed" is
-  true. On success, the tool already updates the lead stage to "scheduled".
+• check_meeting_availability — BEFORE proposing or confirming a meeting time,
+  call this with the specific datetime to make sure the slot is free (weekdays
+  only, 10:00–22:00 WIB, no clash with a 15-minute buffer, max 4/day). If the
+  result "available" is false, relay the "reason" and offer another working-day
+  time — NEVER confirm a slot you haven't checked.
+
+• schedule_meeting — MEETING CONFIRMATION FLOW, follow IN ORDER:
+  1. IDENTITY FIRST: you MUST have the customer's NAME and COMPANY/INSTANSI on
+     file before scheduling. If either is missing, ask and save it via
+     save_lead_info — never schedule for an unidentified lead. (The tool will
+     refuse with ok:false if name/company are missing.)
+  2. Pin a specific WEEKDAY datetime (not "besok pagi"), then call
+     check_meeting_availability. If not available, offer another time and STOP.
+  3. If available, show a confirmation summary and WAIT for explicit agreement —
+     do NOT call schedule_meeting yet:
+
+     📅 Permintaan meeting online (Zoom):
+     • Nama / Perusahaan: [nama] / [perusahaan]
+     • Tanggal: [tanggal]
+     • Jam: [jam] WIB
+
+     Ask: "Kalau sudah benar, ketik 'Ya' / 'Setuju' ya kak — nanti saya buatkan link Zoom-nya."
+  4. ONLY after explicit confirmation (ya, oke, setuju, konfirmasi, betul, benar)
+     call schedule_meeting. If the customer says tidak/batal/salah/ubah, ask what
+     to change and re-summarise. Be patient — do NOT book prematurely.
+  5. Pass meeting_at as ISO 8601 WITH the +07:00 offset
+     (e.g. "2026-06-03T14:00:00+07:00") — a time without the offset books wrong.
+  6. When the result has a "join_url", SHARE that Zoom link in your reply together
+     with the date/time; add "undangan kalender dikirim ke email kakak" only when
+     the result's "customer_emailed" is true. The tool also emails the admin and
+     notifies the sales team on WhatsApp, and sets the lead stage to "scheduled".
 
 • handoff_to_human — call when the customer (1) explicitly asks to talk to
   someone, (2) is negotiating beyond your authority (heavy discount, custom
@@ -618,6 +641,10 @@ ${contextText}
 
                 if (functionName === 'check_availability') {
                     toolResult = await checkAvailability(functionArgs.product_name);
+                } else if (functionName === 'check_meeting_availability') {
+                    // Read-only + org-scoped — safe without a phoneNumber (also
+                    // works in the web/test sandbox). Never writes anything.
+                    toolResult = await checkMeetingAvailability(orgId, functionArgs.meeting_at);
                 } else if (functionName === 'list_products') {
                     toolResult = await listProducts(functionArgs.limit);
                 } else if (functionName === 'save_lead_info') {

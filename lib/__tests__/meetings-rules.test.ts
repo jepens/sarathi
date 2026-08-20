@@ -8,7 +8,9 @@ import {
     isDayFull,
     meetingTitle,
     normalizeMeetingIso,
+    meetingSlotsOverlap,
     MAX_MEETINGS_PER_DAY,
+    MEETING_BUFFER_MIN,
 } from '@/lib/meetings/rules';
 
 describe('jakartaParts', () => {
@@ -116,6 +118,40 @@ describe('normalizeMeetingIso', () => {
 
     it('leaves a non-datetime (date-only) string for the NaN check', () => {
         expect(normalizeMeetingIso('2026-06-03')).toBe('2026-06-03');
+    });
+});
+
+describe('meetingSlotsOverlap', () => {
+    // Existing meeting: 10:00–10:40 WIB (40 min). Buffer 15 min. Mirrors the SQL
+    // overlap check in reserve_meeting_slot (migration 0057).
+    const ex = new Date('2026-06-03T10:00:00+07:00').getTime();
+    const overlap = (reqIso: string, reqDur = 40) =>
+        meetingSlotsOverlap(ex, 40, new Date(reqIso).getTime(), reqDur, MEETING_BUFFER_MIN);
+
+    it('rejects the exact same time', () => {
+        expect(overlap('2026-06-03T10:00:00+07:00')).toBe(true);
+    });
+
+    it('rejects a back-to-back slot (0-min gap < buffer)', () => {
+        expect(overlap('2026-06-03T10:40:00+07:00')).toBe(true);
+    });
+
+    it('rejects a 10-minute gap (< 15-min buffer)', () => {
+        expect(overlap('2026-06-03T10:50:00+07:00')).toBe(true);
+    });
+
+    it('allows a gap of exactly the 15-min buffer', () => {
+        // 10:40 end + 15 min → 10:55 start is allowed (half-open ranges).
+        expect(overlap('2026-06-03T10:55:00+07:00')).toBe(false);
+    });
+
+    it('allows a comfortable 20-minute gap', () => {
+        expect(overlap('2026-06-03T11:00:00+07:00')).toBe(false);
+    });
+
+    it('rejects a slot that starts before and runs into the existing one', () => {
+        // 09:30 + 40 = 10:10, padded to 10:25 — overlaps the 10:00 start.
+        expect(overlap('2026-06-03T09:30:00+07:00')).toBe(true);
     });
 });
 
