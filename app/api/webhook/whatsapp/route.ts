@@ -60,24 +60,27 @@ function looksLikePhone(value: unknown): value is string {
 // our stored bsuid from old → new so the next inbound message still resolves
 // to the same contact (phone_number PK stays put — no re-key).
 //
-// The exact payload shape isn't fully documented during the 2026 rollout, so
-// we parse defensively across the likely field names and log the raw value
-// when we can't find a pair.
+// Real Meta payload (WhatsApp BSUID docs), field "user_id_update":
+//   value.user_id_update: [ { wa_id, detail,
+//     user_id: { previous: <OLD_BSUID>, current: <NEW_BSUID> },
+//     parent_user_id: { previous, current }, timestamp } ]
+// We read the nested user_id.previous/current, and still fall back to a few
+// flat guesses in case Meta tweaks the shape during the 2026 rollout.
 async function handleUserIdUpdate(
     supabase: SupabaseClient,
     orgId: string,
     value: Record<string, unknown>
 ): Promise<void> {
-    // Candidate containers: value.user_id_updates[] (most likely) or a single
-    // object on the value itself.
-    const updates: Array<Record<string, unknown>> = [];
-    if (Array.isArray(value.user_id_updates)) {
-        for (const u of value.user_id_updates) {
-            if (u && typeof u === 'object') updates.push(u as Record<string, unknown>);
-        }
-    } else {
-        updates.push(value);
-    }
+    // Container: value.user_id_update[] (the documented shape); accept the
+    // plural and a bare object too, defensively.
+    const container = Array.isArray(value.user_id_update)
+        ? value.user_id_update
+        : Array.isArray(value.user_id_updates)
+            ? value.user_id_updates
+            : [value];
+    const updates: Array<Record<string, unknown>> = container.filter(
+        (u): u is Record<string, unknown> => !!u && typeof u === 'object',
+    );
 
     const pick = (o: Record<string, unknown>, keys: string[]): string | null => {
         for (const k of keys) {
@@ -86,10 +89,18 @@ async function handleUserIdUpdate(
         }
         return null;
     };
+    // The documented shape nests the ids under `user_id: { previous, current }`.
+    const nested = (u: Record<string, unknown>): Record<string, unknown> | null =>
+        u.user_id && typeof u.user_id === 'object' ? (u.user_id as Record<string, unknown>) : null;
 
     for (const u of updates) {
-        const oldId = pick(u, ['old_user_id', 'previous_user_id', 'old_wa_id', 'previous_wa_id']);
-        const newId = pick(u, ['new_user_id', 'current_user_id', 'new_wa_id', 'current_wa_id']);
+        const uid = nested(u);
+        const oldId =
+            (uid && pick(uid, ['previous'])) ||
+            pick(u, ['old_user_id', 'previous_user_id', 'old_wa_id', 'previous_wa_id']);
+        const newId =
+            (uid && pick(uid, ['current'])) ||
+            pick(u, ['new_user_id', 'current_user_id', 'new_wa_id', 'current_wa_id']);
         if (!oldId || !newId) {
             whatsappLogger.warn(`user_id_update: could not parse old/new id from ${JSON.stringify(u)}`);
             continue;

@@ -38,11 +38,12 @@ Di Meta App → WhatsApp → Configuration:
 - **Verify Token**: token yang sama untuk semua tenant (webhook melakukan routing
   berdasarkan `phone_number_id` di payload, lalu verifikasi signature dengan
   `app_secret` org pemilik nomor tersebut)
-- **Subscribe** ke field **`messages`** dan **`user_id_update`** (dan
-  `message_template_status_update` bila pakai template). `user_id_update` menjaga
-  kontak tetap tersambung saat customer ganti nomor / mulai memakai username
-  WhatsApp (BSUID) — handler-nya sudah ada, tapi Meta hanya mengirim event ini
-  bila di-subscribe.
+- **Subscribe** ke field **`messages`** (dan `message_template_status_update`
+  bila pakai template). Bila field **`user_id_update`** sudah muncul di daftar
+  (Meta masih merilisnya bertahap), subscribe juga — ini menjaga kontak tetap
+  tersambung saat customer ganti nomor / mulai memakai username WhatsApp (BSUID).
+  Handler-nya sudah ada; sampai field tersedia & di-subscribe, event ini tidak
+  dikirim (kontinuitas BSUID nonaktif — risiko rendah).
 
 > Catatan: Embedded Signup (otomatis tanpa salin-tempel kredensial) butuh
 > verifikasi Meta Tech-Provider — belum diaktifkan. Untuk sekarang setup manual.
