@@ -12,6 +12,7 @@ import {
 } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
     DropdownMenu,
     DropdownMenuContent,
@@ -35,7 +36,7 @@ import {
     SelectTrigger,
     SelectValue,
 } from '@/components/ui/select';
-import { MoreHorizontal, Plus, Pencil, Trash2, Eye, CheckCircle2, Download } from 'lucide-react';
+import { MoreHorizontal, Plus, Pencil, Trash2, Eye, CheckCircle2, Download, Video, Copy } from 'lucide-react';
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
@@ -69,9 +70,24 @@ interface Order {
     dp_paid_at: string | null;
     pelunasan_amount: number | null;
     pelunasan_paid_at: string | null;
+    meeting_link: string | null;
+    meeting_duration_min: number | null;
 }
 
+type Segment = 'all' | 'event' | 'meeting';
+
 const STATUSES = ['pending', 'paid', 'shipped', 'completed', 'cancelled'] as const;
+
+// Meetings only ever use these statuses. Excluding paid/cancelled keeps the
+// admin from triggering updateOrderStatus's payment/cancellation WhatsApp
+// side-effects (meaningless for a free consultation). Cancelling a meeting is
+// done by DELETING it (the "Batalkan" action) — which also frees the slot;
+// a 'cancelled' status would leave the slot blocked (the RPC keys off row
+// existence, not status).
+const MEETING_STATUS_OPTIONS = [
+    { value: 'scheduled', label: 'Terjadwal' },
+    { value: 'completed', label: 'Selesai' },
+] as const;
 
 function statusColor(status: string): string {
     switch (status) {
@@ -103,14 +119,50 @@ function itemsText(order: Order): string {
     return order.items.map((i) => `${i.name}${i.qty > 1 ? ` x${i.qty}` : ''}`).join(', ');
 }
 
+// --- Online-meeting helpers -------------------------------------------------
+// A row is an online meeting (Zoom consultation) rather than a commercial event
+// booking when it carries a meeting_link — the same signal the Calendar uses.
+function isMeeting(o: Order): boolean {
+    return !!o.meeting_link;
+}
+// The Zoom link is usable only once provisioned (not the 'pending-link' sentinel).
+function meetingJoinUrl(o: Order): string | null {
+    return o.meeting_link && o.meeting_link !== 'pending-link' ? o.meeting_link : null;
+}
+// The meeting's actual start time in WIB (+ duration) — NOT when the row was made.
+function formatMeetingWhen(o: Order): string {
+    if (!o.event_date) return '—';
+    const when = new Intl.DateTimeFormat('id-ID', {
+        timeZone: 'Asia/Jakarta', day: 'numeric', month: 'short', year: 'numeric',
+        hour: '2-digit', minute: '2-digit',
+    }).format(new Date(o.event_date));
+    return `${when} WIB · ${o.meeting_duration_min ?? 40} mnt`;
+}
+// Short topic label for a meeting row, cleaned of the internal "Online meeting —" prefix.
+function meetingTopic(o: Order): string {
+    const d = o.delivery_info?.trim();
+    if (!d || d === 'Online meeting') return 'Konsultasi online';
+    return d.replace(/^Online meeting\s*—\s*/i, '');
+}
+async function copyMeetingLink(url: string) {
+    try {
+        await navigator.clipboard.writeText(url);
+        toast.success('Link Zoom disalin');
+    } catch {
+        toast.error('Gagal menyalin link');
+    }
+}
+
 function bookingToCsvRow(o: Order): Record<string, string> {
     const items = Array.isArray(o.items) && o.items.length ? o.items.map((i) => i.name).join('; ') : '';
     return {
         pelanggan: o.customer_name ?? '',
         nomor_hp: o.customer_phone ?? '',
-        tipe: o.order_type === 'service' ? 'Jasa' : 'Produk',
+        tipe: isMeeting(o) ? 'Meeting' : o.order_type === 'service' ? 'Jasa' : 'Produk',
         jenis_acara: o.event_type ?? '',
         tanggal_acara: o.event_date ? formatEventDate(o.event_date) : '',
+        waktu_meeting: isMeeting(o) ? formatMeetingWhen(o) : '',
+        link_meeting: meetingJoinUrl(o) ?? '',
         lokasi: o.venue ?? '',
         jumlah_tamu: o.headcount != null ? String(o.headcount) : '',
         paket: items,
@@ -132,7 +184,47 @@ function TypeBadge({ type }: { type: Order['order_type'] }) {
     );
 }
 
-// Row actions: quick status cycle + detail / edit / delete.
+function MeetingBadge() {
+    return (
+        <Badge
+            variant="outline"
+            className="border-violet-500/30 bg-violet-500/15 text-violet-700 dark:text-violet-300"
+        >
+            Meeting
+        </Badge>
+    );
+}
+
+// Compact Zoom link cell: Join (opens) + copy. Shows a muted note when the link
+// hasn't been provisioned yet (still 'pending-link').
+function MeetingLinkCell({ order }: { order: Order }) {
+    const url = meetingJoinUrl(order);
+    if (!url) return <span className="text-xs text-muted-foreground">Link belum siap</span>;
+    return (
+        <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+            <a
+                href={url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-xs font-medium text-violet-600 hover:underline dark:text-violet-400"
+            >
+                <Video className="h-3.5 w-3.5" /> Join
+            </a>
+            <Button
+                variant="ghost"
+                size="icon-sm"
+                className="h-6 w-6"
+                title="Salin link"
+                onClick={() => copyMeetingLink(url)}
+            >
+                <Copy className="h-3 w-3" />
+            </Button>
+        </div>
+    );
+}
+
+// Row actions — meeting rows get Zoom/complete/cancel; event rows keep the
+// commercial edit + status-cycle + delete menu.
 function OrderActions({
     order,
     onSetStatus,
@@ -146,6 +238,8 @@ function OrderActions({
     onEdit: () => void;
     onDelete: () => void;
 }) {
+    const meeting = isMeeting(order);
+    const joinUrl = meetingJoinUrl(order);
     return (
         <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -163,23 +257,53 @@ function OrderActions({
                 <DropdownMenuItem onClick={onDetail}>
                     <Eye className="mr-2 h-3.5 w-3.5" /> Lihat detail
                 </DropdownMenuItem>
-                <DropdownMenuItem onClick={onEdit}>
-                    <Pencil className="mr-2 h-3.5 w-3.5" /> Edit
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuLabel className="text-xs text-muted-foreground">Ubah status</DropdownMenuLabel>
-                {STATUSES.map((s) => (
-                    <DropdownMenuItem key={s} onClick={() => onSetStatus(order.id, s)} className="capitalize">
-                        {s}
-                    </DropdownMenuItem>
-                ))}
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                    onClick={onDelete}
-                    className="text-destructive focus:text-destructive"
-                >
-                    <Trash2 className="mr-2 h-3.5 w-3.5" /> Hapus
-                </DropdownMenuItem>
+
+                {meeting ? (
+                    <>
+                        {joinUrl && (
+                            <>
+                                <DropdownMenuItem
+                                    onClick={() => window.open(joinUrl, '_blank', 'noopener,noreferrer')}
+                                >
+                                    <Video className="mr-2 h-3.5 w-3.5" /> Join Zoom
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => copyMeetingLink(joinUrl)}>
+                                    <Copy className="mr-2 h-3.5 w-3.5" /> Salin link
+                                </DropdownMenuItem>
+                            </>
+                        )}
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem onClick={() => onSetStatus(order.id, 'completed')}>
+                            <CheckCircle2 className="mr-2 h-3.5 w-3.5" /> Tandai selesai
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                            onClick={onDelete}
+                            className="text-destructive focus:text-destructive"
+                        >
+                            <Trash2 className="mr-2 h-3.5 w-3.5" /> Batalkan
+                        </DropdownMenuItem>
+                    </>
+                ) : (
+                    <>
+                        <DropdownMenuItem onClick={onEdit}>
+                            <Pencil className="mr-2 h-3.5 w-3.5" /> Edit
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuLabel className="text-xs text-muted-foreground">Ubah status</DropdownMenuLabel>
+                        {STATUSES.map((s) => (
+                            <DropdownMenuItem key={s} onClick={() => onSetStatus(order.id, s)} className="capitalize">
+                                {s}
+                            </DropdownMenuItem>
+                        ))}
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem
+                            onClick={onDelete}
+                            className="text-destructive focus:text-destructive"
+                        >
+                            <Trash2 className="mr-2 h-3.5 w-3.5" /> Hapus
+                        </DropdownMenuItem>
+                    </>
+                )}
             </DropdownMenuContent>
         </DropdownMenu>
     );
@@ -188,6 +312,7 @@ function OrderActions({
 export function OrderList() {
     const [orders, setOrders] = useState<Order[]>([]);
     const [loading, setLoading] = useState(true);
+    const [segment, setSegment] = useState<Segment>('all');
     const [addOpen, setAddOpen] = useState(false);
     const [editOrder, setEditOrder] = useState<Order | null>(null);
     const [deleteTarget, setDeleteTarget] = useState<Order | null>(null);
@@ -237,6 +362,13 @@ export function OrderList() {
             supabase.removeChannel(channel);
         };
     }, [fetchOrders, supabase]);
+
+    const meetingCount = orders.filter(isMeeting).length;
+    const eventCount = orders.length - meetingCount;
+    const filtered = orders.filter((o) =>
+        segment === 'all' ? true : segment === 'meeting' ? isMeeting(o) : !isMeeting(o)
+    );
+    const meetingView = segment === 'meeting';
 
     const detailOrder = detailId ? orders.find((o) => o.id === detailId) ?? null : null;
 
@@ -316,8 +448,8 @@ export function OrderList() {
                 variant="outline"
                 size="sm"
                 className="gap-1.5"
-                disabled={orders.length === 0}
-                onClick={() => downloadCsv(`bookings-${csvDateStamp()}.csv`, orders.map(bookingToCsvRow))}
+                disabled={filtered.length === 0}
+                onClick={() => downloadCsv(`bookings-${csvDateStamp()}.csv`, filtered.map(bookingToCsvRow))}
             >
                 <Download className="h-4 w-4" />
                 <span className="hidden sm:inline">Export</span>
@@ -326,6 +458,22 @@ export function OrderList() {
                 <Plus className="h-4 w-4" /> Buat Booking
             </Button>
         </div>
+    );
+
+    const segmentTabs = (
+        <Tabs value={segment} onValueChange={(v) => setSegment(v as Segment)}>
+            <TabsList>
+                <TabsTrigger value="all">
+                    Semua <span className="ml-1.5 tabular-nums opacity-60">{orders.length}</span>
+                </TabsTrigger>
+                <TabsTrigger value="event">
+                    Event <span className="ml-1.5 tabular-nums opacity-60">{eventCount}</span>
+                </TabsTrigger>
+                <TabsTrigger value="meeting">
+                    Meeting <span className="ml-1.5 tabular-nums opacity-60">{meetingCount}</span>
+                </TabsTrigger>
+            </TabsList>
+        </Tabs>
     );
 
     const dialogs = (
@@ -342,7 +490,84 @@ export function OrderList() {
             {/* Detail panel */}
             <Dialog open={!!detailId} onOpenChange={(o) => !o && setDetailId(null)}>
                 <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-[520px]">
-                    {detailOrder && (
+                    {detailOrder && isMeeting(detailOrder) ? (
+                        // ---- Meeting detail (no payment/commercial fields) ----
+                        <>
+                            <DialogHeader>
+                                <DialogTitle className="flex flex-wrap items-center gap-2">
+                                    <span>{detailOrder.customer_name}</span>
+                                    <Badge className={cn('capitalize', statusColor(detailOrder.status))}>
+                                        {detailOrder.status}
+                                    </Badge>
+                                    <MeetingBadge />
+                                </DialogTitle>
+                                {detailOrder.customer_phone && (
+                                    <DialogDescription>{detailOrder.customer_phone}</DialogDescription>
+                                )}
+                            </DialogHeader>
+
+                            <div className="grid gap-2 text-sm">
+                                <DetailRow label="Waktu" value={formatMeetingWhen(detailOrder)} />
+                                <DetailRow label="Topik" value={meetingTopic(detailOrder)} />
+                                <DetailRow label="Catatan" value={detailOrder.delivery_info} />
+                            </div>
+
+                            {/* Zoom link */}
+                            <div className="rounded-md border bg-muted/30 p-3 text-sm">
+                                {meetingJoinUrl(detailOrder) ? (
+                                    <div className="flex flex-wrap items-center justify-between gap-2">
+                                        <a
+                                            href={meetingJoinUrl(detailOrder)!}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="inline-flex items-center gap-1.5 font-medium text-violet-600 hover:underline dark:text-violet-400"
+                                        >
+                                            <Video className="h-4 w-4" /> Join Zoom Meeting
+                                        </a>
+                                        <Button
+                                            size="sm"
+                                            variant="outline"
+                                            onClick={() => copyMeetingLink(meetingJoinUrl(detailOrder)!)}
+                                        >
+                                            <Copy className="mr-1.5 h-3.5 w-3.5" /> Salin link
+                                        </Button>
+                                    </div>
+                                ) : (
+                                    <span className="text-muted-foreground">
+                                        Link Zoom belum tersedia (masih diproses / diisi manual oleh admin).
+                                    </span>
+                                )}
+                            </div>
+
+                            {/* Status */}
+                            <div className="flex items-center justify-between gap-3">
+                                <span className="text-sm text-muted-foreground">Status</span>
+                                <Select
+                                    value={detailOrder.status}
+                                    onValueChange={(v) => updateStatus(detailOrder.id, v)}
+                                >
+                                    <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
+                                    <SelectContent>
+                                        {MEETING_STATUS_OPTIONS.map((opt) => (
+                                            <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            </div>
+
+                            <DialogFooter className="gap-2 sm:gap-2">
+                                <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="mr-auto text-destructive hover:bg-destructive/10 hover:text-destructive"
+                                    onClick={() => { const o = detailOrder; setDetailId(null); setDeleteTarget(o); }}
+                                >
+                                    <Trash2 className="mr-2 h-4 w-4" /> Batalkan
+                                </Button>
+                            </DialogFooter>
+                        </>
+                    ) : detailOrder ? (
+                        // ---- Event booking detail (payment tracking) ----
                         <>
                             <DialogHeader>
                                 <DialogTitle className="flex flex-wrap items-center gap-2">
@@ -458,7 +683,7 @@ export function OrderList() {
                                 </Button>
                             </DialogFooter>
                         </>
-                    )}
+                    ) : null}
                 </DialogContent>
             </Dialog>
 
@@ -466,13 +691,24 @@ export function OrderList() {
             <Dialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>
                 <DialogContent>
                     <DialogHeader>
-                        <DialogTitle>Hapus booking?</DialogTitle>
+                        <DialogTitle>
+                            {deleteTarget && isMeeting(deleteTarget) ? 'Batalkan meeting?' : 'Hapus booking?'}
+                        </DialogTitle>
                         <DialogDescription>
-                            Booking{' '}
-                            <span className="font-medium text-foreground">
-                                {deleteTarget?.customer_name}
-                            </span>{' '}
-                            akan dihapus permanen. Tindakan ini tidak bisa dibatalkan.
+                            {deleteTarget && isMeeting(deleteTarget) ? (
+                                <>
+                                    Meeting{' '}
+                                    <span className="font-medium text-foreground">{deleteTarget?.customer_name}</span>{' '}
+                                    akan dibatalkan & dihapus dari kalender, dan slot-nya kembali kosong. Tindakan ini
+                                    tidak bisa dibatalkan.
+                                </>
+                            ) : (
+                                <>
+                                    Booking{' '}
+                                    <span className="font-medium text-foreground">{deleteTarget?.customer_name}</span>{' '}
+                                    akan dihapus permanen. Tindakan ini tidak bisa dibatalkan.
+                                </>
+                            )}
                         </DialogDescription>
                     </DialogHeader>
                     <DialogFooter>
@@ -480,7 +716,7 @@ export function OrderList() {
                             Batal
                         </Button>
                         <Button variant="destructive" onClick={handleDelete} disabled={busy}>
-                            {busy ? 'Menghapus…' : 'Hapus'}
+                            {busy ? 'Memproses…' : deleteTarget && isMeeting(deleteTarget) ? 'Batalkan meeting' : 'Hapus'}
                         </Button>
                     </DialogFooter>
                 </DialogContent>
@@ -527,11 +763,20 @@ export function OrderList() {
 
     return (
         <div className="space-y-3">
-            {toolbar}
+            <div className="flex flex-wrap items-center justify-between gap-2">
+                {segmentTabs}
+                {toolbar}
+            </div>
 
             {orders.length === 0 ? (
                 <div className="rounded-md border p-8 text-center text-sm text-muted-foreground">
                     Belum ada booking. Klik <span className="font-medium">Buat Booking</span> untuk menambah.
+                </div>
+            ) : filtered.length === 0 ? (
+                <div className="rounded-md border p-8 text-center text-sm text-muted-foreground">
+                    {meetingView
+                        ? 'Belum ada meeting online. Meeting yang dijadwalkan lewat WhatsApp akan muncul di sini.'
+                        : 'Belum ada booking event.'}
                 </div>
             ) : (
                 <>
@@ -540,38 +785,89 @@ export function OrderList() {
                         <Table>
                             <TableHeader>
                                 <TableRow>
-                                    <TableHead>Tanggal</TableHead>
+                                    <TableHead>{meetingView ? 'Waktu (WIB)' : 'Tanggal'}</TableHead>
                                     <TableHead>Pelanggan</TableHead>
                                     <TableHead>Tipe</TableHead>
-                                    <TableHead>Items</TableHead>
-                                    <TableHead>Total</TableHead>
+                                    <TableHead>{meetingView ? 'Topik' : 'Items'}</TableHead>
+                                    <TableHead>
+                                        {meetingView ? 'Link Zoom' : segment === 'all' ? 'Total / Link' : 'Total'}
+                                    </TableHead>
                                     <TableHead>Status</TableHead>
                                     <TableHead className="text-right">Aksi</TableHead>
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
-                                {orders.map((order) => (
-                                    <TableRow
-                                        key={order.id}
-                                        className="cursor-pointer"
-                                        onClick={() => setDetailId(order.id)}
-                                    >
-                                        <TableCell>{formatOrderDate(order.created_at)}</TableCell>
-                                        <TableCell>
-                                            <div className="font-medium">{order.customer_name}</div>
-                                            <div className="text-xs text-muted-foreground">{order.customer_phone}</div>
-                                        </TableCell>
-                                        <TableCell><TypeBadge type={order.order_type} /></TableCell>
-                                        <TableCell className="max-w-[220px] truncate" title={itemsText(order)}>
-                                            {itemsText(order)}
-                                        </TableCell>
-                                        <TableCell>{formatRupiah(order.total_amount)}</TableCell>
-                                        <TableCell>
+                                {filtered.map((order) => {
+                                    const meeting = isMeeting(order);
+                                    return (
+                                        <TableRow
+                                            key={order.id}
+                                            className="cursor-pointer"
+                                            onClick={() => setDetailId(order.id)}
+                                        >
+                                            <TableCell className="whitespace-nowrap">
+                                                {meeting ? formatMeetingWhen(order) : formatOrderDate(order.created_at)}
+                                            </TableCell>
+                                            <TableCell>
+                                                <div className="font-medium">{order.customer_name}</div>
+                                                <div className="text-xs text-muted-foreground">{order.customer_phone}</div>
+                                            </TableCell>
+                                            <TableCell>
+                                                {meeting ? <MeetingBadge /> : <TypeBadge type={order.order_type} />}
+                                            </TableCell>
+                                            <TableCell
+                                                className="max-w-[220px] truncate"
+                                                title={meeting ? meetingTopic(order) : itemsText(order)}
+                                            >
+                                                {meeting ? meetingTopic(order) : itemsText(order)}
+                                            </TableCell>
+                                            <TableCell>
+                                                {meeting ? (
+                                                    <MeetingLinkCell order={order} />
+                                                ) : (
+                                                    formatRupiah(order.total_amount)
+                                                )}
+                                            </TableCell>
+                                            <TableCell>
+                                                <Badge className={cn('capitalize', statusColor(order.status))}>
+                                                    {order.status}
+                                                </Badge>
+                                            </TableCell>
+                                            <TableCell className="text-right">
+                                                <OrderActions
+                                                    order={order}
+                                                    onSetStatus={updateStatus}
+                                                    onDetail={() => setDetailId(order.id)}
+                                                    onEdit={() => setEditOrder(order)}
+                                                    onDelete={() => setDeleteTarget(order)}
+                                                />
+                                            </TableCell>
+                                        </TableRow>
+                                    );
+                                })}
+                            </TableBody>
+                        </Table>
+                    </div>
+
+                    {/* Mobile: stacked cards */}
+                    <div className="space-y-3 md:hidden">
+                        {filtered.map((order) => {
+                            const meeting = isMeeting(order);
+                            return (
+                                <div
+                                    key={order.id}
+                                    className="cursor-pointer rounded-lg border bg-card p-4 shadow-sm"
+                                    onClick={() => setDetailId(order.id)}
+                                >
+                                    <div className="flex items-start justify-between gap-2">
+                                        <div className="min-w-0">
+                                            <div className="truncate font-medium">{order.customer_name}</div>
+                                            <div className="truncate text-xs text-muted-foreground">{order.customer_phone}</div>
+                                        </div>
+                                        <div className="flex shrink-0 items-center gap-1">
                                             <Badge className={cn('capitalize', statusColor(order.status))}>
                                                 {order.status}
                                             </Badge>
-                                        </TableCell>
-                                        <TableCell className="text-right">
                                             <OrderActions
                                                 order={order}
                                                 onSetStatus={updateStatus}
@@ -579,53 +875,32 @@ export function OrderList() {
                                                 onEdit={() => setEditOrder(order)}
                                                 onDelete={() => setDeleteTarget(order)}
                                             />
-                                        </TableCell>
-                                    </TableRow>
-                                ))}
-                            </TableBody>
-                        </Table>
-                    </div>
-
-                    {/* Mobile: stacked cards */}
-                    <div className="space-y-3 md:hidden">
-                        {orders.map((order) => (
-                            <div
-                                key={order.id}
-                                className="cursor-pointer rounded-lg border bg-card p-4 shadow-sm"
-                                onClick={() => setDetailId(order.id)}
-                            >
-                                <div className="flex items-start justify-between gap-2">
-                                    <div className="min-w-0">
-                                        <div className="truncate font-medium">{order.customer_name}</div>
-                                        <div className="truncate text-xs text-muted-foreground">{order.customer_phone}</div>
+                                        </div>
                                     </div>
-                                    <div className="flex shrink-0 items-center gap-1">
-                                        <Badge className={cn('capitalize', statusColor(order.status))}>
-                                            {order.status}
-                                        </Badge>
-                                        <OrderActions
-                                            order={order}
-                                            onSetStatus={updateStatus}
-                                            onDetail={() => setDetailId(order.id)}
-                                            onEdit={() => setEditOrder(order)}
-                                            onDelete={() => setDeleteTarget(order)}
-                                        />
+                                    <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                                        <span>{meeting ? formatMeetingWhen(order) : formatOrderDate(order.created_at)}</span>
+                                        {meeting ? <MeetingBadge /> : <TypeBadge type={order.order_type} />}
+                                    </div>
+                                    <p className="mt-2 text-sm">
+                                        <span className="text-muted-foreground">{meeting ? 'Topik: ' : 'Items: '}</span>
+                                        {meeting ? meetingTopic(order) : itemsText(order)}
+                                    </p>
+                                    <div className="mt-3 flex items-center justify-between border-t pt-2">
+                                        {meeting ? (
+                                            <>
+                                                <span className="text-xs text-muted-foreground">Zoom</span>
+                                                <MeetingLinkCell order={order} />
+                                            </>
+                                        ) : (
+                                            <>
+                                                <span className="text-xs text-muted-foreground">Total</span>
+                                                <span className="font-semibold">{formatRupiah(order.total_amount)}</span>
+                                            </>
+                                        )}
                                     </div>
                                 </div>
-                                <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                                    <span>{formatOrderDate(order.created_at)}</span>
-                                    <TypeBadge type={order.order_type} />
-                                </div>
-                                <p className="mt-2 text-sm">
-                                    <span className="text-muted-foreground">Items: </span>
-                                    {itemsText(order)}
-                                </p>
-                                <div className="mt-3 flex items-center justify-between border-t pt-2">
-                                    <span className="text-xs text-muted-foreground">Total</span>
-                                    <span className="font-semibold">{formatRupiah(order.total_amount)}</span>
-                                </div>
-                            </div>
-                        ))}
+                            );
+                        })}
                     </div>
                 </>
             )}
