@@ -6,7 +6,7 @@ export default function OrdersPage() {
             <div>
                 <h3 className="text-lg font-medium">Bookings</h3>
                 <p className="text-sm text-muted-foreground">
-                    Lihat dan kelola booking event dari klien.
+                    Lihat dan kelola booking event & meeting online (Zoom) dari klien.
                 </p>
             </div>
             <OrderList />
