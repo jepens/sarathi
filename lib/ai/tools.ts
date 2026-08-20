@@ -716,20 +716,33 @@ export async function scheduleMeeting(
         let joinUrl: string | null = priorLink;
         let meetingPassword: string | null = null;
         let justCreatedLink = false;
-        if (!joinUrl && getZoomConfig()) {
-            try {
-                const zoom = await createZoomMeeting({
-                    topic: title,
-                    start: meetingDate,
-                    durationMin,
-                    timezone: 'Asia/Jakarta',
-                    agenda: notes,
-                });
-                joinUrl = zoom.joinUrl;
-                meetingPassword = zoom.password;
-                justCreatedLink = true;
-            } catch (zoomErr) {
-                console.error('Zoom meeting creation failed, keeping pending-link:', zoomErr);
+        // Why the link is still pending, if it is — surfaced in the result and
+        // persisted so a silent 'pending-link' can be diagnosed without reading
+        // container logs. null once a real link exists (fresh or self-healed).
+        let zoomError: string | null = null;
+        if (!joinUrl) {
+            if (getZoomConfig()) {
+                try {
+                    const zoom = await createZoomMeeting({
+                        topic: title,
+                        start: meetingDate,
+                        durationMin,
+                        timezone: 'Asia/Jakarta',
+                        agenda: notes,
+                    });
+                    joinUrl = zoom.joinUrl;
+                    meetingPassword = zoom.password;
+                    justCreatedLink = true;
+                } catch (zoomErr) {
+                    zoomError = zoomErr instanceof Error ? zoomErr.message : String(zoomErr);
+                    console.error('Zoom meeting creation failed, keeping pending-link:', zoomError);
+                }
+            } else {
+                // getZoomConfig() null = a ZOOM_* env var is unset. This path is
+                // otherwise fully silent (no throw, no log), which is exactly why
+                // a mis-wired env goes unnoticed — so log it explicitly.
+                zoomError = 'Zoom not configured (ZOOM_* env vars missing) — booking kept as pending-link.';
+                console.warn(`schedule_meeting: ${zoomError} org=${orgId}`);
             }
         }
 
@@ -737,11 +750,17 @@ export async function scheduleMeeting(
         // already persisted by the reserve RPC at insert time, so there's nothing
         // else to update on the pending-link fallback.
         if (justCreatedLink && joinUrl) {
-            await supabase
+            const { error: linkErr } = await supabase
                 .from('orders')
                 .update({ meeting_link: joinUrl })
                 .eq('id', meetingId)
                 .eq('org_id', orgId);
+            // A Zoom room was created (and about to be emailed) — if persisting
+            // it fails, don't let it silently revert to 'pending-link'.
+            if (linkErr) {
+                zoomError = `Zoom link created but failed to save: ${linkErr.message}`;
+                console.error('Failed to persist Zoom link:', linkErr);
+            }
         }
 
         // Email the invite (+ .ics) ONLY when we just created the link this run,
@@ -778,7 +797,9 @@ export async function scheduleMeeting(
         const stamp = new Date().toISOString();
         const chatPatch: Record<string, unknown> = { lead_stage: 'scheduled', updated_at: stamp };
         if (!alreadyBooked) {
-            const line = `[${stamp}] meeting booked for ${meetingDate.toISOString()} (${title})${notes ? ` — ${notes}` : ''}`;
+            // Record WHY the link is pending on the audit line so it's queryable.
+            const pendingSuffix = !joinUrl ? ` — LINK PENDING: ${zoomError ?? 'no link'}` : '';
+            const line = `[${stamp}] meeting booked for ${meetingDate.toISOString()} (${title})${notes ? ` — ${notes}` : ''}${pendingSuffix}`;
             chatPatch.notes = chat?.notes ? `${chat.notes}\n${line}` : line;
         }
         await supabase
@@ -794,6 +815,7 @@ export async function scheduleMeeting(
             title,
             join_url: joinUrl,
             link_status: joinUrl ? 'created' : 'pending',
+            zoom_error: zoomError,
             customer_emailed: customerEmailed,
             sales_notified: salesNotified,
             already_booked: alreadyBooked,
