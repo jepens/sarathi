@@ -13,6 +13,7 @@ import {
 } from '@/lib/meetings/rules';
 import { getZoomConfig, createZoomMeeting } from '@/lib/zoom/client';
 import { sendMeetingInvite } from '@/lib/meetings/notify';
+import { notifySalesWhatsApp } from '@/lib/meetings/notify-whatsapp';
 
 // Lead pipeline stages — kept in sync with the CHECK constraint on
 // whatsapp_chats.lead_stage (see migration 0002_eo_pivot_schema.sql).
@@ -792,6 +793,29 @@ export async function scheduleMeeting(
             }
         }
 
+        // Notify the sales team on WhatsApp for every NEW booking (not idempotent
+        // repeats), regardless of whether the Zoom link is ready yet — the
+        // template fills "menyusul" when it's still pending. Sent as an approved
+        // Meta template so it works outside the 24h window. Non-fatal, env-gated.
+        let salesWaNotified = false;
+        if (!alreadyBooked) {
+            try {
+                const wa = await notifySalesWhatsApp({
+                    customerName,
+                    company: chat?.company,
+                    eventInterest: chat?.event_interest,
+                    start: meetingDate,
+                    joinUrl,
+                });
+                salesWaNotified = wa.sent;
+                if (!wa.sent && wa.skippedReason) {
+                    console.warn('Sales WA notify skipped:', wa.skippedReason);
+                }
+            } catch (waErr) {
+                console.error('Sales WA notify failed:', waErr);
+            }
+        }
+
         // Ensure the lead is 'scheduled' (idempotent — safe to repeat on a retry)
         // and add an audit line only for a fresh booking, not on every repeat.
         const stamp = new Date().toISOString();
@@ -818,6 +842,7 @@ export async function scheduleMeeting(
             zoom_error: zoomError,
             customer_emailed: customerEmailed,
             sales_notified: salesNotified,
+            sales_wa_notified: salesWaNotified,
             already_booked: alreadyBooked,
             stage: 'scheduled',
         });
