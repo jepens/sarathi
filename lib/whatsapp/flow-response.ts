@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { sendWhatsAppMessage } from '@/lib/whatsapp/client';
+import { resolveSendTarget } from '@/lib/whatsapp/recipient';
 import { logSystemMessage } from '@/lib/whatsapp/history';
 import { whatsappLogger } from '@/lib/utils/logger';
 import { saveLeadInfo, updateLeadStage } from '@/lib/ai/tools';
@@ -72,8 +73,6 @@ export interface HandleFlowReplyParams {
     accessToken: string;
     /** Canonical CRM key (phone_number PK in whatsapp_chats). */
     contactKey: string;
-    /** Raw `messages[0].from` — the id Meta accepts as `to` for replies. */
-    replyTo: string;
     bsuid: string | null;
     waId: string | null;
     inboundWamid: string | null;
@@ -177,7 +176,7 @@ function confirmationMessage(b: BriefAcara): string {
 export async function handleFlowReply(params: HandleFlowReplyParams): Promise<void> {
     const {
         supabase, orgId, phoneNumberId, accessToken,
-        contactKey, replyTo, bsuid, waId, inboundWamid, nfmReply,
+        contactKey, bsuid, waId, inboundWamid, nfmReply,
     } = params;
 
     try {
@@ -300,7 +299,10 @@ export async function handleFlowReply(params: HandleFlowReplyParams): Promise<vo
         //       naturally on the customer's next free-text message).
         try {
             const confirmText = confirmationMessage(brief);
-            const sendResult = await sendWhatsAppMessage(replyTo, confirmText, { phoneNumberId, accessToken });
+            // Send to the resolved target (recovered phone if known, else the
+            // key/BSUID), not the raw inbound `from`.
+            const target = await resolveSendTarget(supabase, orgId, contactKey);
+            const sendResult = await sendWhatsAppMessage(target, confirmText, { phoneNumberId, accessToken });
             const { error: outError } = await supabase
                 .from('whatsapp_messages')
                 .insert({

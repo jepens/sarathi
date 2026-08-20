@@ -101,6 +101,17 @@ export function isSyntheticPhone(phone: string | null | undefined): boolean {
     return !!phone && phone.startsWith('manual:');
 }
 
+/**
+ * True when a value is a REAL dialable phone: bare international digits, 8–15
+ * long (E.164 without the +). A synthetic `manual:<uuid>` identity OR a WhatsApp
+ * Business-Scoped User ID (BSUID, e.g. "ID.26557548613939612" / "US.1349…")
+ * fails this. Use it to decide whether an identifier may go in Meta's `to` field
+ * (a BSUID must go in `recipient` instead) or be shown/dialed as a phone.
+ */
+export function isDialablePhone(value: string | null | undefined): value is string {
+    return typeof value === 'string' && /^[0-9]{8,15}$/.test(value);
+}
+
 // --- Field cleaners (shared by form + CSV) -----------------------------------
 // CSV cells arrive as strings (we parse without dynamicTyping to preserve
 // leading zeros on phones); form fields are strings too. These turn blank

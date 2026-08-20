@@ -1,5 +1,6 @@
 import { createClient } from '@/lib/supabase/server';
 import { sendWhatsAppMessage } from './client';
+import { resolveSendTarget } from './recipient';
 import { getWhatsAppSendCreds } from './credentials';
 import { generateRAGResponse } from '@/lib/ai/rag';
 import { whatsappLogger } from '@/lib/utils/logger';
@@ -229,8 +230,13 @@ async function processConversation(jobs: QueueJob[], supabase: SupabaseClient): 
         // Generate ONE AI response for the whole burst, scoped to the org.
         const aiResponse = await generateRAGResponse(combinedMessage, history, phoneNumber, { orgId });
 
+        // Resolve who to SEND to: a recovered real phone (verified_phone) when we
+        // have one, else the CRM key itself (a phone, or a BSUID the send layer
+        // routes via `recipient`). phoneNumber stays the CRM key for all writes.
+        const sendTarget = await resolveSendTarget(supabase, orgId, phoneNumber);
+
         // Send the reply with the org's credentials.
-        const sendResult = await sendWhatsAppMessage(phoneNumber, aiResponse.message, creds);
+        const sendResult = await sendWhatsAppMessage(sendTarget, aiResponse.message, creds);
 
         // Mark the jobs done IMMEDIATELY after a successful send, BEFORE the
         // history writes — and guard it in its OWN try/catch. The reply is
@@ -293,7 +299,8 @@ async function processConversation(jobs: QueueJob[], supabase: SupabaseClient): 
 
             // Send a single fallback message for the whole conversation.
             try {
-                await sendWhatsAppMessage(phoneNumber, 'Maaf, terjadi kesalahan saat memproses pesan Anda.', creds);
+                const fallbackTarget = await resolveSendTarget(supabase, orgId, phoneNumber);
+                await sendWhatsAppMessage(fallbackTarget, 'Maaf, terjadi kesalahan saat memproses pesan Anda.', creds);
             } catch (fallbackError) {
                 whatsappLogger.error('Failed to send fallback message', fallbackError);
             }
