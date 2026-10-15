@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
     filterSubscriptionsToMembers,
+    isUndefinedColumn,
     parsePushSubscriptionBody,
 } from '@/lib/notifications/push-targets';
 import { settleWithin } from '@/lib/notifications/push';
@@ -79,5 +80,17 @@ describe('settleWithin (logout push cleanup must never block)', () => {
         } finally {
             vi.useRealTimers();
         }
+    });
+});
+
+describe('isUndefinedColumn', () => {
+    // Drives the rollout-window fallback in sendPushToOrg (code shipped before
+    // migration 0058 adds push_subscriptions.user_id).
+    it('matches Postgres undefined_column only', () => {
+        expect(isUndefinedColumn({ code: '42703' })).toBe(true);
+        expect(isUndefinedColumn({ code: '42501' })).toBe(false);
+        expect(isUndefinedColumn({ code: null })).toBe(false);
+        expect(isUndefinedColumn(null)).toBe(false);
+        expect(isUndefinedColumn(undefined)).toBe(false);
     });
 });

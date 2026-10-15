@@ -21,6 +21,14 @@ export function filterSubscriptionsToMembers<T extends { user_id: string }>(
     return subs.filter((s) => members.has(s.user_id));
 }
 
+/**
+ * True for Postgres "undefined_column" (42703) — e.g. selecting
+ * push_subscriptions.user_id while migration 0058 is not applied yet.
+ */
+export function isUndefinedColumn(error: { code?: string | null } | null | undefined): boolean {
+    return error?.code === '42703';
+}
+
 /** Max lengths we accept from the browser — generous vs. real-world values. */
 const MAX_ENDPOINT_LEN = 2048;
 const MAX_KEY_LEN = 256;

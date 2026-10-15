@@ -4,8 +4,11 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { whatsappLogger } from '@/lib/utils/logger';
 import {
     filterSubscriptionsToMembers,
+    isUndefinedColumn,
     type OwnedSubscriptionRow,
 } from '@/lib/notifications/push-targets';
+
+type SubscriptionKeys = Pick<OwnedSubscriptionRow, 'endpoint' | 'p256dh' | 'auth'>;
 
 // Server-side Web Push fan-out (Tier 2 notifications).
 //
@@ -84,27 +87,45 @@ export async function sendPushToOrg(
         .select('endpoint, p256dh, auth, user_id')
         .eq('org_id', orgId);
 
-    if (error) {
+    let subs: SubscriptionKeys[];
+    if (error && isUndefinedColumn(error)) {
+        // Rollout window only: this code is live but migration 0058 (which adds
+        // push_subscriptions.user_id) is not applied yet. Keep the pre-0058
+        // behaviour — every row of the org — so the default org doesn't lose
+        // push notifications meanwhile. Dead code once 0058 is applied; remove
+        // it in Fase 1.
+        whatsappLogger.warn('Web push: push_subscriptions.user_id missing (0058 not applied) — legacy fan-out');
+        const legacy = await supabase
+            .from('push_subscriptions')
+            .select('endpoint, p256dh, auth')
+            .eq('org_id', orgId);
+        if (legacy.error) {
+            whatsappLogger.error('Web push: failed to load subscriptions', legacy.error);
+            return;
+        }
+        subs = (legacy.data ?? []) as SubscriptionKeys[];
+    } else if (error) {
         whatsappLogger.error('Web push: failed to load subscriptions', error);
         return;
-    }
-    const rows = (data ?? []) as OwnedSubscriptionRow[];
-    if (rows.length === 0) return;
+    } else {
+        const rows = (data ?? []) as OwnedSubscriptionRow[];
+        if (rows.length === 0) return;
 
-    // Only devices owned by CURRENT members of the org receive its message
-    // previews. Fail closed: if membership can't be read, send nothing.
-    const { data: members, error: membersErr } = await supabase
-        .from('organization_members')
-        .select('user_id')
-        .eq('org_id', orgId);
-    if (membersErr) {
-        whatsappLogger.error('Web push: failed to load org members', membersErr);
-        return;
+        // Only devices owned by CURRENT members of the org receive its message
+        // previews. Fail closed: if membership can't be read, send nothing.
+        const { data: members, error: membersErr } = await supabase
+            .from('organization_members')
+            .select('user_id')
+            .eq('org_id', orgId);
+        if (membersErr) {
+            whatsappLogger.error('Web push: failed to load org members', membersErr);
+            return;
+        }
+        subs = filterSubscriptionsToMembers(
+            rows,
+            (members ?? []).map((m) => m.user_id as string),
+        );
     }
-    const subs = filterSubscriptionsToMembers(
-        rows,
-        (members ?? []).map((m) => m.user_id as string),
-    );
     if (subs.length === 0) return;
 
     // Keep the payload small (push services cap at ~4KB) and safe to render.

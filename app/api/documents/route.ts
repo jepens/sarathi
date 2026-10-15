@@ -95,11 +95,17 @@ export async function DELETE(request: Request) {
         const { searchParams } = new URL(request.url);
         const fileName = searchParams.get('fileName');
 
-        // Plain value only — it's compared with .eq() below, never spliced into
-        // a PostgREST filter string, but bound its size and refuse control chars.
-        if (!fileName || fileName.length > 512 || /[\u0000-\u001f\u007f]/.test(fileName)) {
+        if (!fileName) {
             return NextResponse.json(
                 { error: 'fileName parameter is required' },
+                { status: 400 }
+            );
+        }
+        // Plain value only — it's compared with .eq() below, never spliced into
+        // a PostgREST filter string, but bound its size and refuse control chars.
+        if (fileName.length > 512 || /[\u0000-\u001f\u007f]/.test(fileName)) {
+            return NextResponse.json(
+                { error: 'fileName tidak valid' },
                 { status: 400 }
             );
         }

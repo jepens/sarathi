@@ -6,7 +6,9 @@
 -- org can do:
 --
 --   a. labels / chat_labels / quick_replies: replace the USING(true) policies
---      with the standard private.is_org_member(org_id) policy (KEA-3).
+--      with the standard private.is_org_member(org_id) policy (KEA-3). For
+--      chat_labels the WITH CHECK also requires the label to belong to the same
+--      org (the label_id FK check ignores RLS, so it can't enforce that).
 --   b. push_subscriptions: add an owning user_id and scope rows to
 --      "my own device, in an org I belong to" (KEA-3, KEA-23).
 --   c. storage: chat-media + proposals objects are only reachable by members of
@@ -45,8 +47,10 @@
 --
 -- Re-runnable: policies are dropped-if-exists before being (re)created, column
 -- and index creation are guarded, and grants/revokes are idempotent.
-
-begin;
+--
+-- No explicit begin/commit, like every other migration: the Supabase CLI /
+-- apply_migration already wrap each file in one transaction, and an inner
+-- COMMIT would end it early (before the runner's own bookkeeping).
 
 -- ---------------------------------------------------------------------------
 -- a. labels, chat_labels, quick_replies → org members only
@@ -54,7 +58,7 @@ begin;
 do $$
 declare t text;
 begin
-    foreach t in array array['labels', 'chat_labels', 'quick_replies']
+    foreach t in array array['labels', 'quick_replies']
     loop
         execute format('drop policy if exists "auth full access" on public.%I', t);
         execute format('drop policy if exists "org members full access" on public.%I', t);
@@ -64,6 +68,26 @@ begin
         );
     end loop;
 end $$;
+
+-- chat_labels: same membership rule, plus the attached label must be one of the
+-- SAME org's labels — otherwise a member of org B could attach org A's label
+-- uuid to an org-B chat (the FK to labels(id) is checked without RLS). The
+-- subquery runs under the caller's labels RLS, which is the same membership
+-- rule. A composite FK (org_id, label_id) → labels(org_id, id) is the Fase 1
+-- structural fix.
+drop policy if exists "auth full access" on public.chat_labels;
+drop policy if exists "org members full access" on public.chat_labels;
+create policy "org members full access" on public.chat_labels
+    for all to authenticated
+    using (private.is_org_member(org_id))
+    with check (
+        private.is_org_member(org_id)
+        and exists (
+            select 1 from public.labels l
+            where l.id = chat_labels.label_id
+              and l.org_id = chat_labels.org_id
+        )
+    );
 
 -- ---------------------------------------------------------------------------
 -- b. push_subscriptions → owned by a user, scoped to that user's orgs
@@ -169,5 +193,3 @@ revoke execute on function public.match_products(extensions.vector, double preci
     from public, anon;
 grant execute on function public.match_products(extensions.vector, double precision, integer, uuid)
     to authenticated, service_role;
-
-commit;

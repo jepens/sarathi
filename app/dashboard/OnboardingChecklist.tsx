@@ -33,8 +33,12 @@ const STEP_DEFS = [
         key: 'whatsapp',
         title: 'Hubungkan WhatsApp',
         desc: 'Masukkan kredensial Meta (Phone Number ID, Access Token, App Secret) di Settings → WhatsApp.',
+        // Orgs other than the default one: the Sarathi team connects the
+        // number (WhatsApp is managed by the team), so don't ask for creds.
+        managedDesc: 'Nomor WhatsApp organisasi Anda dihubungkan oleh tim Sarathi. Hubungi tim Sarathi bila belum aktif.',
         href: '/dashboard/settings',
         cta: 'Atur kredensial',
+        managedCta: 'Lihat status',
     },
     {
         key: 'knowledge',
@@ -92,6 +96,11 @@ export function OnboardingChecklist() {
             <CardContent className="space-y-3">
                 {STEP_DEFS.map((s) => {
                     const done = steps[s.key];
+                    // webhookVisible === false ⇔ not the default org (see
+                    // /api/onboarding/status) — WhatsApp is set up by the team.
+                    const managed = status.webhookVisible === false && 'managedDesc' in s;
+                    const desc = managed ? s.managedDesc : s.desc;
+                    const cta = managed ? s.managedCta : s.cta;
                     return (
                         <div
                             key={s.key}
@@ -108,12 +117,12 @@ export function OnboardingChecklist() {
                                 >
                                     {s.title}
                                 </p>
-                                <p className="text-xs text-muted-foreground">{s.desc}</p>
+                                <p className="text-xs text-muted-foreground">{desc}</p>
                             </div>
                             {!done && (
                                 <Link href={s.href} className="shrink-0">
                                     <Button size="sm" variant="outline">
-                                        {s.cta} <ArrowRight className="h-3 w-3" />
+                                        {cta} <ArrowRight className="h-3 w-3" />
                                     </Button>
                                 </Link>
                             )}
