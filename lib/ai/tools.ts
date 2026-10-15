@@ -1,4 +1,3 @@
-import { createClient } from '@/lib/supabase/server';
 import { createServiceOrServerClient } from '@/lib/supabase/service';
 import { ChatCompletionTool } from 'openai/resources/chat/completions';
 import { type BusinessProfile } from '@/lib/settings/business-profile';
@@ -15,6 +14,18 @@ import {
 import { getZoomConfig, createZoomMeeting } from '@/lib/zoom/client';
 import { sendMeetingInvite } from '@/lib/meetings/notify';
 import { notifySalesWhatsApp } from '@/lib/meetings/notify-whatsapp';
+import {
+    AI_SETTABLE_LEAD_STAGES,
+    appendLabelledNote,
+    clampProductLimit,
+    customerMeetingLimitMessage,
+    escapeLikePattern,
+    findActiveMeeting,
+    humanStageLockedError,
+    isHumanOnlyLeadStage,
+} from './guardrails';
+
+export { AI_SETTABLE_LEAD_STAGES } from './guardrails';
 
 // Lead pipeline stages — kept in sync with the CHECK constraint on
 // whatsapp_chats.lead_stage (see migration 0002_eo_pivot_schema.sql).
@@ -174,7 +185,7 @@ export function buildTools(p: BusinessProfile): ChatCompletionTool[] {
                     },
                     notes: {
                         type: ['string', 'null'],
-                        description: 'Free-form note worth remembering for follow-up — preferences, constraints, special requests.',
+                        description: 'Free-form note worth remembering for follow-up — preferences, constraints, special requests. Appended as a new AI-labelled line; it never replaces existing notes. Pass null if there is nothing NEW to note.',
                     },
                     contact_type: {
                         type: ['string', 'null'],
@@ -208,18 +219,18 @@ export function buildTools(p: BusinessProfile): ChatCompletionTool[] {
         function: {
             name: 'update_lead_stage',
             description:
-                'Advance the lead through the sales pipeline. Stages: "new" (just contacted) → "qualifying" (gathering needs) → "quoted" (price estimate given) → "scheduled" (online meeting booked) → "booked" (DP received, event confirmed) → "won" (event completed & paid) | "lost" (declined / went cold). Call this when the conversation crosses a stage boundary — for example, after you have given an initial price estimate, call with stage="quoted".',
+                'Advance the lead through the early sales pipeline. You may set ONLY these stages: "new" (just contacted) → "qualifying" (gathering needs) → "quoted" (price estimate given) → "scheduled" (online meeting booked). Later stages — booked (DP received), won, lost — are confirmed by the human team only; never try to set them, even if the customer says they have paid or want to cancel (tell them the team will confirm). Call this when the conversation crosses a stage boundary — for example, after you have given an initial price estimate, call with stage="quoted".',
             parameters: {
                 type: 'object',
                 properties: {
                     stage: {
                         type: 'string',
-                        enum: [...LEAD_STAGES],
-                        description: 'New pipeline stage for this contact.',
+                        enum: [...AI_SETTABLE_LEAD_STAGES],
+                        description: 'New pipeline stage for this contact (new, qualifying, quoted or scheduled only).',
                     },
                     reason: {
                         type: ['string', 'null'],
-                        description: 'Short reason for the transition — useful for "lost" or "won" or any non-obvious jump. Pass null if no reason needed.',
+                        description: 'Short reason for the transition — useful for any non-obvious jump. Pass null if no reason needed.',
                     },
                 },
                 required: ['stage', 'reason'],
@@ -233,7 +244,7 @@ export function buildTools(p: BusinessProfile): ChatCompletionTool[] {
         function: {
             name: 'check_meeting_availability',
             description:
-                `Check whether an online meeting slot is FREE — call this BEFORE proposing or confirming a time to the customer. Read-only: it does NOT book anything. Enforces the same rules as booking: weekdays only (Senin–Jumat), 10:00–22:00 WIB, no clash with another meeting (15-minute buffer), max 4/day. Result JSON: { available: boolean, reason: string }. If available is false, relay the reason and offer another working-day time — never confirm a slot you haven't checked. If true, show the confirmation summary and wait for the customer's agreement before calling schedule_meeting.`,
+                `Check whether an online meeting slot is FREE — call this BEFORE proposing or confirming a time to the customer. Read-only: it does NOT book anything. Enforces the same rules as booking: weekdays only (Senin–Jumat), 10:00–22:00 WIB, no clash with another meeting (15-minute buffer), max 4/day, and max 1 upcoming meeting per customer. Result JSON: { available: boolean, reason: string }. If available is false, relay the reason and offer another working-day time — never confirm a slot you haven't checked. If true, show the confirmation summary and wait for the customer's agreement before calling schedule_meeting.`,
             parameters: {
                 type: 'object',
                 properties: {
@@ -254,7 +265,7 @@ export function buildTools(p: BusinessProfile): ChatCompletionTool[] {
         function: {
             name: 'schedule_meeting',
             description:
-                `Book an online consultation meeting with the human sales lead (${p.handoffName}). Call this AFTER you have confirmed a specific date/time with the customer. Meetings run ONLY on weekdays (Senin–Jumat) during business hours 10:00–22:00 WIB — Sabtu & Minggu are closed, so never propose a weekend. On success the tool reserves the slot, auto-creates a Zoom link, and emails a calendar invite. HOW TO REPLY based on the result JSON: if "join_url" is present, SHARE THAT LINK DIRECTLY in your WhatsApp reply together with the date/time — this is the primary way the customer receives it (do not just say "check your email"); when "customer_emailed" is also true, add that a calendar invite was sent to their email too. If "link_status" is "pending" (no join_url), tell the customer the team will send the link shortly. If it returns ok:false (a weekend, outside business hours, the requested time clashes with another meeting, or that day is already full), apologise and offer another WORKING-DAY time. On success also call update_lead_stage with stage="scheduled".`,
+                `Book an online consultation meeting with the human sales lead (${p.handoffName}). Call this AFTER you have confirmed a specific date/time with the customer. Meetings run ONLY on weekdays (Senin–Jumat) during business hours 10:00–22:00 WIB — Sabtu & Minggu are closed, so never propose a weekend. On success the tool reserves the slot, auto-creates a Zoom link, and emails a calendar invite. HOW TO REPLY based on the result JSON: if "join_url" is present, SHARE THAT LINK DIRECTLY in your WhatsApp reply together with the date/time — this is the primary way the customer receives it (do not just say "check your email"); when "customer_emailed" is also true, add that a calendar invite was sent to their email too. If "link_status" is "pending" (no join_url), tell the customer the team will send the link shortly. If it returns ok:false (a weekend, outside business hours, the requested time clashes with another meeting, or that day is already full), apologise and offer another WORKING-DAY time. A customer may hold only ONE upcoming meeting: if the result has "customer_limit": true, do NOT try to book another time — remind the customer of their existing meeting and say the team can reschedule it. On success also call update_lead_stage with stage="scheduled".`,
             parameters: {
                 type: 'object',
                 properties: {
@@ -280,7 +291,7 @@ export function buildTools(p: BusinessProfile): ChatCompletionTool[] {
         function: {
             name: 'handoff_to_human',
             description:
-                `Escalate this conversation to ${p.handoffName} (the human Lead Consultant) when: (1) the customer asks to speak with someone directly, (2) negotiation requires authority you do not have (heavy discount, custom scope), (3) technical questions outside your knowledge, or (4) the customer is frustrated. This assigns the lead to the human team and adds a note.${p.handoffPhone ? ` After calling this tool, share ${p.handoffName}'s WhatsApp number (${p.handoffPhone}) in your reply and stop trying to close the sale yourself.` : ' After calling this tool, tell the customer a team member will follow up, and stop trying to close the sale yourself.'}`,
+                `Escalate this conversation to ${p.handoffName} (the human Lead Consultant) when: (1) the customer asks to speak with someone directly, (2) negotiation requires authority you do not have (heavy discount, custom scope), (3) technical questions outside your knowledge, or (4) the customer is frustrated. This assigns the lead to the human team, adds a note, and switches OFF automatic AI replies for this chat — your reply to this turn is the last automatic message, so make it complete.${p.handoffPhone ? ` After calling this tool, share ${p.handoffName}'s WhatsApp number (${p.handoffPhone}) in your reply and stop trying to close the sale yourself.` : ' After calling this tool, tell the customer a team member will follow up, and stop trying to close the sale yourself.'}`,
             parameters: {
                 type: 'object',
                 properties: {
@@ -301,16 +312,21 @@ export function buildTools(p: BusinessProfile): ChatCompletionTool[] {
 
 // --- Tool Execution Logic ---
 
-export async function checkAvailability(productName: string) {
+export async function checkAvailability(orgId: string, productName: string) {
     try {
-        const supabase = await createClient();
+        // service-role-or-server + explicit org filter: the WhatsApp/queue path
+        // has no user session (a cookie client is anon → RLS returns 0 rows), and
+        // service role bypasses RLS, so the org_id filter is what scopes the
+        // catalog to this conversation's tenant.
+        const supabase = await createServiceOrServerClient();
 
-        // Use text search or ilike for fuzzy matching
-        // We'll use ilike with wildcards for simplicity and broad matching
+        // ilike with wildcards for broad fuzzy matching; the model-supplied name
+        // is escaped so a stray % or _ is matched literally.
         const { data: products, error } = await supabase
             .from('products')
             .select('id, name, price, stock, type, description')
-            .ilike('name', `%${productName}%`)
+            .eq('org_id', orgId)
+            .ilike('name', `%${escapeLikePattern(String(productName ?? '').trim())}%`)
             .limit(5);
 
         if (error) throw error;
@@ -449,7 +465,10 @@ export async function saveLeadInfo(
     orgId: string,
     phoneNumber: string,
     args: SaveLeadInfoArgs,
-    profile: BusinessProfile
+    profile: BusinessProfile,
+    // Label stamped on the appended notes line — 'AI' for the model's tool
+    // call; other server-side callers (e.g. the WhatsApp Flow) pass their own.
+    notesAuthor: string = 'AI'
 ): Promise<string> {
     try {
         // The tenant's own hand-off staff is not a customer — skip lead capture
@@ -476,6 +495,7 @@ export async function saveLeadInfo(
         const cleanedVendorCategory = cleanVendorCategory(args.vendor_category);
         const cleanedVendorOffering = cleanLeadStr(args.vendor_offering);
         const hasVendorDetail = !!(cleanedVendorCategory || cleanedVendorOffering);
+        const cleanedNotes = cleanLeadStr(args.notes);
 
         // Single read of the existing row when we need its current state:
         //  - contact_name_locked  → don't let the AI clobber a manual name.
@@ -484,15 +504,17 @@ export async function saveLeadInfo(
         //  - contact_type_locked  → don't let the AI override a human's manual
         //                           classification, nor stamp vendor detail onto
         //                           a contact a human confirmed as non-vendor.
+        //  - notes                → append to (never overwrite) operator notes.
         let existing: {
             contact_name_locked?: boolean;
             contact_type?: string | null;
             contact_type_locked?: boolean;
+            notes?: string | null;
         } | null = null;
-        if (cleanedName || incomingType || hasVendorDetail) {
+        if (cleanedName || incomingType || hasVendorDetail || cleanedNotes) {
             const { data } = await supabase
                 .from('whatsapp_chats')
-                .select('contact_name_locked, contact_type, contact_type_locked')
+                .select('contact_name_locked, contact_type, contact_type_locked, notes')
                 .eq('org_id', orgId)
                 .eq('phone_number', phoneNumber)
                 .maybeSingle();
@@ -546,7 +568,14 @@ export async function saveLeadInfo(
         maybeSet('event_goals', args.event_goals);
         maybeSet('budget_range', args.budget_range);
         maybeSet('source', args.source);
-        maybeSet('notes', args.notes);
+
+        // notes is also edited by operators (and carries the handoff / stage
+        // audit trail), so append a timestamped, author-labelled line instead of
+        // overwriting it. A repeat of the same note is skipped (null).
+        if (cleanedNotes) {
+            const merged = appendLabelledNote(existing?.notes, cleanedNotes, notesAuthor);
+            if (merged !== null) patch.notes = merged;
+        }
 
         if (Object.keys(patch).length === 0) {
             return JSON.stringify({ ok: true, updated: 0, note: 'no fields to update' });
@@ -580,7 +609,12 @@ export async function updateLeadStage(
     orgId: string,
     phoneNumber: string,
     stage: LeadStage,
-    reason?: string | null
+    reason?: string | null,
+    opts?: {
+        // AI path: refuse to move a lead OUT of a human-owned stage
+        // (booked/won/lost) — that decision belongs to the team (KEA-12).
+        protectHumanStages?: boolean;
+    }
 ): Promise<string> {
     try {
         const supabase = await createServiceOrServerClient();
@@ -591,15 +625,27 @@ export async function updateLeadStage(
             lead_stage: stage,
             updated_at: new Date().toISOString(),
         };
-        if (reason && reason.trim()) {
-            // Append to notes rather than clobbering — multiple transitions
-            // accumulate a useful audit trail for whoever picks up the lead.
-            const { data: row } = await supabase
+        const hasReason = !!(reason && reason.trim());
+        let row: { notes?: string | null; lead_stage?: string | null } | null = null;
+        if (hasReason || opts?.protectHumanStages) {
+            const { data } = await supabase
                 .from('whatsapp_chats')
-                .select('notes')
+                .select('notes, lead_stage')
                 .eq('org_id', orgId)
                 .eq('phone_number', phoneNumber)
                 .maybeSingle();
+            row = data;
+        }
+        if (opts?.protectHumanStages && isHumanOnlyLeadStage(row?.lead_stage)) {
+            return JSON.stringify({
+                ok: false,
+                stage: row?.lead_stage,
+                error: humanStageLockedError(String(row?.lead_stage)),
+            });
+        }
+        if (reason && hasReason) {
+            // Append to notes rather than clobbering — multiple transitions
+            // accumulate a useful audit trail for whoever picks up the lead.
             const stamp = new Date().toISOString();
             const line = `[${stamp}] → ${stage}: ${reason.trim()}`;
             patch.notes = row?.notes ? `${row.notes}\n${line}` : line;
@@ -628,7 +674,10 @@ export async function updateLeadStage(
 // The reserve RPC remains the final authority against races at booking time.
 export async function checkMeetingAvailability(
     orgId: string,
-    meetingAtIso: string
+    meetingAtIso: string,
+    // When known (WhatsApp path), also applies the max-1-active-meeting-per-
+    // customer rule (migration 0059) so the AI never proposes a second slot.
+    phoneNumber?: string
 ): Promise<string> {
     try {
         const meetingDate = new Date(normalizeMeetingIso(meetingAtIso));
@@ -649,6 +698,28 @@ export async function checkMeetingAvailability(
         }
 
         const supabase = await createServiceOrServerClient();
+
+        if (phoneNumber) {
+            const { data: own, error: ownErr } = await supabase
+                .from('orders')
+                .select('event_date, meeting_duration_min, status')
+                .eq('org_id', orgId)
+                .eq('order_type', 'service')
+                .eq('customer_phone', phoneNumber)
+                .not('meeting_link', 'is', null)
+                .gte('event_date', new Date(Date.now() - 24 * 60 * 60_000).toISOString());
+            if (ownErr) throw ownErr;
+            const active = findActiveMeeting(own ?? []);
+            if (active) {
+                return JSON.stringify({
+                    available: false,
+                    customer_limit: true,
+                    existing_meeting_at: active.event_date,
+                    reason: customerMeetingLimitMessage(active.event_date),
+                });
+            }
+        }
+
         const { startUtcIso, endUtcIso } = jakartaDayRangeUtc(meetingDate);
         const { data: existing, error } = await supabase
             .from('orders')
@@ -730,7 +801,7 @@ export async function scheduleMeeting(
         // Pull the contact context for the meeting title + invite.
         const { data: chat } = await supabase
             .from('whatsapp_chats')
-            .select('contact_name, notes, company, event_interest, email')
+            .select('contact_name, notes, company, event_interest, email, lead_stage')
             .eq('org_id', orgId)
             .eq('phone_number', phoneNumber)
             .maybeSingle();
@@ -777,7 +848,19 @@ export async function scheduleMeeting(
             created: boolean;
             full: boolean;
             conflict: boolean;
+            // Migration 0059: this customer already holds another active meeting.
+            customer_limit?: boolean;
+            existing_meeting_id?: string | null;
+            existing_event_date?: string | null;
         };
+        if (reservation.customer_limit) {
+            return JSON.stringify({
+                ok: false,
+                customer_limit: true,
+                existing_meeting_at: reservation.existing_event_date ?? null,
+                error: customerMeetingLimitMessage(reservation.existing_event_date),
+            });
+        }
         if (reservation.conflict) {
             return JSON.stringify({
                 ok: false,
@@ -920,8 +1003,12 @@ export async function scheduleMeeting(
 
         // Ensure the lead is 'scheduled' (idempotent — safe to repeat on a retry)
         // and add an audit line only for a fresh booking, not on every repeat.
+        // Never pull a lead back out of a human-owned stage (booked/won/lost).
         const stamp = new Date().toISOString();
-        const chatPatch: Record<string, unknown> = { lead_stage: 'scheduled', updated_at: stamp };
+        const keepHumanStage = isHumanOnlyLeadStage(chat?.lead_stage);
+        const chatPatch: Record<string, unknown> = keepHumanStage
+            ? { updated_at: stamp }
+            : { lead_stage: 'scheduled', updated_at: stamp };
         if (!alreadyBooked) {
             // Record WHY the link is pending on the audit line so it's queryable.
             const pendingSuffix = !joinUrl ? ` — LINK PENDING: ${zoomError ?? 'no link'}` : '';
@@ -946,7 +1033,7 @@ export async function scheduleMeeting(
             sales_notified: salesNotified,
             sales_wa_notified: salesWaNotified,
             already_booked: alreadyBooked,
-            stage: 'scheduled',
+            stage: keepHumanStage ? chat?.lead_stage : 'scheduled',
         });
     } catch (error) {
         console.error('Error in scheduleMeeting:', error);
@@ -980,12 +1067,18 @@ export async function handoffToHuman(
             .maybeSingle();
 
         const stamp = new Date().toISOString();
-        const line = `[${stamp}] HANDOFF to ${profile.handoffName}: ${reason}`;
+        const line = `[${stamp}] HANDOFF to ${profile.handoffName}: ${reason} (AI auto-reply dimatikan)`;
+        // ai_enabled = false: the AI stops auto-replying once a human owns the
+        // conversation (webhook + queue both skip chats with ai_enabled=false).
+        // This turn's reply is unaffected — the queue checked ai_enabled before
+        // generating it and sends it regardless. An operator re-enables the AI
+        // from the chat's "AI aktif" switch.
         const { error } = await supabase
             .from('whatsapp_chats')
             .update({
                 assigned_to: profile.handoffName,
                 notes: chat?.notes ? `${chat.notes}\n${line}` : line,
+                ai_enabled: false,
                 updated_at: stamp,
             })
             .eq('org_id', orgId)
@@ -997,6 +1090,7 @@ export async function handoffToHuman(
             ok: true,
             assigned_to: profile.handoffName,
             handoff_whatsapp: profile.handoffPhone || null,
+            ai_auto_reply: 'off',
         });
     } catch (error) {
         console.error('Error in handoffToHuman:', error);
@@ -1005,14 +1099,17 @@ export async function handoffToHuman(
     }
 }
 
-export async function listProducts(limit: number = 10) {
+export async function listProducts(orgId: string, limit: number = 10) {
     try {
-        const supabase = await createClient();
+        // Same scoping as checkAvailability: service role (no session in the
+        // webhook path) + explicit org filter.
+        const supabase = await createServiceOrServerClient();
 
         const { data: products, error } = await supabase
             .from('products')
             .select('id, name, price, stock, type')
-            .limit(limit);
+            .eq('org_id', orgId)
+            .limit(clampProductLimit(limit));
 
         if (error) throw error;
 
@@ -1023,7 +1120,10 @@ export async function listProducts(limit: number = 10) {
             });
         }
 
+        // id included: create_order needs a real catalog UUID, and its schema
+        // tells the model to get one from check_availability OR list_products.
         const result = products.map(p => ({
+            id: p.id,
             name: p.name,
             price: p.price,
             stock: p.type === 'service' ? 'Unlimited' : p.stock,

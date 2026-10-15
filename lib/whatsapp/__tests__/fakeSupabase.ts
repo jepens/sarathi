@@ -76,6 +76,7 @@ export function makeFakeSupabase(opts: {
             lt(c: string, v: unknown) { ctx.filters.push(['lt', c, v]); return b; },
             lte(c: string, v: unknown) { ctx.filters.push(['lte', c, v]); return b; },
             is(c: string, v: unknown) { ctx.filters.push(['is', c, v]); return b; },
+            ilike(c: string, v: unknown) { ctx.filters.push(['ilike', c, v]); return b; },
             not(c: string, op: string, v: unknown) { ctx.filters.push(['not', c, [op, v]]); return b; },
             in(c: string, v: unknown) { ctx.filters.push(['in', c, v]); return finalize(); },
             order() { return b; }, // args (column, {ascending}) are ignored by the fake
