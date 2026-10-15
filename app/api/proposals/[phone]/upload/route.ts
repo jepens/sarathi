@@ -2,10 +2,12 @@ import { createClient } from '@/lib/supabase/server';
 import { NextResponse } from 'next/server';
 import { randomUUID } from 'node:crypto';
 import { generateProposalRef } from '@/lib/proposals/ref';
+import { requireOrgMember } from '@/lib/settings/org-context';
+import { proposalObjectKey } from '@/lib/storage/object-paths';
 
 // POST /api/proposals/[phone]/upload
 // Accepts a multipart form with a single `file` field (PDF).
-// On success, the file is stored at `proposals/{phone}/{uuid}.pdf` in
+// On success, the file is stored at `proposals/{org_id}/{phone}/{uuid}.pdf` in
 // Supabase Storage and a row is inserted into the `proposals` table with
 // source='uploaded', sent_at=null. The returned `proposal_id` is what the
 // dialog uses for the subsequent preview / send.
@@ -30,12 +32,13 @@ export async function POST(
 ) {
     const supabase = await createClient();
 
-    const {
-        data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    // Membership gate: the object key + the proposals row are both stamped with
+    // the caller's org (storage RLS authorises by the "<org_id>/" prefix).
+    const access = await requireOrgMember(supabase);
+    if (!access.ok) {
+        return NextResponse.json({ error: access.error }, { status: access.status });
     }
+    const { orgId, userId } = access;
 
     const { phone } = await params;
     if (!phone || !PHONE_REGEX.test(phone)) {
@@ -85,9 +88,10 @@ export async function POST(
     const arrayBuffer = await fileEntry.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
 
-    // Path convention: {phone}/{uuid}.pdf — UUID prevents name collisions and
-    // avoids leaking client-supplied filenames into Storage.
-    const objectKey = `${phone}/${randomUUID()}.pdf`;
+    // Path convention: {org_id}/{phone}/{uuid}.pdf — the org prefix is what the
+    // storage policy checks; the UUID prevents name collisions and avoids
+    // leaking client-supplied filenames into Storage.
+    const objectKey = proposalObjectKey(orgId, phone, randomUUID());
 
     const { error: storageErr } = await supabase.storage
         .from('proposals')
@@ -111,11 +115,12 @@ export async function POST(
     const { data: inserted, error: insertErr } = await supabase
         .from('proposals')
         .insert({
+            org_id: orgId,
             lead_phone: phone,
             source: 'uploaded',
             file_path: objectKey,
             proposal_ref: proposalRef,
-            created_by: user.id,
+            created_by: userId,
         })
         .select('id, proposal_ref')
         .single();

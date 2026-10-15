@@ -9,7 +9,7 @@ import { TestChatPreview } from "./components/TestChatPreview";
 import { KnowledgeCoverageSummary } from "./components/KnowledgeCoverageSummary";
 import { BusinessProfileEditor } from "./components/BusinessProfileEditor";
 import { GENERIC_BUSINESS_PROFILE, getBusinessProfile } from "@/lib/settings/business-profile";
-import { getCurrentOrgId } from "@/lib/settings/org-context";
+import { getCurrentOrgId, isDefaultOrg } from "@/lib/settings/org-context";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceOrServerClient } from "@/lib/supabase/service";
 import { WhatsAppCredentials } from "./components/WhatsAppCredentials";
@@ -24,23 +24,34 @@ export default async function SettingsPage() {
     const supabase = await createClient();
     const orgId = await getCurrentOrgId(supabase);
 
-    // Callback URL + Verify Token are platform-global (the webhook routes by
-    // phone_number_id). Resolve them platform-wide so every tenant — not just the
-    // platform owner whose org owns the app_settings row — sees the real values:
-    // the URL from the request host, the verify token via a service-role client.
-    const origin = resolvePublicOrigin(await headers());
-    const svc = await createServiceOrServerClient();
-    const webhookUrl = origin
-        ? `${origin}/api/webhook/whatsapp`
-        : await getWebhookUrl(svc);
-    const verifyToken = await getVerifyToken(svc);
+    // The env WhatsApp number, its Meta webhook (Callback URL + Verify Token) and
+    // credentials belong to the default org. Other tenants' WhatsApp numbers are
+    // set up by the Sarathi team, so they never see the platform webhook values
+    // (KEA-27) — only a neutral "managed by the team" note.
+    const isDefault = await isDefaultOrg(orgId);
+
+    let webhookUrl: string | null = null;
+    let verifyToken: string | null = null;
+    if (isDefault) {
+        // Resolve platform-wide: the URL from the request host, the verify
+        // token via a service-role client.
+        const origin = resolvePublicOrigin(await headers());
+        const svc = await createServiceOrServerClient();
+        webhookUrl = origin
+            ? `${origin}/api/webhook/whatsapp`
+            : await getWebhookUrl(svc);
+        verifyToken = await getVerifyToken(svc);
+    }
 
     const businessProfile = orgId
         ? await getBusinessProfile(supabase, orgId)
         : { ...GENERIC_BUSINESS_PROFILE };
-    // Single-tenant: WhatsApp credentials live in server env, not the DB.
+    // WhatsApp credentials live in server env, not the DB — and only the
+    // default org uses them.
     const waEnvConfigured =
-        !!process.env.WHATSAPP_PHONE_NUMBER_ID && !!process.env.WHATSAPP_ACCESS_TOKEN;
+        isDefault &&
+        !!process.env.WHATSAPP_PHONE_NUMBER_ID &&
+        !!process.env.WHATSAPP_ACCESS_TOKEN;
 
     return (
         <div className="space-y-4 sm:space-y-6">
@@ -56,7 +67,10 @@ export default async function SettingsPage() {
                 businessProfileTab={<BusinessProfileEditor initial={businessProfile} />}
                 whatsappTab={
                     <div className="space-y-6">
-                        <WhatsAppCredentials envConfigured={waEnvConfigured} />
+                        <WhatsAppCredentials
+                            envConfigured={waEnvConfigured}
+                            managedByTeam={!isDefault}
+                        />
                         <WebhookSettings
                             webhookUrl={webhookUrl}
                             verifyToken={verifyToken}

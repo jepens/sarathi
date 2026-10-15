@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server';
 import { NextResponse } from 'next/server';
 import { sendProposalEmail } from '@/lib/proposals/send';
 import { normalizeFnaSnapshot } from '@/lib/proposals/fna';
+import { requireEnvIntegration } from '@/lib/settings/org-context';
 
 // @react-pdf/renderer + Resend SDK both Node-only — pin to avoid future Edge migration.
 export const runtime = 'nodejs';
@@ -56,11 +57,11 @@ export async function POST(
 ) {
     const supabase = await createClient();
 
-    const {
-        data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    // The proposal email goes out through the env Resend account with
+    // Sailendra's sender + subject, so only default-org members may send.
+    const access = await requireEnvIntegration('email', supabase);
+    if (!access.ok) {
+        return NextResponse.json({ error: access.error }, { status: access.status });
     }
 
     const { phone } = await params;

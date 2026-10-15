@@ -43,6 +43,10 @@ yarn-error.log*
 # MCP config (contains access tokens)
 .mcp.json
 
+# Claude Code local agent worktrees / settings
+/.claude/worktrees/
+/.claude/settings.local.json
+
 # vercel
 .vercel
 

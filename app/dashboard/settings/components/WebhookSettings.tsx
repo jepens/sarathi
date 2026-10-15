@@ -8,21 +8,41 @@ import { Copy, Webhook } from "lucide-react";
 import { toast } from "sonner";
 
 interface WebhookSettingsProps {
-    webhookUrl: string;
-    verifyToken: string;
+    /** null for orgs other than the default org — see below. */
+    webhookUrl: string | null;
+    verifyToken: string | null;
 }
 
-// Read-only panel. The Callback URL + Verify Token are platform-global (the
-// webhook routes inbound messages by phone_number_id, so every tenant points
-// their Meta app at the same endpoint with the same verify token). They are
-// not tenant-editable — what makes this org's bot work is the per-tenant Meta
-// credentials in the WhatsApp Credentials card above. Here we just surface the
-// two values to copy into Meta → WhatsApp → Configuration.
+// Read-only panel. The Callback URL + Verify Token belong to the platform's
+// Meta app, which today serves only the default org's WhatsApp number (env
+// credentials, see the WhatsApp Credentials card above). They are not
+// tenant-editable; here we just surface the two values to copy into
+// Meta → WhatsApp → Configuration.
+//
+// Only members of the default org get the values. For every other org the
+// Sarathi team connects the number and configures Meta, so the page passes
+// nulls and we show a neutral note instead (KEA-27).
 export function WebhookSettings({ webhookUrl, verifyToken }: WebhookSettingsProps) {
     const copy = (text: string) => {
         navigator.clipboard.writeText(text);
         toast.success("Disalin");
     };
+
+    if (webhookUrl === null || verifyToken === null) {
+        return (
+            <Card>
+                <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                        <Webhook className="h-4 w-4" /> Webhook Meta
+                    </CardTitle>
+                    <CardDescription>
+                        Webhook WhatsApp untuk organisasi Anda diatur oleh tim Sarathi.
+                        Tidak ada yang perlu Anda isi di sini.
+                    </CardDescription>
+                </CardHeader>
+            </Card>
+        );
+    }
 
     return (
         <Card>

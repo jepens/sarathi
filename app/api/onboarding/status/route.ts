@@ -1,6 +1,6 @@
 import { createClient } from '@/lib/supabase/server';
 import { createServiceOrServerClient } from '@/lib/supabase/service';
-import { getCurrentOrgId } from '@/lib/settings/org-context';
+import { getCurrentOrgId, isDefaultOrg } from '@/lib/settings/org-context';
 import { getWebhookUrl, getVerifyToken } from '@/lib/settings/app-settings';
 import { resolvePublicOrigin } from '@/lib/utils/public-url';
 import { NextResponse } from 'next/server';
@@ -35,9 +35,13 @@ export async function GET(request: Request) {
 
     const handoffPhone = (profileQ.data?.handoff_phone ?? '').trim();
 
-    // Single-tenant: WhatsApp credentials come from server env, not a per-org row.
+    // WhatsApp credentials come from server env, not a per-org row — and they
+    // belong to the default org only.
+    const isDefault = await isDefaultOrg(orgId);
     const whatsappConfigured =
-        !!process.env.WHATSAPP_PHONE_NUMBER_ID && !!process.env.WHATSAPP_ACCESS_TOKEN;
+        isDefault &&
+        !!process.env.WHATSAPP_PHONE_NUMBER_ID &&
+        !!process.env.WHATSAPP_ACCESS_TOKEN;
 
     const steps = {
         profile: handoffPhone.length > 0,
@@ -45,23 +49,26 @@ export async function GET(request: Request) {
         knowledge: (docCountQ.count ?? 0) > 0,
     };
 
-    // Callback URL + Verify Token are PLATFORM-GLOBAL — the webhook routes by
-    // phone_number_id, so every tenant points Meta at the same endpoint with the
-    // same verify token. The canonical values live in the platform owner's
-    // org-scoped app_settings row, which a *different* tenant's RLS client can't
-    // read (it would fall back to localhost/'123456'). Resolve them platform-wide
-    // instead: the callback URL from the request host, the verify token via a
-    // service-role client.
-    const origin = resolvePublicOrigin(request.headers);
-    const svc = await createServiceOrServerClient();
-    const webhookUrl = origin
-        ? `${origin}/api/webhook/whatsapp`
-        : await getWebhookUrl(svc);
-    const verifyToken = await getVerifyToken(svc);
+    // Callback URL + Verify Token are platform values for the env number, so
+    // only default-org members see them (KEA-27). Other tenants' WhatsApp is set
+    // up by the Sarathi team — they get nulls and the checklist shows a neutral
+    // note instead. Resolved platform-wide: the callback URL from the request
+    // host, the verify token via a service-role client.
+    let webhookUrl: string | null = null;
+    let verifyToken: string | null = null;
+    if (isDefault) {
+        const origin = resolvePublicOrigin(request.headers);
+        const svc = await createServiceOrServerClient();
+        webhookUrl = origin
+            ? `${origin}/api/webhook/whatsapp`
+            : await getWebhookUrl(svc);
+        verifyToken = await getVerifyToken(svc);
+    }
 
     return NextResponse.json({
         show: (chatCountQ.count ?? 0) === 0,
         steps,
+        webhookVisible: isDefault,
         webhookUrl,
         verifyToken,
     });

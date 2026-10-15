@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
+import { useCurrentOrgId } from '@/components/current-org-provider';
+import { NO_ORG_MESSAGE } from '@/lib/settings/org-access';
 import {
     Card,
     CardContent,
@@ -38,6 +40,8 @@ function normalizeShortcut(raw: string): string {
 
 export function QuickRepliesEditor() {
     const supabase = createClient();
+    // Explicit org for reads + inserts (see LabelsEditor).
+    const orgId = useCurrentOrgId();
     const [items, setItems] = useState<QuickReply[]>([]);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
@@ -50,9 +54,15 @@ export function QuickRepliesEditor() {
     const [deleting, setDeleting] = useState(false);
 
     const fetchItems = useCallback(async () => {
+        if (!orgId) {
+            setItems([]);
+            setLoading(false);
+            return;
+        }
         const { data, error } = await supabase
             .from('quick_replies')
             .select('id, shortcut, content')
+            .eq('org_id', orgId)
             .order('shortcut', { ascending: true });
         if (error) {
             toast.error('Gagal memuat balasan cepat');
@@ -60,7 +70,7 @@ export function QuickRepliesEditor() {
             setItems(data ?? []);
         }
         setLoading(false);
-    }, [supabase]);
+    }, [supabase, orgId]);
 
     useEffect(() => {
         fetchItems();
@@ -89,6 +99,10 @@ export function QuickRepliesEditor() {
             toast.error('Isi pesan wajib diisi.');
             return;
         }
+        if (!orgId) {
+            toast.error(NO_ORG_MESSAGE);
+            return;
+        }
         setSaving(true);
         try {
             if (editingId) {
@@ -108,7 +122,7 @@ export function QuickRepliesEditor() {
             } else {
                 const { error } = await supabase
                     .from('quick_replies')
-                    .insert({ shortcut: sc, content: body });
+                    .insert({ org_id: orgId, shortcut: sc, content: body });
                 if (error) throw error;
                 toast.success('Balasan cepat ditambahkan');
             }

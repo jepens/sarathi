@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { sendWhatsAppMessage, describeWhatsAppError, type WhatsAppApiError } from '@/lib/whatsapp/client';
 import { whatsappLogger } from '@/lib/utils/logger';
-import { getCurrentOrgId } from '@/lib/settings/org-context';
+import { requireEnvIntegration } from '@/lib/settings/org-context';
 
 export async function POST(request: Request) {
     let phone_number: string | undefined;
@@ -29,19 +29,16 @@ export async function POST(request: Request) {
 
         const supabase = await createClient();
 
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) {
-            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        // Resolve the sender's org from their membership and require it to be
+        // the org that owns the env WhatsApp credentials — checked BEFORE Meta
+        // is called, so another tenant can never send from Sailendra's number.
+        // org_id is also set explicitly below (part of the composite key);
+        // relying on the column DEFAULT would mis-stamp another tenant's reply.
+        const access = await requireEnvIntegration('whatsapp', supabase);
+        if (!access.ok) {
+            return NextResponse.json({ error: access.error }, { status: access.status });
         }
-
-        // Resolve the sender's org explicitly. RLS would scope the write anyway,
-        // but once phone_number is no longer globally unique we must set org_id
-        // (it's part of the composite key) and target onConflict on it — relying
-        // on the column DEFAULT would mis-stamp a non-Sailendra tenant's reply.
-        const orgId = await getCurrentOrgId(supabase);
-        if (!orgId) {
-            return NextResponse.json({ error: 'No organization for current user' }, { status: 403 });
-        }
+        const orgId = access.orgId;
 
         // Send via Meta first — if Meta rejects (e.g. past 24h window), we
         // don't want a phantom assistant message stored locally that the
