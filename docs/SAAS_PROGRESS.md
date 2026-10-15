@@ -25,15 +25,16 @@
 | D2 · 2 akun + org pilot | Dipertahankan sebagai **tenant uji** isolasi; setelah 0.9 mereka hanya melihat org-nya sendiri (2026-10-15) |
 | D3 · Batas tool tulis AI | AI hanya boleh menandai sampai `scheduled`. `booked/won/lost` hanya oleh manusia atau event pembayaran. Maksimal 1 meeting aktif per nomor. Ringkasan percakapan bukan role `system`. AI berhenti setelah handoff (2026-10-15). |
 | Sign-up publik | Dimatikan via Supabase Management API atas persetujuan pemilik (2026-10-15) |
+| D4 · Kejujuran AI | Persona default & preset: natural, tetapi jujur sebagai asisten virtual bila ditanya langsung; persona tersimpan tidak diubah otomatis (2026-10-16) |
+| D12 · AI pasca-handoff | Tetap mati sampai operator menyalakan switch "AI aktif" (2026-10-16) |
+| D13 · Horizon meeting | AI memesan meeting maksimal 30 hari ke depan (`MAX_BOOKING_HORIZON_DAYS`) (2026-10-16) |
 
 ### Menunggu keputusan
 
 | # | Topik | Dibutuhkan untuk | Status |
 |---|---|---|---|
-| D4 | Persona default: bot mengaku asisten AI bila ditanya | Fase 0 (0.14) | ⏸️ |
-| D12 | AI otomatis aktif lagi N jam setelah handoff, atau tetap mati sampai operator menyalakan | Fase 0 (#37) | ⏸️ |
-| D13 | Horizon maksimal pemesanan meeting oleh AI (mis. 30 hari) | Fase 0 (#37) / Fase 2 | ⏸️ |
 | D14 | Penanda dokumen KB internal vs publik (agar AI tak mengutip dokumen internal) | Fase 4 | ⏸️ |
+| D15 | CTA landing: tetap "Mulai gratis" → login, atau "Ajukan pilot" ke kanal kontak tim Sarathi (WA/email) | Fase 0 (0.14) / Fase 4 | ⏸️ |
 | D5 | Tipe bisnis 1–5 calon tenant pilot | Fase 4 | ⏸️ |
 | D6 | Model akun Meta (app per klien vs app platform Sarathi) & entitas legal pemilik Sarathi | Fase 2 | ⏸️ |
 | D7 | Kunci OpenAI milik platform (dengan metering) vs dibawa tenant; model default | Fase 3 | ⏸️ |
@@ -48,18 +49,18 @@
 |---|---|---|---|---|
 | 0.1 | Matikan "Allow new users to sign up" di Supabase Auth | KEA-1 | ✅ | 2026-10-15: `disable_signup=true` via Management API; terverifikasi di `GET /auth/v1/settings`. CAPTCHA Auth sudah aktif. Trigger `handle_new_user` tidak lagi auto-join → migrasi 0060 di [#36](https://github.com/jepens/sahabat_umkm/pull/36) |
 | 0.2 | Rotasi kunci OpenAI, token System User & App Secret WhatsApp, kunci Komerce | KEA-13 | 👤 | Kunci yang bocor = kunci aktif saat ini |
-| 0.3 | Hapus `log_deploy.md` & nilai rahasia di `database/migrate_env_to_settings.sql`; pemindai secret di CI | KEA-13 | 👀 | [#35](https://github.com/jepens/sahabat_umkm/pull/35): file dihapus, SQL diganti placeholder, job CI gitleaks v8.30.1 (hanya commit PR). Rotasi kunci tetap wajib (0.2) |
+| 0.3 | Hapus `log_deploy.md` & nilai rahasia di `database/migrate_env_to_settings.sql`; pemindai secret di CI | KEA-13 | ✅ | [#35](https://github.com/jepens/sahabat_umkm/pull/35) merged: file dihapus, SQL diganti placeholder, job CI gitleaks. **Rotasi kunci tetap wajib (0.2)** |
 | 0.4 | Tangani 2 akun + org pilot sisa | KEA-2 | ⬜ | D2: dipertahankan sebagai tenant uji; verifikasi isolasinya setelah 0.9 diterapkan |
-| 0.5 | Patch dependensi (Next.js ≥ 16.3.8, sharp, postcss) + Node 22 di `nixpacks.toml` | KEA-10, KEA-22 | 👀 | [#35](https://github.com/jepens/sahabat_umkm/pull/35): Next 16.3.8, `npm audit --omit=dev` 7 → 0, Node 22; build ✓ |
-| 0.6 | Migrasi RLS: 4 tabel `USING(true)` → `is_org_member(org_id)`; `push_subscriptions.user_id` | KEA-3 | 👀 | [#36](https://github.com/jepens/sahabat_umkm/pull/36), migrasi 0058 (belum diterapkan) |
-| 0.7 | Storage: policy per prefix org untuk `chat-media` & `proposals` | KEA-4 | 👀 | [#36](https://github.com/jepens/sahabat_umkm/pull/36), 0058. Lanjutan: 1.11, 1.12 |
-| 0.8 | Cabut EXECUTE `reserve_meeting_slot` dari `authenticated`; cabut anon di `match_*` | KEA-5, KEA-25 | 👀 | [#36](https://github.com/jepens/sahabat_umkm/pull/36), 0058 (+ 0059 di #37 juga me-revoke) |
-| 0.9 | `getCurrentOrgId()` wajib keanggotaan (`organization_members`) | KEA-2 | 👀 | [#36](https://github.com/jepens/sahabat_umkm/pull/36): membership-based; fitur kredensial env hanya untuk org default; sandbox AI memakai org user |
-| 0.10 | `updateOrderStatus` wajib login + baca order dari DB; validasi input documents/products | KEA-19, KEA-18 | 👀 | [#36](https://github.com/jepens/sahabat_umkm/pull/36) |
+| 0.5 | Patch dependensi (Next.js ≥ 16.3.8, sharp, postcss) + Node 22 di `nixpacks.toml` | KEA-10, KEA-22 | ✅ | [#35](https://github.com/jepens/sahabat_umkm/pull/35) merged: Next 16.3.8, `npm audit --omit=dev` 0, Node 22. Deploy Easypanel: menunggu konfirmasi |
+| 0.6 | Migrasi RLS: 4 tabel `USING(true)` → `is_org_member(org_id)`; `push_subscriptions.user_id` | KEA-3 | ✅ | [#36](https://github.com/jepens/sahabat_umkm/pull/36) merged; migrasi 0058 diterapkan 2026-10-16 & terverifikasi (policy, kolom, 1 baris push tanpa pemilik terhapus) |
+| 0.7 | Storage: policy per prefix org untuk `chat-media` & `proposals` | KEA-4 | ✅ | [#36](https://github.com/jepens/sahabat_umkm/pull/36) + 0058 (policy `chat-media`/`proposals` per org terverifikasi). Lanjutan: 1.11, 1.12 |
+| 0.8 | Cabut EXECUTE `reserve_meeting_slot` dari `authenticated`; cabut anon di `match_*` | KEA-5, KEA-25 | ✅ | 0058: `reserve_meeting_slot` hanya service_role; `match_*` tanpa anon — terverifikasi via `has_function_privilege` |
+| 0.9 | `getCurrentOrgId()` wajib keanggotaan (`organization_members`) | KEA-2 | ✅ | [#36](https://github.com/jepens/sahabat_umkm/pull/36) merged; + 0060: user baru tidak auto-join org Sailendra (terverifikasi) |
+| 0.10 | `updateOrderStatus` wajib login + baca order dari DB; validasi input documents/products | KEA-19, KEA-18 | ✅ | [#36](https://github.com/jepens/sahabat_umkm/pull/36) merged |
 | 0.11 | Tool AI katalog (`checkAvailability`/`listProducts`) pakai service role + filter org | KUA-3 | 👀 | [#37](https://github.com/jepens/sahabat_umkm/pull/37) |
 | 0.12 | Batas tool tulis AI (tahap, batas meeting per nomor, ringkasan bukan role system, handoff mematikan AI) | KEA-12 | 👀 | [#37](https://github.com/jepens/sahabat_umkm/pull/37), migrasi 0059 (belum diterapkan). Sisa keputusan: D12, D13 |
-| 0.13 | Security headers; logout mencabut push; hapus default verify token; hapus halaman debug | KEA-24, KEA-23, KEA-27, KUA-22 | 👀 | [#35](https://github.com/jepens/sahabat_umkm/pull/35): headers, verify token fail-closed, debug 404. [#36](https://github.com/jepens/sahabat_umkm/pull/36): logout mencabut push, verify token hanya untuk org default |
-| 0.14 | Persona tidak menyangkal AI; perbaiki copy landing/login | UXA-3, UXA-4 | ⏸️ D4 | |
+| 0.13 | Security headers; logout mencabut push; hapus default verify token; hapus halaman debug | KEA-24, KEA-23, KEA-27, KUA-22 | ✅ | [#35](https://github.com/jepens/sahabat_umkm/pull/35): headers, verify token fail-closed, debug 404. [#36](https://github.com/jepens/sahabat_umkm/pull/36): logout mencabut push, verify token hanya untuk org default |
+| 0.14 | Persona tidak menyangkal AI; perbaiki copy landing/login | UXA-3, UXA-4 | 🔄 | UXA-3 (persona jujur bila ditanya, D4) di [#37](https://github.com/jepens/sahabat_umkm/pull/37). UXA-4 sebagian di PR copy/pelacak: klaim "terisolasi penuh" & "gaya Sailendra" dihapus. Sisa: CTA landing (D15), tautan Privasi/Ketentuan (3.8), copy UMKM & branding footer (4.2, D10) |
 | 0.15 | Upgrade Supabase Pro + uji restore backup | PER-1 | 👤 | Berbayar |
 
 ## Fase 1 — Fondasi multi-tenant (±2–3 minggu, wajib sebelum tenant ke-2)
@@ -135,3 +136,4 @@
 | 2026-10-15 | Audit kesiapan SaaS selesai ([laporan](../audits/AUDIT-2026-10-15.md)): 7 Kritis, 25 Tinggi, 32 Sedang, 9 Rendah. Tracker ini dibuat. Sign-up Supabase masih terbuka. |
 | 2026-10-15 | Keputusan D1–D3 diambil. **Sign-up publik ditutup** (0.1 ✅). Fase 0 dimulai dalam 3 PR: PR-A isolasi tenant & akses (0058), PR-B hardening + docs, PR-C batas tool AI (0059). PR-A & PR-C dikerjakan agen di worktree terpisah + review adversarial; PR-B dikerjakan langsung. |
 | 2026-10-15 | PR dibuka: [#35](https://github.com/jepens/sahabat_umkm/pull/35) hardening + docs, [#36](https://github.com/jepens/sahabat_umkm/pull/36) isolasi tenant (0058 + 0060), [#37](https://github.com/jepens/sahabat_umkm/pull/37) batas tool AI (0059). Review adversarial: #36 approve (major di luar cakupan → 0060), #37 1 major + 6 minor → semua diperbaiki. Uji integrasi gabungan: 268 test lulus, build ✓. Migrasi **belum** diterapkan (menunggu review pemilik, D1). |
+| 2026-10-16 | [#35](https://github.com/jepens/sahabat_umkm/pull/35) di-merge (`9c92dde`). Migrasi **0058 + 0060 diterapkan** ke produksi via Supabase MCP dan terverifikasi (policy 4 tabel + 2 bucket, grant RPC, trigger `handle_new_user`; advisor: tidak ada temuan baru). [#36](https://github.com/jepens/sahabat_umkm/pull/36) di-merge (`1ddba83`). Keputusan D4/D12/D13 diambil dan diterapkan di [#37](https://github.com/jepens/sahabat_umkm/pull/37). Deploy Easypanel belum terlihat di header produksi saat dicek — perlu konfirmasi auto-deploy. |

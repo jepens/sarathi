@@ -67,7 +67,7 @@ const features = [
   {
     icon: MessageSquare,
     title: "Balas klien di WhatsApp",
-    body: "Asisten menjawab calon klien dengan cepat dan sesuai gaya Sailendra, jadi tidak ada chat yang menggantung saat kamu lagi di lapangan.",
+    body: "Asisten menjawab calon klien dengan cepat dan sesuai gaya bisnismu, jadi tidak ada chat yang menggantung saat kamu lagi di lapangan.",
   },
   {
     icon: Kanban,

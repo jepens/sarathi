@@ -122,7 +122,7 @@ export function AuthShell({
                 </div>
 
                 <div className="font-rail relative z-10 flex items-center gap-2 text-[11px] tracking-[0.18em] text-brand-muted uppercase">
-                    <ShieldCheck className="h-3.5 w-3.5 text-brand-gold" /> Data tiap EO terisolasi penuh
+                    <ShieldCheck className="h-3.5 w-3.5 text-brand-gold" /> Akses khusus akun terdaftar
                 </div>
             </aside>
 
