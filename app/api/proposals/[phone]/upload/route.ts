@@ -1,8 +1,7 @@
-import { createClient } from '@/lib/supabase/server';
 import { NextResponse } from 'next/server';
 import { randomUUID } from 'node:crypto';
 import { generateProposalRef } from '@/lib/proposals/ref';
-import { requireOrgMember } from '@/lib/settings/org-context';
+import { accessDeniedResponse, requireOrgContext } from '@/lib/settings/org-context';
 import { proposalObjectKey } from '@/lib/storage/object-paths';
 
 // POST /api/proposals/[phone]/upload
@@ -30,15 +29,11 @@ export async function POST(
     request: Request,
     { params }: { params: Promise<{ phone: string }> }
 ) {
-    const supabase = await createClient();
-
     // Membership gate: the object key + the proposals row are both stamped with
     // the caller's org (storage RLS authorises by the "<org_id>/" prefix).
-    const access = await requireOrgMember(supabase);
-    if (!access.ok) {
-        return NextResponse.json({ error: access.error }, { status: access.status });
-    }
-    const { orgId, userId } = access;
+    const access = await requireOrgContext();
+    if (!access.ok) return accessDeniedResponse(access);
+    const { supabase, orgId, userId } = access;
 
     const { phone } = await params;
     if (!phone || !PHONE_REGEX.test(phone)) {

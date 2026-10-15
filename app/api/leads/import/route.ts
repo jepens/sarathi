@@ -1,6 +1,5 @@
-import { createClient } from '@/lib/supabase/server';
 import { NextResponse } from 'next/server';
-import { getCurrentOrgId } from '@/lib/settings/org-context';
+import { accessDeniedResponse, requireOrgContext } from '@/lib/settings/org-context';
 import { leadInputSchema } from '@/lib/leads/schema';
 import { createOrFillLead } from '@/lib/leads/create';
 
@@ -22,15 +21,9 @@ function isBlankRow(row: Record<string, unknown>): boolean {
 }
 
 export async function POST(request: Request) {
-    const supabase = await createClient();
-
-    const orgId = await getCurrentOrgId(supabase);
-    if (!orgId) {
-        return NextResponse.json(
-            { error: 'Tidak ada organisasi aktif untuk akun ini' },
-            { status: 403 }
-        );
-    }
+    const access = await requireOrgContext();
+    if (!access.ok) return accessDeniedResponse(access);
+    const { supabase, orgId } = access;
 
     let body: unknown;
     try {

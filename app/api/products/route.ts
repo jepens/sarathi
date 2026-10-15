@@ -1,14 +1,11 @@
-import { createClient } from '@/lib/supabase/server';
+import { accessDeniedResponse, requireOrgContext } from '@/lib/settings/org-context';
 import { generateEmbedding } from '@/lib/ai/embedding';
 import { NextResponse } from 'next/server';
 
 export async function GET() {
-    const supabase = await createClient();
-
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const access = await requireOrgContext();
+    if (!access.ok) return accessDeniedResponse(access);
+    const { supabase } = access;
 
     const { data, error } = await supabase
         .from('products')
@@ -23,12 +20,9 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-    const supabase = await createClient();
-
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const access = await requireOrgContext();
+    if (!access.ok) return accessDeniedResponse(access);
+    const { supabase, orgId } = access;
 
     const body = await request.json();
     const { name, description, price, stock, type = 'product' } = body;
@@ -59,6 +53,9 @@ export async function POST(request: Request) {
     const { data, error } = await supabase
         .from('products')
         .insert({
+            // Explicit org — the column DEFAULT is the seed org, which RLS
+            // rejects (and would mis-attribute) for any other tenant.
+            org_id: orgId,
             name,
             description,
             price,

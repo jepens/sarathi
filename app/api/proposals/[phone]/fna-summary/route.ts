@@ -1,4 +1,4 @@
-import { createClient } from '@/lib/supabase/server';
+import { accessDeniedResponse, requireOrgContext } from '@/lib/settings/org-context';
 import { NextResponse } from 'next/server';
 import { generateFnaSummary } from '@/lib/proposals/fna';
 
@@ -13,21 +13,16 @@ export async function POST(
     _request: Request,
     { params }: { params: Promise<{ phone: string }> }
 ) {
-    const supabase = await createClient();
-
-    const {
-        data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const access = await requireOrgContext();
+    if (!access.ok) return accessDeniedResponse(access);
+    const { supabase, orgId } = access;
 
     const { phone } = await params;
     if (!phone) {
         return NextResponse.json({ error: 'Phone required' }, { status: 400 });
     }
 
-    const result = await generateFnaSummary(phone, supabase);
+    const result = await generateFnaSummary(phone, supabase, orgId);
     if (!result.ok) {
         return NextResponse.json({ error: result.error }, { status: 400 });
     }

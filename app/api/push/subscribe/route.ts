@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '@/lib/supabase/server';
 import { createServiceOrServerClient } from '@/lib/supabase/service';
-import { requireOrgMember } from '@/lib/settings/org-context';
+import { accessDeniedResponse, requireOrgContext } from '@/lib/settings/org-context';
 import { parsePushSubscriptionBody } from '@/lib/notifications/push-targets';
 
 // Register (or refresh) this browser's Web Push subscription. Only a signed-in
@@ -27,11 +26,8 @@ interface SubscribeBody {
 }
 
 export async function POST(request: Request) {
-    const supabase = await createClient();
-    const access = await requireOrgMember(supabase);
-    if (!access.ok) {
-        return NextResponse.json({ error: access.error }, { status: access.status });
-    }
+    const access = await requireOrgContext();
+    if (!access.ok) return accessDeniedResponse(access);
 
     let payload: SubscribeBody;
     try {

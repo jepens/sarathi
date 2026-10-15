@@ -5,10 +5,10 @@
 
 'use server';
 
-import { createClient } from '@/lib/supabase/server';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { reduceStock, returnStock } from '@/lib/inventory/stock';
 import { sendPaymentNotification, sendCancellationNotification } from '@/lib/notifications/notifications';
-import { getCurrentOrgId, isDefaultOrg, requireOrgMember } from '@/lib/settings/org-context';
+import { isDefaultOrg, requireOrgContext } from '@/lib/settings/org-context';
 import { isBookingStatus, planStatusSideEffects } from '@/lib/bookings/status-effects';
 import { createOrFillLead } from '@/lib/leads/create';
 import { normalizePhone } from '@/lib/leads/schema';
@@ -65,15 +65,9 @@ export async function updateOrderStatus(
             return { success: false, message: 'Status tidak valid' };
         }
 
-        const supabase = await createClient();
-        const access = await requireOrgMember(supabase);
-        if (!access.ok) {
-            return {
-                success: false,
-                message: access.status === 401 ? 'Sesi tidak valid — silakan login ulang.' : access.error,
-            };
-        }
-        const orgId = access.orgId;
+        const access = await requireOrgContext();
+        if (!access.ok) return { success: false, message: access.error };
+        const { supabase, orgId } = access;
 
         const { data, error: loadError } = await supabase
             .from('orders')
@@ -215,7 +209,7 @@ function commonOrderFields(input: BookingInput, customerPhone: string | null) {
 // orders.(org_id, customer_phone) -> whatsapp_chats is satisfied. Returns the
 // normalized phone to store, or null when no/invalid phone was given.
 async function ensureCustomerContact(
-    supabase: Awaited<ReturnType<typeof createClient>>,
+    supabase: SupabaseClient,
     orgId: string,
     input: BookingInput
 ): Promise<string | null> {
@@ -235,15 +229,16 @@ async function ensureCustomerContact(
 }
 
 export async function createBooking(raw: unknown): Promise<ActionResult> {
-    const parsed = bookingInputSchema.safeParse(raw);
-    if (!parsed.success) {
-        return { success: false, message: parsed.error.issues[0]?.message ?? 'Data tidak valid' };
-    }
-    const input = parsed.data;
     try {
-        const supabase = await createClient();
-        const orgId = await getCurrentOrgId(supabase);
-        if (!orgId) return { success: false, message: 'Tidak ada organisasi aktif untuk akun ini' };
+        const access = await requireOrgContext();
+        if (!access.ok) return { success: false, message: access.error };
+        const { supabase, orgId } = access;
+
+        const parsed = bookingInputSchema.safeParse(raw);
+        if (!parsed.success) {
+            return { success: false, message: parsed.error.issues[0]?.message ?? 'Data tidak valid' };
+        }
+        const input = parsed.data;
 
         const customerPhone = await ensureCustomerContact(supabase, orgId, input);
 
@@ -267,15 +262,16 @@ export async function createBooking(raw: unknown): Promise<ActionResult> {
 }
 
 export async function updateBooking(id: string, raw: unknown): Promise<ActionResult> {
-    const parsed = bookingInputSchema.safeParse(raw);
-    if (!parsed.success) {
-        return { success: false, message: parsed.error.issues[0]?.message ?? 'Data tidak valid' };
-    }
-    const input = parsed.data;
     try {
-        const supabase = await createClient();
-        const orgId = await getCurrentOrgId(supabase);
-        if (!orgId) return { success: false, message: 'Tidak ada organisasi aktif untuk akun ini' };
+        const access = await requireOrgContext();
+        if (!access.ok) return { success: false, message: access.error };
+        const { supabase, orgId } = access;
+
+        const parsed = bookingInputSchema.safeParse(raw);
+        if (!parsed.success) {
+            return { success: false, message: parsed.error.issues[0]?.message ?? 'Data tidak valid' };
+        }
+        const input = parsed.data;
 
         const customerPhone = await ensureCustomerContact(supabase, orgId, input);
 
@@ -290,13 +286,18 @@ export async function updateBooking(id: string, raw: unknown): Promise<ActionRes
             const { data: existing } = await supabase
                 .from('orders')
                 .select('items')
+                .eq('org_id', orgId)
                 .eq('id', id)
                 .single();
             const existingItems = Array.isArray(existing?.items) ? existing.items : [];
             if (existingItems.length <= 1) patch.items = packageItems(input);
         }
 
-        const { error } = await supabase.from('orders').update(patch).eq('id', id);
+        const { error } = await supabase
+            .from('orders')
+            .update(patch)
+            .eq('org_id', orgId)
+            .eq('id', id);
         if (error) return { success: false, message: error.message };
         return { success: true, message: 'Booking diperbarui' };
     } catch (error) {
@@ -309,11 +310,15 @@ export async function updateBooking(id: string, raw: unknown): Promise<ActionRes
 
 export async function deleteBooking(id: string): Promise<ActionResult> {
     try {
-        const supabase = await createClient();
-        const orgId = await getCurrentOrgId(supabase);
-        if (!orgId) return { success: false, message: 'Tidak ada organisasi aktif untuk akun ini' };
+        const access = await requireOrgContext();
+        if (!access.ok) return { success: false, message: access.error };
+        const { supabase, orgId } = access;
 
-        const { error } = await supabase.from('orders').delete().eq('id', id);
+        const { error } = await supabase
+            .from('orders')
+            .delete()
+            .eq('org_id', orgId)
+            .eq('id', id);
         if (error) return { success: false, message: error.message };
         return { success: true, message: 'Booking dihapus' };
     } catch (error) {
@@ -326,9 +331,9 @@ export async function deleteBooking(id: string): Promise<ActionResult> {
 
 export async function setDpPaid(id: string, paid: boolean): Promise<ActionResult> {
     try {
-        const supabase = await createClient();
-        const orgId = await getCurrentOrgId(supabase);
-        if (!orgId) return { success: false, message: 'Tidak ada organisasi aktif untuk akun ini' };
+        const access = await requireOrgContext();
+        if (!access.ok) return { success: false, message: access.error };
+        const { supabase, orgId } = access;
 
         const { error } = await supabase
             .from('orders')
@@ -336,6 +341,7 @@ export async function setDpPaid(id: string, paid: boolean): Promise<ActionResult
                 dp_paid_at: paid ? new Date().toISOString() : null,
                 updated_at: new Date().toISOString(),
             })
+            .eq('org_id', orgId)
             .eq('id', id);
         if (error) return { success: false, message: error.message };
         return { success: true, message: paid ? 'DP ditandai dibayar' : 'Tanda DP dibatalkan' };
@@ -349,9 +355,9 @@ export async function setDpPaid(id: string, paid: boolean): Promise<ActionResult
 
 export async function setSettled(id: string, paid: boolean): Promise<ActionResult> {
     try {
-        const supabase = await createClient();
-        const orgId = await getCurrentOrgId(supabase);
-        if (!orgId) return { success: false, message: 'Tidak ada organisasi aktif untuk akun ini' };
+        const access = await requireOrgContext();
+        if (!access.ok) return { success: false, message: access.error };
+        const { supabase, orgId } = access;
 
         const patch: Record<string, unknown> = {
             pelunasan_paid_at: paid ? new Date().toISOString() : null,
@@ -361,6 +367,7 @@ export async function setSettled(id: string, paid: boolean): Promise<ActionResul
             const { data } = await supabase
                 .from('orders')
                 .select('total_amount, dp_amount')
+                .eq('org_id', orgId)
                 .eq('id', id)
                 .single();
             if (data) {
@@ -370,7 +377,11 @@ export async function setSettled(id: string, paid: boolean): Promise<ActionResul
                 );
             }
         }
-        const { error } = await supabase.from('orders').update(patch).eq('id', id);
+        const { error } = await supabase
+            .from('orders')
+            .update(patch)
+            .eq('org_id', orgId)
+            .eq('id', id);
         if (error) return { success: false, message: error.message };
         return { success: true, message: paid ? 'Booking ditandai lunas' : 'Tanda lunas dibatalkan' };
     } catch (error) {

@@ -1,4 +1,4 @@
-import { createClient } from '@/lib/supabase/server';
+import { accessDeniedResponse, requireOrgContext } from '@/lib/settings/org-context';
 import { NextResponse } from 'next/server';
 import { generateEmbedding } from '@/lib/ai/embedding';
 import { productPatchSchema } from '@/lib/products/schema';
@@ -7,18 +7,16 @@ export async function DELETE(
     request: Request,
     { params }: { params: Promise<{ id: string }> }
 ) {
-    const supabase = await createClient();
-
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const access = await requireOrgContext();
+    if (!access.ok) return accessDeniedResponse(access);
+    const { supabase, orgId } = access;
 
     const { id } = await params;
 
     const { error } = await supabase
         .from('products')
         .delete()
+        .eq('org_id', orgId)
         .eq('id', id);
 
     if (error) {
@@ -32,12 +30,9 @@ export async function PATCH(
     request: Request,
     { params }: { params: Promise<{ id: string }> }
 ) {
-    const supabase = await createClient();
-
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const access = await requireOrgContext();
+    if (!access.ok) return accessDeniedResponse(access);
+    const { supabase, orgId } = access;
 
     const { id } = await params;
     let raw: unknown;
@@ -70,6 +65,7 @@ export async function PATCH(
     const { data: currentProduct, error: fetchError } = await supabase
         .from('products')
         .select('*')
+        .eq('org_id', orgId)
         .eq('id', id)
         .single();
 
@@ -106,6 +102,7 @@ export async function PATCH(
     const { data, error } = await supabase
         .from('products')
         .update(updates)
+        .eq('org_id', orgId)
         .eq('id', id)
         .select()
         .single();

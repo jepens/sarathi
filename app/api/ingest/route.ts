@@ -1,27 +1,18 @@
-import { createClient } from '@/lib/supabase/server'
 import { generateEmbedding } from '@/lib/ai/embedding'
 import { chunkText, parseFile } from '@/lib/ai/parsing'
-import { getCurrentOrgId } from '@/lib/settings/org-context'
+import { accessDeniedResponse, requireOrgContext } from '@/lib/settings/org-context'
 import { isOrgScopedObjectPath } from '@/lib/storage/object-paths'
 import { NextResponse } from 'next/server'
 
 export async function POST(request: Request) {
     try {
-        const supabase = await createClient()
-        const { data: { user } } = await supabase.auth.getUser()
-
-        if (!user) {
-            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-        }
-
         // Stamp each chunk with the uploader's org so retrieval (filter_org_id)
         // and the documents-table RLS isolate this tenant's KB. Without it the
         // row falls to the column DEFAULT (Sailendra) and RLS rejects the insert
         // for any other tenant.
-        const orgId = await getCurrentOrgId(supabase)
-        if (!orgId) {
-            return NextResponse.json({ error: 'No organization for current user' }, { status: 403 })
-        }
+        const access = await requireOrgContext()
+        if (!access.ok) return accessDeniedResponse(access)
+        const { supabase, orgId } = access
 
         const { filePath, fileType } = await request.json()
 

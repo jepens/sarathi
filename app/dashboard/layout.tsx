@@ -4,7 +4,8 @@ import { MobileNav } from "@/components/mobile-nav"
 import { NavProgress } from "@/components/nav-progress"
 import { NotificationProvider } from "@/components/notifications/notification-provider"
 import { CurrentOrgProvider } from "@/components/current-org-provider"
-import { getCurrentOrgId } from "@/lib/settings/org-context"
+import { redirect } from "next/navigation"
+import { requireOrgContext } from "@/lib/settings/org-context"
 
 export default async function DashboardLayout({
     children,
@@ -14,9 +15,14 @@ export default async function DashboardLayout({
     // Read the persisted collapse choice server-side so the rail renders at its
     // final width immediately (no collapse/expand flash on load).
     const sidebarCollapsed = (await cookies()).get("sidebar_collapsed")?.value === "1"
-    // The user's org (from organization_members) for client components that
-    // write tenant rows — same resolver as the API routes, resolved once here.
-    const orgId = await getCurrentOrgId()
+    // Defense in depth behind the proxy redirect: no verified session → login.
+    // The same cached context (React cache) is reused by pages below, and
+    // gives client components that write tenant rows the user's org — the
+    // same resolver as the API routes. A signed-in non-member gets orgId null
+    // (writes refuse with a clear message).
+    const access = await requireOrgContext()
+    if (!access.ok && access.status === 401) redirect("/login")
+    const orgId = access.ok ? access.orgId : null
     return (
         // Stack on mobile (top bar + content), side-by-side rail + content on md+.
         // min-h-dvh so the shell respects mobile browser chrome. The notification

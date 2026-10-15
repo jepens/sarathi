@@ -1,4 +1,4 @@
-import { createClient } from '@/lib/supabase/server';
+import { accessDeniedResponse, requireOrgContext } from '@/lib/settings/org-context';
 import { NextResponse } from 'next/server';
 import { computeFollowup } from '@/lib/followup/compute';
 
@@ -8,13 +8,9 @@ import { computeFollowup } from '@/lib/followup/compute';
 // computeFollowup directly (lib/followup/compute.ts).
 
 export async function GET() {
-    const supabase = await createClient();
-    const {
-        data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const access = await requireOrgContext();
+    if (!access.ok) return accessDeniedResponse(access);
+    const { supabase } = access;
     try {
         const data = await computeFollowup(supabase);
         return NextResponse.json(data);

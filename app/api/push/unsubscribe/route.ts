@@ -1,25 +1,23 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '@/lib/supabase/server';
+import { accessDeniedResponse, requireUserContext } from '@/lib/settings/org-context';
 
 // Remove this browser's Web Push subscription. Auth-gated and scoped to the
 // CURRENT user: only their own row for this endpoint is deleted (RLS enforces
 // the same), so nobody can drop another user's device. Deleting by endpoint is
 // naturally idempotent — a missing row is a no-op, so a double unsubscribe (or
 // unsubscribing an already-pruned endpoint) still returns ok. Called on logout
-// too, before signOut, while the session is still valid.
+// too, before signOut, while the session is still valid. Session-only gate
+// (requireUserContext): a user who lost their org membership must still be able
+// to remove their own device.
 
 interface UnsubscribeBody {
     endpoint?: unknown;
 }
 
 export async function POST(request: Request) {
-    const supabase = await createClient();
-    const {
-        data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const access = await requireUserContext();
+    if (!access.ok) return accessDeniedResponse(access);
+    const { supabase, userId } = access;
 
     let payload: UnsubscribeBody;
     try {
@@ -37,7 +35,7 @@ export async function POST(request: Request) {
         .from('push_subscriptions')
         .delete()
         .eq('endpoint', endpoint)
-        .eq('user_id', user.id);
+        .eq('user_id', userId);
     if (error) {
         console.error('push unsubscribe failed', error);
         return NextResponse.json({ error: 'Gagal menghapus langganan notifikasi' }, { status: 500 });

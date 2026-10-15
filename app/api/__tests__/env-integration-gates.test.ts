@@ -37,9 +37,13 @@ function fakeSupabase() {
 }
 
 vi.mock('@/lib/supabase/server', () => ({ createClient: vi.fn(async () => fakeSupabase()) }));
-vi.mock('@/lib/settings/org-context', () => ({
-    requireEnvIntegration: h.requireEnvIntegration,
-}));
+vi.mock('@/lib/settings/org-context', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('@/lib/settings/org-context')>();
+    return {
+        accessDeniedResponse: actual.accessDeniedResponse,
+        requireEnvIntegration: h.requireEnvIntegration,
+    };
+});
 vi.mock('@/lib/utils/logger', () => ({
     whatsappLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
@@ -82,8 +86,10 @@ const DENIED = {
 };
 const ALLOWED = {
     ok: true as const,
+    supabase: fakeSupabase(),
     userId: 'user-1',
     orgId: '5a11e024-0001-4000-8000-000000000001',
+    role: 'owner' as const,
 };
 
 const fetchMock = vi.fn();

@@ -1,6 +1,9 @@
-import { createClient } from '@/lib/supabase/server';
 import { createServiceOrServerClient } from '@/lib/supabase/service';
-import { getCurrentOrgId, isDefaultOrg } from '@/lib/settings/org-context';
+import {
+    accessDeniedResponse,
+    isDefaultOrg,
+    requireOrgContext,
+} from '@/lib/settings/org-context';
 import { getWebhookUrl, getVerifyToken } from '@/lib/settings/app-settings';
 import { resolvePublicOrigin } from '@/lib/utils/public-url';
 import { NextResponse } from 'next/server';
@@ -12,14 +15,9 @@ export const dynamic = 'force-dynamic';
 // exists) so the checklist disappears for established tenants (e.g. Sailendra,
 // which runs on env WhatsApp creds and would otherwise look "not connected").
 export async function GET(request: Request) {
-    const supabase = await createClient();
-    const {
-        data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-
-    const orgId = await getCurrentOrgId(supabase);
-    if (!orgId) return NextResponse.json({ error: 'No organization' }, { status: 403 });
+    const access = await requireOrgContext();
+    if (!access.ok) return accessDeniedResponse(access);
+    const { supabase, orgId } = access;
 
     const chatCountQ = await supabase
         .from('whatsapp_chats')

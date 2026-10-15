@@ -1,9 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import {
     decideEnvIntegrationAccess,
+    decideOrgContext,
     decideOrgMembership,
     INTEGRATION_NOT_CONFIGURED_MESSAGE,
     NO_ORG_MESSAGE,
+    NOT_SIGNED_IN_MESSAGE,
+    ORG_LOOKUP_FAILED_MESSAGE,
+    toOrgRole,
 } from '@/lib/settings/org-access';
 
 // The Fase 0 containment rules (KEA-2): a signed-in user operates only the org
@@ -18,8 +22,10 @@ describe('decideOrgMembership', () => {
         expect(decideOrgMembership({ signedIn: false, orgId: null })).toEqual({
             ok: false,
             status: 401,
-            error: 'Unauthorized',
+            error: NOT_SIGNED_IN_MESSAGE,
         });
+        // User-facing copy is Bahasa Indonesia, not a bare English status.
+        expect(NOT_SIGNED_IN_MESSAGE).toBe('Sesi tidak valid — silakan login ulang.');
     });
 
     it('403 when signed in but not a member of any org', () => {
@@ -35,6 +41,54 @@ describe('decideOrgMembership', () => {
             ok: true,
             orgId: PILOT_ORG,
         });
+    });
+});
+
+describe('decideOrgContext', () => {
+    const member = { orgId: PILOT_ORG, role: 'admin' as const };
+
+    it('401 without a verified session — membership is never consulted', () => {
+        expect(decideOrgContext({ userId: null, membership: member })).toEqual({
+            ok: false,
+            status: 401,
+            error: NOT_SIGNED_IN_MESSAGE,
+        });
+        expect(
+            decideOrgContext({ userId: null, membership: null, lookupFailed: true })
+        ).toMatchObject({ ok: false, status: 401 });
+    });
+
+    it('403 when signed in without any membership (no default-org fallback)', () => {
+        expect(decideOrgContext({ userId: 'user-1', membership: null })).toEqual({
+            ok: false,
+            status: 403,
+            error: NO_ORG_MESSAGE,
+        });
+    });
+
+    it('500 when the membership lookup itself failed (never "no org")', () => {
+        expect(
+            decideOrgContext({ userId: 'user-1', membership: null, lookupFailed: true })
+        ).toEqual({ ok: false, status: 500, error: ORG_LOOKUP_FAILED_MESSAGE });
+    });
+
+    it('returns user, org and role for a member', () => {
+        expect(decideOrgContext({ userId: 'user-1', membership: member })).toEqual({
+            ok: true,
+            userId: 'user-1',
+            orgId: PILOT_ORG,
+            role: 'admin',
+        });
+    });
+});
+
+describe('toOrgRole', () => {
+    it('keeps known roles and downgrades anything else to staff', () => {
+        expect(toOrgRole('owner')).toBe('owner');
+        expect(toOrgRole('admin')).toBe('admin');
+        expect(toOrgRole('staff')).toBe('staff');
+        expect(toOrgRole('superuser')).toBe('staff');
+        expect(toOrgRole(null)).toBe('staff');
     });
 });
 

@@ -1,4 +1,4 @@
-import { createClient } from '@/lib/supabase/server';
+import { accessDeniedResponse, requireOrgContext } from '@/lib/settings/org-context';
 import { NextResponse } from 'next/server';
 import { VENDOR_CATEGORIES, isVendorCategory } from '@/lib/vendors/categories';
 
@@ -33,14 +33,9 @@ export async function PATCH(
     request: Request,
     { params }: { params: Promise<{ id: string }> }
 ) {
-    const supabase = await createClient();
-
-    const {
-        data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const access = await requireOrgContext();
+    if (!access.ok) return accessDeniedResponse(access);
+    const { supabase, orgId } = access;
 
     const { id } = await params;
     if (!UUID_REGEX.test(id)) {
@@ -98,6 +93,7 @@ export async function PATCH(
     const { data, error } = await supabase
         .from('vendors')
         .update(patch)
+        .eq('org_id', orgId)
         .eq('id', id)
         .select()
         .single();
@@ -116,21 +112,16 @@ export async function DELETE(
     request: Request,
     { params }: { params: Promise<{ id: string }> }
 ) {
-    const supabase = await createClient();
-
-    const {
-        data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const access = await requireOrgContext();
+    if (!access.ok) return accessDeniedResponse(access);
+    const { supabase, orgId } = access;
 
     const { id } = await params;
     if (!UUID_REGEX.test(id)) {
         return NextResponse.json({ error: 'Invalid vendor id' }, { status: 400 });
     }
 
-    const { error } = await supabase.from('vendors').delete().eq('id', id);
+    const { error } = await supabase.from('vendors').delete().eq('org_id', orgId).eq('id', id);
 
     if (error) {
         return NextResponse.json({ error: error.message }, { status: 500 });

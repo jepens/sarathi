@@ -1,6 +1,5 @@
-import { createClient } from '@/lib/supabase/server';
 import { NextResponse } from 'next/server';
-import { requireEnvIntegration } from '@/lib/settings/org-context';
+import { accessDeniedResponse, requireEnvIntegration } from '@/lib/settings/org-context';
 
 // Admin diagnostic for the Zoom Server-to-Server OAuth integration that the
 // schedule_meeting tool uses to auto-provision a join link. When a booking
@@ -51,11 +50,8 @@ function toZoomGmt(date: Date): string {
 }
 
 export async function GET(request: Request) {
-    const supabase = await createClient();
-    const gate = await requireEnvIntegration('zoom', supabase);
-    if (!gate.ok) {
-        return NextResponse.json({ error: gate.error }, { status: gate.status });
-    }
+    const gate = await requireEnvIntegration('zoom');
+    if (!gate.ok) return accessDeniedResponse(gate);
 
     const doCreate = new URL(request.url).searchParams.get('create') === '1';
 

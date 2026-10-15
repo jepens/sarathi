@@ -1,15 +1,12 @@
-import { createClient } from '@/lib/supabase/server';
+import { accessDeniedResponse, requireOrgContext } from '@/lib/settings/org-context';
 import { generateEmbedding } from '@/lib/ai/embedding';
 import { NextResponse } from 'next/server';
 
 export async function POST(request: Request) {
     try {
-        const supabase = await createClient();
-        const { data: { user } } = await supabase.auth.getUser();
-
-        if (!user) {
-            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-        }
+        const access = await requireOrgContext();
+        if (!access.ok) return accessDeniedResponse(access);
+        const { supabase, orgId } = access;
 
         const { query } = await request.json();
 
@@ -28,6 +25,7 @@ export async function POST(request: Request) {
             query_embedding: queryEmbedding,
             match_threshold: 0.5, // Minimum similarity threshold
             match_count: 5, // Return top 5 results
+            filter_org_id: orgId, // only the caller's own KB
         });
 
         if (error) {

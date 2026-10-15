@@ -1,9 +1,8 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '@/lib/supabase/server';
 import { listApprovedTemplates } from '@/lib/whatsapp/templates';
 import { whatsappLogger } from '@/lib/utils/logger';
 import type { WhatsAppApiError } from '@/lib/whatsapp/client';
-import { requireEnvIntegration } from '@/lib/settings/org-context';
+import { accessDeniedResponse, requireEnvIntegration } from '@/lib/settings/org-context';
 
 // GET /api/chat/templates
 // Returns APPROVED message templates for the WABA. Used by the
@@ -13,11 +12,8 @@ import { requireEnvIntegration } from '@/lib/settings/org-context';
 export const runtime = 'nodejs';
 
 export async function GET() {
-    const supabase = await createClient();
-    const access = await requireEnvIntegration('whatsapp', supabase);
-    if (!access.ok) {
-        return NextResponse.json({ error: access.error }, { status: access.status });
-    }
+    const access = await requireEnvIntegration('whatsapp');
+    if (!access.ok) return accessDeniedResponse(access);
 
     try {
         const templates = await listApprovedTemplates();

@@ -4,12 +4,12 @@ import { defineConfig, devices } from '@playwright/test';
 //
 // These drive a REAL browser against the built app to prove the deployable
 // artifact actually boots and serves end-to-end (not just compiles): the
-// Sarathi landing renders, the login page works, and the middleware auth-gate
-// redirects unauthenticated visitors away from /dashboard.
+// Sarathi landing renders, the login page works, and the proxy (proxy.ts)
+// auth-gate redirects unauthenticated visitors away from /dashboard.
 //
 // They run UNAUTHENTICATED against placeholder Supabase env — no live database,
 // no secrets — so they are safe to run in CI on every push. With no session
-// cookie, supabase `getUser()` returns null without a network call, so every
+// cookie, supabase `getClaims()` returns null without a network call, so every
 // /dashboard request deterministically redirects to /login.
 //
 // We exercise the PRODUCTION build (`next build` + `next start`), not `next dev`:

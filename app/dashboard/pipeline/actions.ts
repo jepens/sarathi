@@ -5,7 +5,6 @@
 // to the browser and there's no cross-origin call from the client.
 
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { createClient } from '@/lib/supabase/server';
 import { isPortalConfigured } from '@/lib/portal/config';
 import { postHandoff, PortalError } from '@/lib/portal/client';
 import { requireEnvIntegration } from '@/lib/settings/org-context';
@@ -65,18 +64,12 @@ export async function handoffToPortal(raw: unknown): Promise<HandoffResult> {
     }
     const input = parsed.data;
 
-    const supabase = await createClient();
     // The Portal (and PORTAL_INTAKE_TOKEN) belong to the default org, so only
     // its members may hand off — checked before the Portal is called. The lead
     // lookup + link write are scoped to that org explicitly.
-    const access = await requireEnvIntegration('portal', supabase);
-    if (!access.ok) {
-        return {
-            ok: false,
-            error: access.status === 401 ? 'Sesi tidak valid — silakan login ulang.' : access.error,
-        };
-    }
-    const orgId = access.orgId;
+    const access = await requireEnvIntegration('portal');
+    if (!access.ok) return { ok: false, error: access.error };
+    const { supabase, orgId } = access;
 
     const { data, error } = await supabase
         .from('whatsapp_chats')

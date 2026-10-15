@@ -1,7 +1,6 @@
-import { createClient } from '@/lib/supabase/server';
 import { generateEmbedding } from '@/lib/ai/embedding';
 import { chunkText } from '@/lib/ai/parsing';
-import { getCurrentOrgId } from '@/lib/settings/org-context';
+import { accessDeniedResponse, requireOrgContext } from '@/lib/settings/org-context';
 import { NextResponse } from 'next/server';
 
 // In-dashboard knowledge editor backend.
@@ -21,11 +20,9 @@ const FILE_TYPE = 'text/markdown';
 const MAX_CONTENT = 100_000; // ~100 KB of text — generous for a curated doc
 
 export async function GET(request: Request) {
-    const supabase = await createClient();
-    const {
-        data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const access = await requireOrgContext();
+    if (!access.ok) return accessDeniedResponse(access);
+    const { supabase, orgId } = access;
 
     const title = new URL(request.url).searchParams.get('title');
 
@@ -33,6 +30,7 @@ export async function GET(request: Request) {
         const { data, error } = await supabase
             .from('kb_sources')
             .select('id, title, content, updated_at')
+            .eq('org_id', orgId)
             .eq('title', title)
             .maybeSingle();
         if (error) return NextResponse.json({ error: error.message }, { status: 500 });
@@ -43,24 +41,22 @@ export async function GET(request: Request) {
     const { data, error } = await supabase
         .from('kb_sources')
         .select('id, title, updated_at')
+        .eq('org_id', orgId)
         .order('updated_at', { ascending: false });
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     return NextResponse.json({ sources: data ?? [] });
 }
 
 export async function POST(request: Request) {
-    const supabase = await createClient();
-    const {
-        data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const access = await requireOrgContext();
+    if (!access.ok) return accessDeniedResponse(access);
+    const { supabase, orgId } = access;
 
-    // Editor-authored KB belongs to the user's org. Required: kb_sources + the
-    // derived documents rows have org_id NOT NULL with an is_org_member RLS
-    // with_check, so without an explicit org_id a non-Sailendra tenant's save
-    // would be rejected (and the seed default would mis-attribute it).
-    const orgId = await getCurrentOrgId(supabase);
-    if (!orgId) return NextResponse.json({ error: 'No organization for current user' }, { status: 403 });
+    // Editor-authored KB belongs to the user's org (orgId above). Required:
+    // kb_sources + the derived documents rows have org_id NOT NULL with an
+    // is_org_member RLS with_check, so without an explicit org_id a
+    // non-Sailendra tenant's save would be rejected (and the seed default would
+    // mis-attribute it).
 
     let body: { title?: unknown; content?: unknown };
     try {
@@ -97,7 +93,7 @@ export async function POST(request: Request) {
     // 1. Upsert the canonical editable source.
     const { error: upsertErr } = await supabase
         .from('kb_sources')
-        .upsert({ org_id: orgId, title, content, created_by: user.id, updated_at: new Date().toISOString() }, { onConflict: 'org_id,title' });
+        .upsert({ org_id: orgId, title, content, created_by: access.userId, updated_at: new Date().toISOString() }, { onConflict: 'org_id,title' });
     if (upsertErr) {
         return NextResponse.json({ error: `Gagal menyimpan sumber: ${upsertErr.message}` }, { status: 500 });
     }
@@ -107,6 +103,7 @@ export async function POST(request: Request) {
     const { error: delErr } = await supabase
         .from('documents')
         .delete()
+        .eq('org_id', orgId)
         .eq('metadata->>source', title);
     if (delErr) {
         return NextResponse.json({ error: `Gagal membersihkan chunk lama: ${delErr.message}` }, { status: 500 });
@@ -137,20 +134,26 @@ export async function POST(request: Request) {
 }
 
 export async function DELETE(request: Request) {
-    const supabase = await createClient();
-    const {
-        data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const access = await requireOrgContext();
+    if (!access.ok) return accessDeniedResponse(access);
+    const { supabase, orgId } = access;
 
     const title = new URL(request.url).searchParams.get('title');
     if (!title) return NextResponse.json({ error: 'title wajib' }, { status: 400 });
 
     // Delete derived chunks first, then the canonical source.
-    const { error: docErr } = await supabase.from('documents').delete().eq('metadata->>source', title);
+    const { error: docErr } = await supabase
+        .from('documents')
+        .delete()
+        .eq('org_id', orgId)
+        .eq('metadata->>source', title);
     if (docErr) return NextResponse.json({ error: docErr.message }, { status: 500 });
 
-    const { error: srcErr } = await supabase.from('kb_sources').delete().eq('title', title);
+    const { error: srcErr } = await supabase
+        .from('kb_sources')
+        .delete()
+        .eq('org_id', orgId)
+        .eq('title', title);
     if (srcErr) return NextResponse.json({ error: srcErr.message }, { status: 500 });
 
     return NextResponse.json({ ok: true });

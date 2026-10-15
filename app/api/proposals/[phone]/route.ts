@@ -1,8 +1,11 @@
-import { createClient } from '@/lib/supabase/server';
 import { NextResponse } from 'next/server';
 import { sendProposalEmail } from '@/lib/proposals/send';
 import { normalizeFnaSnapshot } from '@/lib/proposals/fna';
-import { requireEnvIntegration } from '@/lib/settings/org-context';
+import {
+    accessDeniedResponse,
+    requireEnvIntegration,
+    requireOrgContext,
+} from '@/lib/settings/org-context';
 
 // @react-pdf/renderer + Resend SDK both Node-only — pin to avoid future Edge migration.
 export const runtime = 'nodejs';
@@ -14,14 +17,9 @@ export async function GET(
     _request: Request,
     { params }: { params: Promise<{ phone: string }> }
 ) {
-    const supabase = await createClient();
-
-    const {
-        data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const access = await requireOrgContext();
+    if (!access.ok) return accessDeniedResponse(access);
+    const { supabase, orgId } = access;
 
     const { phone } = await params;
     if (!phone) {
@@ -33,6 +31,7 @@ export async function GET(
         .select(
             'id, proposal_ref, source, file_path, intro_note, sent_at, sent_to_email, email_provider_id, skipped_reason, created_at, fna_snapshot'
         )
+        .eq('org_id', orgId)
         .eq('lead_phone', phone)
         .not('sent_at', 'is', null)
         .order('created_at', { ascending: false });
@@ -55,14 +54,10 @@ export async function POST(
     request: Request,
     { params }: { params: Promise<{ phone: string }> }
 ) {
-    const supabase = await createClient();
-
     // The proposal email goes out through the env Resend account with
     // Sailendra's sender + subject, so only default-org members may send.
-    const access = await requireEnvIntegration('email', supabase);
-    if (!access.ok) {
-        return NextResponse.json({ error: access.error }, { status: access.status });
-    }
+    const access = await requireEnvIntegration('email');
+    if (!access.ok) return accessDeniedResponse(access);
 
     const { phone } = await params;
     if (!phone) {
