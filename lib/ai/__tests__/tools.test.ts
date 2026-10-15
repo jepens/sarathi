@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { makeFakeSupabase, type FakeSupabase, type Resolver } from '@/lib/whatsapp/__tests__/fakeSupabase';
 
 // The executors only touch Supabase + the meeting side-effect modules. Mock
@@ -157,6 +157,30 @@ describe('handoff_to_human (KEA-12)', () => {
 describe('one active meeting per customer (KEA-12)', () => {
     // A future Tuesday, 14:00 WIB — passes the weekday + business-hours rules.
     const SLOT = '2030-06-04T14:00:00+07:00';
+    // Also a Tuesday 14:00 WIB, but 9 weeks out — beyond the 30-day booking horizon.
+    const SLOT_TOO_FAR = '2030-08-06T14:00:00+07:00';
+
+    // Pin "now" a few days before SLOT so the 30-day booking horizon (D13) holds.
+    // Only Date is faked, so promise/timer scheduling is untouched.
+    beforeEach(() => {
+        vi.useFakeTimers({ toFake: ['Date'] });
+        vi.setSystemTime(new Date('2030-06-01T08:00:00+07:00'));
+    });
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it('refuses a slot beyond the booking horizon in both tools, before touching the DB', async () => {
+        setup(() => ({ data: null, error: null }));
+        const booked = JSON.parse(await scheduleMeeting(ORG_A, PHONE, SLOT_TOO_FAR, null));
+        expect(booked.ok).toBe(false);
+        expect(booked.error).toContain('30 hari');
+        const avail = JSON.parse(await checkMeetingAvailability(ORG_A, SLOT_TOO_FAR, PHONE));
+        expect(avail.available).toBe(false);
+        expect(avail.reason).toContain('30 hari');
+        expect(fake.rpcCalls).toHaveLength(0);
+        expect(fake.calls).toHaveLength(0);
+    });
 
     it('schedule_meeting relays customer_limit with the existing time and books nothing', async () => {
         setup(

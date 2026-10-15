@@ -4,6 +4,7 @@ import { type BusinessProfile } from '@/lib/settings/business-profile';
 import {
     validateMeetingWindow,
     validateMeetingDay,
+    validateMeetingHorizon,
     jakartaDayRangeUtc,
     meetingTitle,
     normalizeMeetingIso,
@@ -723,6 +724,10 @@ export async function checkMeetingAvailability(
         if (meetingDate.getTime() < Date.now() - 60_000) {
             return JSON.stringify({ available: false, reason: 'Jam itu sudah lewat. Tawarkan waktu yang akan datang.' });
         }
+        const horizonCheck = validateMeetingHorizon(meetingDate);
+        if (!horizonCheck.ok) {
+            return JSON.stringify({ available: false, reason: horizonCheck.error });
+        }
         const dayCheck = validateMeetingDay(meetingDate);
         if (!dayCheck.ok) {
             return JSON.stringify({ available: false, reason: dayCheck.error });
@@ -833,6 +838,12 @@ export async function scheduleMeeting(
         }
 
         const durationMin = resolveMeetingDuration();
+
+        // Booking horizon: no meetings further out than MAX_BOOKING_HORIZON_DAYS.
+        const horizonCheck = validateMeetingHorizon(meetingDate);
+        if (!horizonCheck.ok) {
+            return JSON.stringify({ ok: false, error: horizonCheck.error });
+        }
 
         // Working days only: Saturday & Sunday are treated as holidays.
         const dayCheck = validateMeetingDay(meetingDate);

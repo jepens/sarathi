@@ -4,6 +4,7 @@ import {
     jakartaDayRangeUtc,
     validateMeetingWindow,
     validateMeetingDay,
+    validateMeetingHorizon,
     isWeekend,
     isDayFull,
     meetingTitle,
@@ -11,7 +12,28 @@ import {
     meetingSlotsOverlap,
     MAX_MEETINGS_PER_DAY,
     MEETING_BUFFER_MIN,
+    MAX_BOOKING_HORIZON_DAYS,
 } from '@/lib/meetings/rules';
+
+describe('validateMeetingHorizon', () => {
+    const now = new Date('2026-10-15T10:00:00+07:00');
+    const DAY = 24 * 60 * 60_000;
+
+    it('accepts a meeting inside the horizon', () => {
+        expect(validateMeetingHorizon(new Date(now.getTime() + DAY), now)).toEqual({ ok: true });
+        expect(validateMeetingHorizon(new Date(now.getTime() + MAX_BOOKING_HORIZON_DAYS * DAY), now)).toEqual({ ok: true });
+    });
+
+    it('rejects a meeting beyond the horizon with an actionable message', () => {
+        const res = validateMeetingHorizon(new Date(now.getTime() + MAX_BOOKING_HORIZON_DAYS * DAY + 60_000), now);
+        expect(res.ok).toBe(false);
+        if (!res.ok) expect(res.error).toContain(`${MAX_BOOKING_HORIZON_DAYS} hari`);
+    });
+
+    it('is 30 days per owner decision D13', () => {
+        expect(MAX_BOOKING_HORIZON_DAYS).toBe(30);
+    });
+});
 
 describe('jakartaParts', () => {
     it('reads WIB wall-clock regardless of input offset', () => {
