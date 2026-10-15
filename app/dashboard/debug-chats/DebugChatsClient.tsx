@@ -21,7 +21,7 @@ interface Message {
     created_at: string;
 }
 
-export default function DebugChatsPage() {
+export default function DebugChatsClient() {
     const [chats, setChats] = useState<Chat[]>([]);
     const [messages, setMessages] = useState<Message[]>([]);
     const [loading, setLoading] = useState(true);

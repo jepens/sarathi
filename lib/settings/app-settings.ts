@@ -77,11 +77,12 @@ export async function getWebhookUrl(client?: SupabaseClient): Promise<string> {
 }
 
 /**
- * Get verify token from settings (with fallback to env)
+ * Get verify token from settings (with fallback to env). Returns '' when none is
+ * configured — never a guessable default, so verification fails closed.
  */
 export async function getVerifyToken(client?: SupabaseClient): Promise<string> {
     const token = await getAppSetting('whatsapp_verify_token', client);
-    return token || process.env.WHATSAPP_VERIFY_TOKEN || '123456';
+    return token || process.env.WHATSAPP_VERIFY_TOKEN || '';
 }
 
 /**
@@ -108,7 +109,7 @@ export async function checkVerifyToken(inputToken: string, client?: SupabaseClie
     // Fallback for development/if RPC fails (e.g. function not created yet)
     // This might fail if RLS blocks access, but it's a backup.
     const storedToken = await getVerifyToken(client);
-    return storedToken === inputToken;
+    return storedToken !== '' && storedToken === inputToken;
 }
 
 /**

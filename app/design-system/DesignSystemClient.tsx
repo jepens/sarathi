@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { toast } from "sonner"
 
-export default function DesignSystemPage() {
+export default function DesignSystemClient() {
     return (
         <div className="min-h-screen bg-background p-10 space-y-10">
             <div className="space-y-2">
