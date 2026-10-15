@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server';
 import { NextResponse } from 'next/server';
 import { generateEmbedding } from '@/lib/ai/embedding';
+import { productPatchSchema } from '@/lib/products/schema';
 
 export async function DELETE(
     request: Request,
@@ -39,15 +40,31 @@ export async function PATCH(
     }
 
     const { id } = await params;
-    const body = await request.json();
-    const { name, description, price, stock, type } = body;
-
-    // Validate type if provided
-    if (type && type !== 'product' && type !== 'service') {
-        return NextResponse.json({ error: 'Invalid type. Must be "product" or "service"' }, { status: 400 });
+    let raw: unknown;
+    try {
+        raw = await request.json();
+    } catch {
+        return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
     }
 
-    const updates: Record<string, unknown> = { ...body };
+    // Whitelist the editable columns (KEA-18). Unknown keys — id, org_id,
+    // created_at, embedding, … — are dropped, never written.
+    const parsed = productPatchSchema.safeParse(raw);
+    if (!parsed.success) {
+        return NextResponse.json(
+            { error: parsed.error.issues[0]?.message ?? 'Data produk tidak valid' },
+            { status: 400 }
+        );
+    }
+    const { name, description, price } = parsed.data;
+    const stock = parsed.data.stock ?? undefined;
+    const type = parsed.data.type ?? undefined;
+
+    const updates: Record<string, unknown> = {};
+    if (name !== undefined) updates.name = name;
+    if (description !== undefined) updates.description = description;
+    if (price !== undefined) updates.price = price;
+    if (type !== undefined) updates.type = type;
 
     // Fetch current product data
     const { data: currentProduct, error: fetchError } = await supabase

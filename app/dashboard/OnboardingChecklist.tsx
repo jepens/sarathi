@@ -15,6 +15,8 @@ import { CheckCircle2, Circle, ArrowRight, Copy, Check, Webhook } from 'lucide-r
 interface OnboardingStatus {
     show: boolean;
     steps: { profile: boolean; whatsapp: boolean; knowledge: boolean };
+    /** false for orgs whose WhatsApp is set up by the Sarathi team. */
+    webhookVisible?: boolean;
     webhookUrl: string | null;
     verifyToken: string | null;
 }
@@ -120,21 +122,32 @@ export function OnboardingChecklist() {
                 })}
 
                 {/* Manual Meta step — can't be auto-detected, so show exactly what
-                    to paste into the Meta App webhook config. The Callback URL &
-                    Verify Token are shared across tenants (the webhook routes by
-                    phone_number_id). */}
-                <div className="space-y-2 rounded-lg border border-dashed p-3">
-                    <p className="flex items-center gap-2 text-sm font-medium">
-                        <Webhook className="h-4 w-4" /> Arahkan webhook Meta ke Sarathi
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                        Di Meta App → WhatsApp → Configuration, isi Callback URL &
-                        Verify Token berikut, lalu subscribe ke field{' '}
-                        <span className="font-mono">messages</span>.
-                    </p>
-                    <CopyRow label="Callback URL" value={status.webhookUrl} copied={copied} onCopy={copy} />
-                    <CopyRow label="Verify Token" value={status.verifyToken} copied={copied} onCopy={copy} />
-                </div>
+                    to paste into the Meta App webhook config. Only the default
+                    org gets the values; other tenants' webhook is configured by
+                    the Sarathi team, so they see a neutral note. */}
+                {status.webhookVisible === false ? (
+                    <div className="space-y-1 rounded-lg border border-dashed p-3">
+                        <p className="flex items-center gap-2 text-sm font-medium">
+                            <Webhook className="h-4 w-4" /> Webhook WhatsApp
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                            Nomor & webhook WhatsApp organisasi Anda diatur oleh tim Sarathi.
+                        </p>
+                    </div>
+                ) : (
+                    <div className="space-y-2 rounded-lg border border-dashed p-3">
+                        <p className="flex items-center gap-2 text-sm font-medium">
+                            <Webhook className="h-4 w-4" /> Arahkan webhook Meta ke Sarathi
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                            Di Meta App → WhatsApp → Configuration, isi Callback URL &
+                            Verify Token berikut, lalu subscribe ke field{' '}
+                            <span className="font-mono">messages</span>.
+                        </p>
+                        <CopyRow label="Callback URL" value={status.webhookUrl} copied={copied} onCopy={copy} />
+                        <CopyRow label="Verify Token" value={status.verifyToken} copied={copied} onCopy={copy} />
+                    </div>
+                )}
             </CardContent>
         </Card>
     );

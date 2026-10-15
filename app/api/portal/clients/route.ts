@@ -2,19 +2,19 @@ import { createClient } from '@/lib/supabase/server';
 import { NextResponse } from 'next/server';
 import { isPortalConfigured } from '@/lib/portal/config';
 import { searchPortalClients } from '@/lib/portal/client';
+import { requireEnvIntegration } from '@/lib/settings/org-context';
 
 // Search proxy for the handoff picker. The browser calls THIS route (same
-// origin, auth-gated); we call the Portal server-to-server with the shared
+// origin, gated to members of the default org — the Portal + its token are
+// Sailendra's); we call the Portal server-to-server with the shared
 // token. This keeps PORTAL_INTAKE_TOKEN server-side and dodges CORS, while
 // staying snappy for debounced typeahead (a plain GET, not a serialized action).
 
 export async function GET(request: Request) {
     const supabase = await createClient();
-    const {
-        data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const access = await requireEnvIntegration('portal', supabase);
+    if (!access.ok) {
+        return NextResponse.json({ error: access.error }, { status: access.status });
     }
 
     if (!isPortalConfigured()) {

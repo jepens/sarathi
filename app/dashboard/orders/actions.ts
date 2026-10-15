@@ -8,7 +8,8 @@
 import { createClient } from '@/lib/supabase/server';
 import { reduceStock, returnStock } from '@/lib/inventory/stock';
 import { sendPaymentNotification, sendCancellationNotification } from '@/lib/notifications/notifications';
-import { getCurrentOrgId } from '@/lib/settings/org-context';
+import { getCurrentOrgId, isDefaultOrg, requireOrgMember } from '@/lib/settings/org-context';
+import { isBookingStatus, planStatusSideEffects } from '@/lib/bookings/status-effects';
 import { createOrFillLead } from '@/lib/leads/create';
 import { normalizePhone } from '@/lib/leads/schema';
 import {
@@ -24,42 +25,103 @@ interface OrderItem {
     price?: number;
 }
 
-interface Order {
+// The order row as the status transition reads it from the DB (nullable
+// columns included — normalised before the notification helpers see them).
+interface OrderRow {
     id: string;
-    customer_name: string;
-    customer_phone: string;
-    items: OrderItem[];
-    total_amount: number;
-    delivery_info: string;
-    order_type: 'product' | 'service';
-    status: string;
+    status: string | null;
+    customer_name: string | null;
+    customer_phone: string | null;
+    items: OrderItem[] | null;
+    total_amount: number | null;
+    delivery_info: string | null;
+    order_type: 'product' | 'service' | null;
 }
 
+const STATUS_ORDER_SELECT =
+    'id, status, customer_name, customer_phone, items, total_amount, delivery_info, order_type';
+
+/**
+ * Change an order's status and run the transition's side effects (stock +
+ * customer WhatsApp). Hardened (KEA-19):
+ *   - requires a signed-in org member;
+ *   - loads the order from the DB (RLS + explicit org filter) — the client no
+ *     longer supplies the order object, so it can't forge the name/items/total
+ *     /phone that end up in a WhatsApp message;
+ *   - compare-and-set on the status it read, and side effects run only when
+ *     that update really changed a row (no phantom notifications for a
+ *     foreign/unknown id, and no double send on concurrent clicks);
+ *   - WhatsApp notifications only for the default org (env credentials).
+ */
 export async function updateOrderStatus(
     orderId: string,
-    newStatus: string,
-    currentOrder: Order
+    newStatus: string
 ): Promise<{ success: boolean; message: string }> {
     try {
-        const supabase = await createClient();
-        const oldStatus = currentOrder.status;
+        if (typeof orderId !== 'string' || !orderId) {
+            return { success: false, message: 'Order tidak valid' };
+        }
+        if (!isBookingStatus(newStatus)) {
+            return { success: false, message: 'Status tidak valid' };
+        }
 
-        // Update status in database
-        const { error } = await supabase
+        const supabase = await createClient();
+        const access = await requireOrgMember(supabase);
+        if (!access.ok) {
+            return {
+                success: false,
+                message: access.status === 401 ? 'Sesi tidak valid — silakan login ulang.' : access.error,
+            };
+        }
+        const orgId = access.orgId;
+
+        const { data, error: loadError } = await supabase
+            .from('orders')
+            .select(STATUS_ORDER_SELECT)
+            .eq('id', orderId)
+            .eq('org_id', orgId)
+            .maybeSingle();
+        if (loadError) {
+            return { success: false, message: 'Gagal memuat order' };
+        }
+        if (!data) {
+            return { success: false, message: 'Order tidak ditemukan' };
+        }
+        const order = data as unknown as OrderRow;
+        const oldStatus = order.status;
+
+        if (oldStatus === newStatus) {
+            return { success: true, message: `Status sudah ${newStatus}` };
+        }
+
+        // Compare-and-set: only flip the row if it still has the status we
+        // read, so concurrent clicks can't both run the side effects.
+        let update = supabase
             .from('orders')
             .update({ status: newStatus })
-            .eq('id', orderId);
+            .eq('id', orderId)
+            .eq('org_id', orgId);
+        update = oldStatus === null ? update.is('status', null) : update.eq('status', oldStatus);
+        const { data: updated, error } = await update.select('id');
 
         if (error) {
             return { success: false, message: 'Gagal mengupdate status' };
         }
+        if (!updated || updated.length === 0) {
+            return {
+                success: false,
+                message: 'Status order sudah berubah. Muat ulang halaman lalu coba lagi.',
+            };
+        }
 
+        const effects = planStatusSideEffects(oldStatus, newStatus);
+        const items = Array.isArray(order.items) ? order.items : [];
         let message = `Status diubah menjadi ${newStatus}`;
 
         // Handle stock operations based on status transition
-        if (newStatus === 'paid' && oldStatus !== 'paid') {
+        if (effects.reduceStock) {
             // Reduce stock when payment is confirmed
-            const stockResult = await reduceStock(currentOrder.items);
+            const stockResult = await reduceStock(items);
 
             if (stockResult.success) {
                 message = 'Status diubah menjadi paid & stok dikurangi';
@@ -67,26 +129,37 @@ export async function updateOrderStatus(
                 message = 'Status diubah menjadi paid (warning: gagal mengurangi stok)';
                 console.error('Stock reduction failed:', stockResult.error);
             }
-
-            // Send WhatsApp notification
-            await sendPaymentNotification(currentOrder);
-        } else if (newStatus === 'cancelled') {
+        } else if (effects.returnStock) {
             // Return stock if order was previously paid
-            if (oldStatus === 'paid' || oldStatus === 'shipped') {
-                const stockResult = await returnStock(currentOrder.items);
+            const stockResult = await returnStock(items);
 
-                if (stockResult.success) {
-                    message = 'Pesanan dibatalkan & stok dikembalikan';
-                } else {
-                    message = 'Pesanan dibatalkan (warning: gagal mengembalikan stok)';
-                    console.error('Stock return failed:', stockResult.error);
-                }
+            if (stockResult.success) {
+                message = 'Pesanan dibatalkan & stok dikembalikan';
             } else {
-                message = 'Pesanan dibatalkan';
+                message = 'Pesanan dibatalkan (warning: gagal mengembalikan stok)';
+                console.error('Stock return failed:', stockResult.error);
             }
+        } else if (newStatus === 'cancelled') {
+            message = 'Pesanan dibatalkan';
+        }
 
-            // Send cancellation notification
-            await sendCancellationNotification(currentOrder);
+        // Customer WhatsApp goes out through the env (default-org) number only,
+        // built from the DB row.
+        if (effects.notify && order.customer_phone && (await isDefaultOrg(orgId))) {
+            const notifyOrder = {
+                id: order.id,
+                customer_name: order.customer_name ?? '',
+                customer_phone: order.customer_phone,
+                items,
+                total_amount: Number(order.total_amount ?? 0),
+                delivery_info: order.delivery_info ?? '',
+                order_type: order.order_type ?? 'service',
+            };
+            if (effects.notify === 'payment') {
+                await sendPaymentNotification(notifyOrder);
+            } else {
+                await sendCancellationNotification(notifyOrder);
+            }
         }
 
         return { success: true, message };

@@ -8,7 +8,7 @@ import {
 } from '@/lib/whatsapp/templates';
 import { describeWhatsAppError, type WhatsAppApiError } from '@/lib/whatsapp/client';
 import { whatsappLogger } from '@/lib/utils/logger';
-import { getCurrentOrgId } from '@/lib/settings/org-context';
+import { requireEnvIntegration } from '@/lib/settings/org-context';
 
 // POST /api/chat/send-template
 // Body: { phone_number, template_name, language, variables?: string[] }
@@ -33,18 +33,15 @@ function isStringArray(v: unknown): v is string[] {
 
 export async function POST(request: Request) {
     const supabase = await createClient();
-    const {
-        data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
 
-    // Explicit org for the composite (org_id, phone_number) key — see send/route.ts.
-    const orgId = await getCurrentOrgId(supabase);
-    if (!orgId) {
-        return NextResponse.json({ error: 'No organization for current user' }, { status: 403 });
+    // Explicit org for the composite (org_id, phone_number) key — see
+    // send/route.ts. Must be the default org (env WhatsApp credentials); checked
+    // before the template lookup + send hit Meta.
+    const access = await requireEnvIntegration('whatsapp', supabase);
+    if (!access.ok) {
+        return NextResponse.json({ error: access.error }, { status: access.status });
     }
+    const orgId = access.orgId;
 
     let body: SendTemplateBody;
     try {

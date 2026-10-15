@@ -1,12 +1,14 @@
 import { createClient } from '@/lib/supabase/server';
 import { NextResponse } from 'next/server';
+import { requireEnvIntegration } from '@/lib/settings/org-context';
 
 // Admin diagnostic for the Zoom Server-to-Server OAuth integration that the
 // schedule_meeting tool uses to auto-provision a join link. When a booking
 // stays 'pending-link', this endpoint tells you WHY without opening container
 // logs: which ZOOM_* vars are present, whether an access token can be minted,
 // and (with ?create=1) whether a meeting can actually be created for
-// ZOOM_HOST_USER. Auth-gated to a dashboard session — treat as admin-only.
+// ZOOM_HOST_USER. Gated to members of the default org (the Zoom account in env
+// is Sailendra's) — checked before any Zoom call. Treat as admin-only.
 //
 // SECRET SAFETY: never returns secret VALUES — only presence booleans, the
 // account id's last 4, the (non-secret) host user, and capped error snippets.
@@ -50,11 +52,9 @@ function toZoomGmt(date: Date): string {
 
 export async function GET(request: Request) {
     const supabase = await createClient();
-    const {
-        data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const gate = await requireEnvIntegration('zoom', supabase);
+    if (!gate.ok) {
+        return NextResponse.json({ error: gate.error }, { status: gate.status });
     }
 
     const doCreate = new URL(request.url).searchParams.get('create') === '1';

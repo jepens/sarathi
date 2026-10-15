@@ -1,14 +1,16 @@
 import { NextResponse } from 'next/server';
 import { generateRAGResponse, ChatMessage } from '@/lib/ai/rag';
 import { createClient } from '@/lib/supabase/server';
+import { requireOrgMember } from '@/lib/settings/org-context';
 
 export async function POST(request: Request) {
     try {
         const supabase = await createClient();
-        const { data: { user } } = await supabase.auth.getUser();
-
-        if (!user) {
-            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        // The sandbox answers as the caller's OWN org (KB, products, persona) —
+        // never the default org's.
+        const access = await requireOrgMember(supabase);
+        if (!access.ok) {
+            return NextResponse.json({ error: access.error }, { status: access.status });
         }
 
         const { message, history } = await request.json();
@@ -20,7 +22,9 @@ export async function POST(request: Request) {
             );
         }
 
-        const response = await generateRAGResponse(message, history as ChatMessage[], undefined);
+        const response = await generateRAGResponse(message, history as ChatMessage[], undefined, {
+            orgId: access.orgId,
+        });
 
         return NextResponse.json(response);
 

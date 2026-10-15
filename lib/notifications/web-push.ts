@@ -2,6 +2,10 @@ import 'server-only';
 import webpush from 'web-push';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { whatsappLogger } from '@/lib/utils/logger';
+import {
+    filterSubscriptionsToMembers,
+    type OwnedSubscriptionRow,
+} from '@/lib/notifications/push-targets';
 
 // Server-side Web Push fan-out (Tier 2 notifications).
 //
@@ -21,12 +25,6 @@ export interface PushPayload {
     phone: string;
     /** Where notificationclick should land (e.g. /dashboard/chats?phone=…). */
     url: string;
-}
-
-interface SubscriptionRow {
-    endpoint: string;
-    p256dh: string;
-    auth: string;
 }
 
 const PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || '';
@@ -66,7 +64,8 @@ function ensureVapid(): boolean {
 }
 
 /**
- * Fan a Web Push notification out to every subscribed device in the org.
+ * Fan a Web Push notification out to every subscribed device in the org whose
+ * owner is still a member of that org (a removed member's devices are skipped).
  * Best-effort and self-contained: never throws, prunes dead subscriptions
  * (HTTP 404/410 from the push service), and no-ops when push is not configured.
  *
@@ -82,14 +81,30 @@ export async function sendPushToOrg(
 
     const { data, error } = await supabase
         .from('push_subscriptions')
-        .select('endpoint, p256dh, auth')
+        .select('endpoint, p256dh, auth, user_id')
         .eq('org_id', orgId);
 
     if (error) {
         whatsappLogger.error('Web push: failed to load subscriptions', error);
         return;
     }
-    const subs = (data ?? []) as SubscriptionRow[];
+    const rows = (data ?? []) as OwnedSubscriptionRow[];
+    if (rows.length === 0) return;
+
+    // Only devices owned by CURRENT members of the org receive its message
+    // previews. Fail closed: if membership can't be read, send nothing.
+    const { data: members, error: membersErr } = await supabase
+        .from('organization_members')
+        .select('user_id')
+        .eq('org_id', orgId);
+    if (membersErr) {
+        whatsappLogger.error('Web push: failed to load org members', membersErr);
+        return;
+    }
+    const subs = filterSubscriptionsToMembers(
+        rows,
+        (members ?? []).map((m) => m.user_id as string),
+    );
     if (subs.length === 0) return;
 
     // Keep the payload small (push services cap at ~4KB) and safe to render.

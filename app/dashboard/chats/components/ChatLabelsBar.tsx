@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
+import { useCurrentOrgId } from '@/components/current-org-provider';
 import {
     DropdownMenu,
     DropdownMenuTrigger,
@@ -23,6 +24,9 @@ import { labelColor, sortLabels, type Label } from '@/lib/labels';
 // contained — it owns its own fetch + realtime so ChatWindow only drops it in.
 export function ChatLabelsBar({ phoneNumber }: { phoneNumber: string }) {
     const supabase = createClient();
+    // Explicit org: chat_labels' key is (org_id, phone_number, label_id), so
+    // reads, deletes and the upsert all target this org's rows.
+    const orgId = useCurrentOrgId();
     const [labels, setLabels] = useState<Label[]>([]);
     const [assignedIds, setAssignedIds] = useState<Set<string>>(new Set());
 
@@ -34,18 +38,24 @@ export function ChatLabelsBar({ phoneNumber }: { phoneNumber: string }) {
     phoneRef.current = phoneNumber;
 
     const fetchLabels = useCallback(async () => {
-        const { data, error } = await supabase.from('labels').select('id, name, color');
+        if (!orgId) return;
+        const { data, error } = await supabase
+            .from('labels')
+            .select('id, name, color')
+            .eq('org_id', orgId);
         if (!error) setLabels(sortLabels(data ?? []));
-    }, [supabase]);
+    }, [supabase, orgId]);
 
     const fetchAssignments = useCallback(async () => {
+        if (!orgId) return;
         const { data, error } = await supabase
             .from('chat_labels')
             .select('label_id')
+            .eq('org_id', orgId)
             .eq('phone_number', phoneNumber);
         if (phoneRef.current !== phoneNumber) return; // a newer chat is open — drop this stale result
         if (!error) setAssignedIds(new Set((data ?? []).map((r) => r.label_id as string)));
-    }, [supabase, phoneNumber]);
+    }, [supabase, orgId, phoneNumber]);
 
     useEffect(() => {
         // Reset while the new chat's rows load so we never briefly show the
@@ -75,6 +85,10 @@ export function ChatLabelsBar({ phoneNumber }: { phoneNumber: string }) {
     const assigned = useMemo(() => labels.filter((l) => assignedIds.has(l.id)), [labels, assignedIds]);
 
     const toggle = async (labelId: string) => {
+        if (!orgId) {
+            toast.error('Gagal memperbarui label chat');
+            return;
+        }
         const isAssigned = assignedIds.has(labelId);
         // Optimistic — realtime + the catch-path refetch reconcile with the DB.
         setAssignedIds((prev) => {
@@ -88,6 +102,7 @@ export function ChatLabelsBar({ phoneNumber }: { phoneNumber: string }) {
                 const { error } = await supabase
                     .from('chat_labels')
                     .delete()
+                    .eq('org_id', orgId)
                     .eq('phone_number', phoneNumber)
                     .eq('label_id', labelId);
                 if (error) throw error;
@@ -99,7 +114,7 @@ export function ChatLabelsBar({ phoneNumber }: { phoneNumber: string }) {
                 const { error } = await supabase
                     .from('chat_labels')
                     .upsert(
-                        { phone_number: phoneNumber, label_id: labelId },
+                        { org_id: orgId, phone_number: phoneNumber, label_id: labelId },
                         { onConflict: 'org_id,phone_number,label_id', ignoreDuplicates: true },
                     );
                 if (error) throw error;

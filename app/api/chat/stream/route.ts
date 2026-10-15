@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { generateRAGResponse, ChatMessage } from '@/lib/ai/rag';
 import { createClient } from '@/lib/supabase/server';
+import { requireOrgMember } from '@/lib/settings/org-context';
 
 /**
  * Streaming chat endpoint — emits NDJSON (one JSON object per line).
@@ -18,13 +19,13 @@ import { createClient } from '@/lib/supabase/server';
  */
 export async function POST(request: Request) {
     const supabase = await createClient();
-    const {
-        data: { user },
-    } = await supabase.auth.getUser();
-
-    if (!user) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    // Membership required, and retrieval/persona are scoped to the caller's own
+    // org — a non-default tenant must never read Sailendra's KB through here.
+    const access = await requireOrgMember(supabase);
+    if (!access.ok) {
+        return NextResponse.json({ error: access.error }, { status: access.status });
     }
+    const orgId = access.orgId;
 
     let parsed: { message?: string; history?: ChatMessage[] };
     try {
@@ -59,6 +60,7 @@ export async function POST(request: Request) {
                     // Cancels upstream OpenAI calls if the client closes the
                     // connection mid-stream so we don't keep paying for tokens.
                     signal: request.signal,
+                    orgId,
                 });
 
                 if (response.sources && response.sources.length > 0) {
