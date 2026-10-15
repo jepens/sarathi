@@ -41,8 +41,9 @@
 -- CREATE OR REPLACE) to restore the previous behaviour; note 0057 also grants
 -- EXECUTE to authenticated. No table/data changes in this migration.
 -- Re-runnable: CREATE OR REPLACE + idempotent REVOKE/GRANT.
-
-begin;
+-- Transaction: no explicit begin/commit, like 0054-0057 — the migration runner
+-- (Supabase CLI / MCP apply_migration) wraps the file in its own transaction,
+-- and an inner COMMIT would end that transaction early.
 
 create or replace function public.reserve_meeting_slot(
     p_org           uuid,
@@ -164,5 +165,3 @@ $$;
 -- Least privilege: only the service role (webhook / queue path) may reserve.
 revoke execute on function public.reserve_meeting_slot(uuid, text, text, timestamptz, text, timestamptz, timestamptz, int, int, int) from public, anon, authenticated;
 grant execute on function public.reserve_meeting_slot(uuid, text, text, timestamptz, text, timestamptz, timestamptz, int, int, int) to service_role;
-
-commit;

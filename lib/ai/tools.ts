@@ -21,8 +21,10 @@ import {
     customerMeetingLimitMessage,
     escapeLikePattern,
     findActiveMeeting,
+    HUMAN_ONLY_LEAD_STAGES,
     humanStageLockedError,
     isHumanOnlyLeadStage,
+    isSameMeetingInstant,
 } from './guardrails';
 
 export { AI_SETTABLE_LEAD_STAGES } from './guardrails';
@@ -39,6 +41,12 @@ export const LEAD_STAGES = [
     'lost',
 ] as const;
 export type LeadStage = (typeof LEAD_STAGES)[number];
+
+// PostgREST `or` filter matching chats whose stage the AI may still change:
+// unset (legacy NULL rows) or not a human-owned stage. Used as a WHERE guard on
+// AI-driven stage writes so the human-stage lock is enforced by the database,
+// not by a read-then-write in app code.
+const NOT_HUMAN_STAGE_FILTER = `lead_stage.is.null,lead_stage.not.in.(${HUMAN_ONLY_LEAD_STAGES.join(',')})`;
 
 // --- Tool Definitions (JSON Schema for OpenAI) ---
 
@@ -619,9 +627,9 @@ export async function updateLeadStage(
     try {
         const supabase = await createServiceOrServerClient();
 
-        const patch: Record<string, unknown> = {
-            org_id: orgId,
-            phone_number: phoneNumber,
+        // Columns written on this transition (org_id/phone_number are added
+        // only for the upsert path, which may create the chat row).
+        const fields: Record<string, unknown> = {
             lead_stage: stage,
             updated_at: new Date().toISOString(),
         };
@@ -648,12 +656,40 @@ export async function updateLeadStage(
             // accumulate a useful audit trail for whoever picks up the lead.
             const stamp = new Date().toISOString();
             const line = `[${stamp}] → ${stage}: ${reason.trim()}`;
-            patch.notes = row?.notes ? `${row.notes}\n${line}` : line;
+            fields.notes = row?.notes ? `${row.notes}\n${line}` : line;
+        }
+
+        if (opts?.protectHumanStages && row) {
+            // Conditional write so the DATABASE enforces the human-stage lock:
+            // if an operator set booked/won/lost between the read above and
+            // this write, the WHERE guard matches no row and nothing changes.
+            const { data: updated, error } = await supabase
+                .from('whatsapp_chats')
+                .update(fields)
+                .eq('org_id', orgId)
+                .eq('phone_number', phoneNumber)
+                .or(NOT_HUMAN_STAGE_FILTER)
+                .select('lead_stage');
+            if (error) throw error;
+            if (Array.isArray(updated) && updated.length === 0) {
+                const { data: latest } = await supabase
+                    .from('whatsapp_chats')
+                    .select('lead_stage')
+                    .eq('org_id', orgId)
+                    .eq('phone_number', phoneNumber)
+                    .maybeSingle();
+                return JSON.stringify({
+                    ok: false,
+                    stage: latest?.lead_stage ?? null,
+                    error: humanStageLockedError(String(latest?.lead_stage ?? 'booked/won/lost')),
+                });
+            }
+            return JSON.stringify({ ok: true, stage });
         }
 
         const { error } = await supabase
             .from('whatsapp_chats')
-            .upsert(patch, { onConflict: 'org_id,phone_number' });
+            .upsert({ org_id: orgId, phone_number: phoneNumber, ...fields }, { onConflict: 'org_id,phone_number' });
 
         if (error) throw error;
 
@@ -710,6 +746,18 @@ export async function checkMeetingAvailability(
                 .gte('event_date', new Date(Date.now() - 24 * 60 * 60_000).toISOString());
             if (ownErr) throw ownErr;
             const active = findActiveMeeting(own ?? []);
+            // The customer re-checking the exact slot they already hold (e.g.
+            // a retry after a pending-link result) is not a second meeting —
+            // mirror reserve_meeting_slot's idempotency step and report it as
+            // their existing booking instead of a customer_limit refusal.
+            if (active && isSameMeetingInstant(active.event_date, meetingDate)) {
+                return JSON.stringify({
+                    available: true,
+                    already_booked: true,
+                    meeting_at: meetingDate.toISOString(),
+                    reason: 'Slot ini sudah tercatat sebagai jadwal meeting customer ini (bukan booking baru). Ingatkan jadwalnya; bila link belum terkirim, schedule_meeting dengan jam yang sama aman dipanggil — hanya melengkapi/mengirim ulang link, tidak membuat meeting baru.',
+                });
+            }
             if (active) {
                 return JSON.stringify({
                     available: false,
@@ -1006,9 +1054,7 @@ export async function scheduleMeeting(
         // Never pull a lead back out of a human-owned stage (booked/won/lost).
         const stamp = new Date().toISOString();
         const keepHumanStage = isHumanOnlyLeadStage(chat?.lead_stage);
-        const chatPatch: Record<string, unknown> = keepHumanStage
-            ? { updated_at: stamp }
-            : { lead_stage: 'scheduled', updated_at: stamp };
+        const chatPatch: Record<string, unknown> = { updated_at: stamp };
         if (!alreadyBooked) {
             // Record WHY the link is pending on the audit line so it's queryable.
             const pendingSuffix = !joinUrl ? ` — LINK PENDING: ${zoomError ?? 'no link'}` : '';
@@ -1020,6 +1066,21 @@ export async function scheduleMeeting(
             .update(chatPatch)
             .eq('org_id', orgId)
             .eq('phone_number', phoneNumber);
+        // The stage bump is a separate, DB-guarded write: the chat row was read
+        // seconds ago (before Zoom + notifications), so an operator may have set
+        // booked/won/lost since — the WHERE guard then leaves their stage alone.
+        let stageWritten = false;
+        if (!keepHumanStage) {
+            const { data: staged, error: stageErr } = await supabase
+                .from('whatsapp_chats')
+                .update({ lead_stage: 'scheduled' })
+                .eq('org_id', orgId)
+                .eq('phone_number', phoneNumber)
+                .or(NOT_HUMAN_STAGE_FILTER)
+                .select('lead_stage');
+            if (stageErr) console.error('schedule_meeting: stage bump failed:', stageErr);
+            stageWritten = !stageErr && (!Array.isArray(staged) || staged.length > 0);
+        }
 
         return JSON.stringify({
             ok: true,
@@ -1033,7 +1094,9 @@ export async function scheduleMeeting(
             sales_notified: salesNotified,
             sales_wa_notified: salesWaNotified,
             already_booked: alreadyBooked,
-            stage: keepHumanStage ? chat?.lead_stage : 'scheduled',
+            // 'scheduled' when bumped; otherwise the stage as last read (a human
+            // stage, or unknown if a human changed it mid-booking).
+            stage: stageWritten ? 'scheduled' : keepHumanStage ? chat?.lead_stage : null,
         });
     } catch (error) {
         console.error('Error in scheduleMeeting:', error);
@@ -1067,18 +1130,18 @@ export async function handoffToHuman(
             .maybeSingle();
 
         const stamp = new Date().toISOString();
-        const line = `[${stamp}] HANDOFF to ${profile.handoffName}: ${reason} (AI auto-reply dimatikan)`;
-        // ai_enabled = false: the AI stops auto-replying once a human owns the
-        // conversation (webhook + queue both skip chats with ai_enabled=false).
-        // This turn's reply is unaffected — the queue checked ai_enabled before
-        // generating it and sends it regardless. An operator re-enables the AI
-        // from the chat's "AI aktif" switch.
+        const line = `[${stamp}] HANDOFF to ${profile.handoffName}: ${reason} (AI auto-reply dimatikan setelah balasan ini)`;
+        // ai_enabled is deliberately NOT written here. The handoff reply still
+        // has to be generated (second OpenAI call) and sent; if either fails the
+        // queue retries the turn, and a retry must not hit the "AI disabled"
+        // skip path and leave the customer with no answer at all. Instead
+        // generateRAGResponse returns disableAi=true and the WhatsApp queue
+        // switches ai_enabled off (org-scoped) right AFTER a successful send.
         const { error } = await supabase
             .from('whatsapp_chats')
             .update({
                 assigned_to: profile.handoffName,
                 notes: chat?.notes ? `${chat.notes}\n${line}` : line,
-                ai_enabled: false,
                 updated_at: stamp,
             })
             .eq('org_id', orgId)
@@ -1090,7 +1153,7 @@ export async function handoffToHuman(
             ok: true,
             assigned_to: profile.handoffName,
             handoff_whatsapp: profile.handoffPhone || null,
-            ai_auto_reply: 'off',
+            ai_auto_reply: 'off_after_this_reply',
         });
     } catch (error) {
         console.error('Error in handoffToHuman:', error);

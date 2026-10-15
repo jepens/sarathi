@@ -18,6 +18,8 @@ import {
     buildConversationSummaryMessage,
     checkAiLeadStage,
     PROMPT_SECURITY_RULES,
+    sanitizeHistory,
+    wrapUntrustedContext,
 } from './guardrails';
 
 // Types
@@ -29,6 +31,10 @@ export interface ChatMessage {
 export interface RAGResponse {
     message: string;
     sources: string[];
+    // Set when handoff_to_human succeeded this turn. The caller (WhatsApp
+    // queue) switches ai_enabled off only AFTER this reply is delivered, so a
+    // failed send/second call retries normally instead of going silent.
+    disableAi?: boolean;
 }
 
 interface Document {
@@ -526,7 +532,7 @@ ${orderInstruction}
 ${PROMPT_SECURITY_RULES}
 
 Konteks:
-${contextText}
+${wrapUntrustedContext(contextText)}
 `;
 
         // 5. Initialize OpenAI client with API key from database
@@ -544,11 +550,15 @@ ${contextText}
         // earlier-stated event details) that the old slice(-4) dropped, while
         // bounding token cost.
         const KEEP_LAST = 12;
-        let recentHistory = history;
+        // Only user/assistant turns may come from history: the web sandbox
+        // routes forward client-supplied history, and a 'system' turn there
+        // must never ride with system authority.
+        const safeHistory = sanitizeHistory(history);
+        let recentHistory = safeHistory;
         let conversationSummary = '';
-        if (history.length > KEEP_LAST) {
-            const older = history.slice(0, history.length - KEEP_LAST);
-            recentHistory = history.slice(-KEEP_LAST);
+        if (safeHistory.length > KEEP_LAST) {
+            const older = safeHistory.slice(0, safeHistory.length - KEEP_LAST);
+            recentHistory = safeHistory.slice(-KEEP_LAST);
             conversationSummary = await summarizeConversation(openai, older, profile.assistantName);
         }
 
@@ -628,6 +638,9 @@ ${contextText}
         };
 
         let responseMessage = await runFirstCall();
+        // A successful handoff_to_human this turn → ask the caller to switch the
+        // AI off for this chat once the reply is delivered (see RAGResponse).
+        let handoffDone = false;
 
         // Handle Tool Calls
         if (responseMessage.tool_calls) {
@@ -744,6 +757,7 @@ ${contextText}
                         } catch {
                             toolOk = true;
                         }
+                        if (toolOk) handoffDone = true;
                     }
                 } else if (functionName === 'create_order') {
                     // create_order is privileged — phoneNumber MUST come from the
@@ -832,6 +846,7 @@ ${contextText}
         return {
             message: finalContent,
             sources: sources,
+            ...(handoffDone ? { disableAi: true } : {}),
         };
 
     } catch (error) {

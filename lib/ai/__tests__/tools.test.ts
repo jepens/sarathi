@@ -42,6 +42,9 @@ beforeEach(() => {
     setup();
 });
 
+// WHERE guard on AI-driven stage writes (human-owned stages are locked).
+const GUARD = 'lead_stage.is.null,lead_stage.not.in.(booked,won,lost)';
+
 const hasFilter = (filters: Array<[string, string, unknown]>, op: string, col: string, val?: unknown) =>
     filters.some(([o, c, v]) => o === op && c === col && (val === undefined || v === val));
 
@@ -81,13 +84,45 @@ describe('update_lead_stage tool schema + executor (KEA-12)', () => {
         expect(fake.calls.some((c) => c.op === 'upsert')).toBe(false);
     });
 
-    it('still advances an early-stage lead', async () => {
-        setup((c) => (c.op === 'select' ? { data: { notes: 'op', lead_stage: 'qualifying' }, error: null } : { data: null, error: null }));
+    it('still advances an early-stage lead, via a DB-guarded conditional update', async () => {
+        setup((c) =>
+            c.op === 'select'
+                ? { data: { notes: 'op', lead_stage: 'qualifying' }, error: null }
+                : { data: [{ lead_stage: 'quoted' }], error: null },
+        );
         const out = JSON.parse(await updateLeadStage(ORG_A, PHONE, 'quoted', 'harga dikirim', { protectHumanStages: true }));
         expect(out.ok).toBe(true);
+        expect(fake.calls.some((c) => c.op === 'upsert')).toBe(false);
+        const upd = fake.calls.find((c) => c.op === 'update')!;
+        expect(upd.payload).toMatchObject({ lead_stage: 'quoted' });
+        expect((upd.payload as { notes: string }).notes.startsWith('op\n')).toBe(true);
+        expect(hasFilter(upd.filters, 'eq', 'org_id', ORG_A)).toBe(true);
+        expect(hasFilter(upd.filters, 'eq', 'phone_number', PHONE)).toBe(true);
+        // The human-stage lock is part of the WHERE clause (NULL stage allowed).
+        expect(hasFilter(upd.filters, 'or', GUARD)).toBe(true);
+    });
+
+    it('reports the lock when a human set booked/won/lost between the read and the write', async () => {
+        let reads = 0;
+        setup((c) => {
+            if (c.op === 'select') {
+                reads++;
+                return { data: reads === 1 ? { notes: null, lead_stage: 'quoted' } : { lead_stage: 'won' }, error: null };
+            }
+            return { data: [], error: null }; // guarded update matched no row
+        });
+        const out = JSON.parse(await updateLeadStage(ORG_A, PHONE, 'scheduled', null, { protectHumanStages: true }));
+        expect(out.ok).toBe(false);
+        expect(out.stage).toBe('won');
+        expect(out.error).toMatch(/human team/);
+    });
+
+    it('creates the chat row via upsert when none exists yet', async () => {
+        setup(() => ({ data: null, error: null }));
+        const out = JSON.parse(await updateLeadStage(ORG_A, PHONE, 'new', null, { protectHumanStages: true }));
+        expect(out.ok).toBe(true);
         const up = fake.calls.find((c) => c.op === 'upsert')!;
-        expect(up.payload).toMatchObject({ org_id: ORG_A, lead_stage: 'quoted' });
-        expect((up.payload as { notes: string }).notes.startsWith('op\n')).toBe(true);
+        expect(up.payload).toMatchObject({ org_id: ORG_A, phone_number: PHONE, lead_stage: 'new' });
     });
 });
 
@@ -103,13 +138,17 @@ describe('save_lead_info notes (KEA-12)', () => {
 });
 
 describe('handoff_to_human (KEA-12)', () => {
-    it('assigns the lead and switches the AI off for that chat (org-scoped)', async () => {
+    it('assigns the lead (org-scoped) but leaves ai_enabled to the queue, after the reply is sent', async () => {
         setup((c) => (c.op === 'select' ? { data: { notes: null }, error: null } : { data: null, error: null }));
         const out = JSON.parse(await handoffToHuman(ORG_A, PHONE, 'minta diskon besar', profile));
         expect(out.ok).toBe(true);
+        expect(out.ai_auto_reply).toBe('off_after_this_reply');
         const upd = fake.calls.find((c) => c.op === 'update')!;
         expect(upd.table).toBe('whatsapp_chats');
-        expect(upd.payload).toMatchObject({ assigned_to: 'MJ', ai_enabled: false });
+        expect(upd.payload).toMatchObject({ assigned_to: 'MJ' });
+        // Writing ai_enabled=false here would make a retry of a failed turn go
+        // silent (queue skip path) - the queue does it after a successful send.
+        expect(upd.payload).not.toHaveProperty('ai_enabled');
         expect(hasFilter(upd.filters, 'eq', 'org_id', ORG_A)).toBe(true);
         expect(hasFilter(upd.filters, 'eq', 'phone_number', PHONE)).toBe(true);
     });
@@ -149,6 +188,50 @@ describe('one active meeting per customer (KEA-12)', () => {
         const out = JSON.parse(await checkMeetingAvailability(ORG_A, SLOT, PHONE));
         expect(out.available).toBe(false);
         expect(out.customer_limit).toBe(true);
+    });
+
+    it('check_meeting_availability treats the slot the customer already holds as their booking, not a limit hit', async () => {
+        setup((c) =>
+            c.op === 'select' && hasFilter(c.filters, 'eq', 'customer_phone', PHONE)
+                ? { data: [{ event_date: '2030-06-04T07:00:00+00:00', meeting_duration_min: 40, status: 'scheduled' }], error: null }
+                : { data: [{ event_date: '2030-06-04T07:00:00+00:00', meeting_duration_min: 40 }], error: null },
+        );
+        const out = JSON.parse(await checkMeetingAvailability(ORG_A, SLOT, PHONE));
+        expect(out.available).toBe(true);
+        expect(out.already_booked).toBe(true);
+        expect(out.customer_limit).toBeUndefined();
+    });
+
+    it('a fresh booking bumps the stage with a DB-guarded write', async () => {
+        setup(
+            (c) =>
+                c.op === 'select'
+                    ? { data: { contact_name: 'Budi', company: 'PT Maju', lead_stage: 'quoted', notes: 'op' }, error: null }
+                    : { data: [{ lead_stage: 'scheduled' }], error: null },
+            () => ({ data: { meeting_id: 'm3', created: true, full: false, conflict: false, customer_limit: false }, error: null }),
+        );
+        const out = JSON.parse(await scheduleMeeting(ORG_A, PHONE, SLOT, null));
+        expect(out.ok).toBe(true);
+        expect(out.stage).toBe('scheduled');
+        const chatUpdates = fake.calls.filter((c) => c.op === 'update' && c.table === 'whatsapp_chats');
+        // notes/audit write is unconditional; the stage write carries the guard.
+        expect(chatUpdates[0].payload).not.toHaveProperty('lead_stage');
+        expect((chatUpdates[0].payload as { notes: string }).notes).toMatch(/^op\n\[.*meeting booked/);
+        expect(chatUpdates[1].payload).toEqual({ lead_stage: 'scheduled' });
+        expect(hasFilter(chatUpdates[1].filters, 'or', GUARD)).toBe(true);
+    });
+
+    it('a stage a human set mid-booking is left alone (guard matches no row)', async () => {
+        setup(
+            (c) =>
+                c.op === 'select'
+                    ? { data: { contact_name: 'Budi', company: 'PT Maju', lead_stage: 'quoted', notes: null }, error: null }
+                    : { data: [], error: null },
+            () => ({ data: { meeting_id: 'm4', created: true, full: false, conflict: false, customer_limit: false }, error: null }),
+        );
+        const out = JSON.parse(await scheduleMeeting(ORG_A, PHONE, SLOT, null));
+        expect(out.ok).toBe(true);
+        expect(out.stage).toBeNull();
     });
 
     it('a booking never pulls a lead out of a human-owned stage', async () => {

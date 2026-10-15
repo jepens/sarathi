@@ -78,6 +78,7 @@ export function makeFakeSupabase(opts: {
             is(c: string, v: unknown) { ctx.filters.push(['is', c, v]); return b; },
             ilike(c: string, v: unknown) { ctx.filters.push(['ilike', c, v]); return b; },
             not(c: string, op: string, v: unknown) { ctx.filters.push(['not', c, [op, v]]); return b; },
+            or(expr: string) { ctx.filters.push(['or', expr, undefined]); return b; },
             in(c: string, v: unknown) { ctx.filters.push(['in', c, v]); return finalize(); },
             order() { return b; }, // args (column, {ascending}) are ignored by the fake
             limit(n: number) { ctx.limitN = n; return finalize(); },

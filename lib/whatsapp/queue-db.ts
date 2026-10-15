@@ -39,6 +39,10 @@ export function getDebounceSeconds(): number {
 
 const nowIso = (): string => new Date().toISOString();
 
+// Operator-facing note logged when a handoff switches the chat to manual mode.
+export const HANDOFF_MANUAL_MODE_NOTICE =
+    'Handoff ke tim: balasan otomatis AI dimatikan untuk chat ini. Balas customer secara manual, atau nyalakan lagi lewat switch "AI aktif".';
+
 /**
  * Add an inbound message to the queue.
  *
@@ -271,6 +275,26 @@ async function processConversation(jobs: QueueJob[], supabase: SupabaseClient): 
             });
         } catch (histErr) {
             whatsappLogger.error(`History write failed after sending to ${phoneNumber} (NOT resending)`, histErr);
+        }
+
+        // Handoff: switch the AI off for this chat only NOW, after the handoff
+        // reply was delivered. Doing it inside the tool (before the reply was
+        // sent) would make a retry hit the ai_enabled=false skip above and leave
+        // the customer with no answer. Best-effort like the history writes —
+        // never resend. The system message tells operators the chat is now in
+        // manual mode (it shows in the chat thread and the chat list).
+        if (aiResponse.disableAi) {
+            try {
+                const { error: offErr } = await supabase
+                    .from('whatsapp_chats')
+                    .update({ ai_enabled: false, updated_at: nowIso() })
+                    .eq('org_id', orgId)
+                    .eq('phone_number', phoneNumber);
+                if (offErr) throw offErr;
+                await logSystemMessage(orgId, phoneNumber, HANDOFF_MANUAL_MODE_NOTICE);
+            } catch (offErr) {
+                whatsappLogger.error(`Failed to switch AI off after handoff for ${phoneNumber} (reply already sent)`, offErr);
+            }
         }
 
         whatsappLogger.info(`Conversation ${phoneNumber} answered (${jobs.length} message(s) coalesced)`);
