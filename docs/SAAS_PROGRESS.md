@@ -28,6 +28,7 @@
 | D4 · Kejujuran AI | Persona default & preset: natural, tetapi jujur sebagai asisten virtual bila ditanya langsung; persona tersimpan tidak diubah otomatis (2026-10-16) |
 | D12 · AI pasca-handoff | Tetap mati sampai operator menyalakan switch "AI aktif" (2026-10-16) |
 | D13 · Horizon meeting | AI memesan meeting maksimal 30 hari ke depan (`MAX_BOOKING_HORIZON_DAYS`) (2026-10-16) |
+| D9 · Keanggotaan org | **1 user = 1 org**. Tim Sarathi membantu tenant lewat peran platform-admin (Fase 3), bukan sebagai anggota tiap org; tanpa pemilih org (2026-10-16) |
 
 ### Menunggu keputusan
 
@@ -39,7 +40,6 @@
 | D6 | Model akun Meta (app per klien vs app platform Sarathi) & entitas legal pemilik Sarathi | Fase 2 | ⏸️ |
 | D7 | Kunci OpenAI milik platform (dengan metering) vs dibawa tenant; model default | Fase 3 | ⏸️ |
 | D8 | Fitur khusus Sailendra (Portal, proposal/FNA, Flow Brief Acara, Zoom) untuk tenant lain | Fase 2 / 4 | ⏸️ |
-| D9 | Bolehkah satu user menjadi anggota beberapa org (perlu "org aktif") | Fase 1 | ⏸️ |
 | D10 | Branding "by Sailendra" di dashboard tenant | Fase 4 | ⏸️ |
 | D11 | Kebijakan retensi data (UU PDP) | Fase 3 / 5 | ⏸️ |
 
@@ -50,8 +50,8 @@
 | 0.1 | Matikan "Allow new users to sign up" di Supabase Auth | KEA-1 | ✅ | 2026-10-15: `disable_signup=true` via Management API; terverifikasi di `GET /auth/v1/settings`. CAPTCHA Auth sudah aktif. Trigger `handle_new_user` tidak lagi auto-join → migrasi 0060 di [#36](https://github.com/jepens/sahabat_umkm/pull/36) |
 | 0.2 | Rotasi kunci OpenAI, token System User & App Secret WhatsApp, kunci Komerce | KEA-13 | 👤 | Kunci yang bocor = kunci aktif saat ini |
 | 0.3 | Hapus `log_deploy.md` & nilai rahasia di `database/migrate_env_to_settings.sql`; pemindai secret di CI | KEA-13 | ✅ | [#35](https://github.com/jepens/sahabat_umkm/pull/35) merged: file dihapus, SQL diganti placeholder, job CI gitleaks. **Rotasi kunci tetap wajib (0.2)** |
-| 0.4 | Tangani 2 akun + org pilot sisa | KEA-2 | ⬜ | D2: dipertahankan sebagai tenant uji; verifikasi isolasinya setelah 0.9 diterapkan |
-| 0.5 | Patch dependensi (Next.js ≥ 16.3.8, sharp, postcss) + Node 22 di `nixpacks.toml` | KEA-10, KEA-22 | ✅ | [#35](https://github.com/jepens/sahabat_umkm/pull/35) merged: Next 16.3.8, `npm audit --omit=dev` 0, Node 22. Deploy Easypanel: menunggu konfirmasi |
+| 0.4 | Tangani 2 akun + org pilot sisa | KEA-2 | ✅ | D2: dipertahankan sebagai tenant uji. Setelah deploy #36: `getCurrentOrgId` berbasis keanggotaan; tiap akun pilot hanya anggota org-nya sendiri (diverifikasi di DB) |
+| 0.5 | Patch dependensi (Next.js ≥ 16.3.8, sharp, postcss) + Node 22 di `nixpacks.toml` | KEA-10, KEA-22 | ✅ | [#35](https://github.com/jepens/sahabat_umkm/pull/35): Next 16.3.8, audit 0, Node 22 — **live di produksi** (build Easypanel sukses) |
 | 0.6 | Migrasi RLS: 4 tabel `USING(true)` → `is_org_member(org_id)`; `push_subscriptions.user_id` | KEA-3 | ✅ | [#36](https://github.com/jepens/sahabat_umkm/pull/36) merged; migrasi 0058 diterapkan 2026-10-16 & terverifikasi (policy, kolom, 1 baris push tanpa pemilik terhapus) |
 | 0.7 | Storage: policy per prefix org untuk `chat-media` & `proposals` | KEA-4 | ✅ | [#36](https://github.com/jepens/sahabat_umkm/pull/36) + 0058 (policy `chat-media`/`proposals` per org terverifikasi). Lanjutan: 1.11, 1.12 |
 | 0.8 | Cabut EXECUTE `reserve_meeting_slot` dari `authenticated`; cabut anon di `match_*` | KEA-5, KEA-25 | ✅ | 0058: `reserve_meeting_slot` hanya service_role; `match_*` tanpa anon — terverifikasi via `has_function_privilege` |
@@ -138,3 +138,4 @@
 | 2026-10-15 | PR dibuka: [#35](https://github.com/jepens/sahabat_umkm/pull/35) hardening + docs, [#36](https://github.com/jepens/sahabat_umkm/pull/36) isolasi tenant (0058 + 0060), [#37](https://github.com/jepens/sahabat_umkm/pull/37) batas tool AI (0059). Review adversarial: #36 approve (major di luar cakupan → 0060), #37 1 major + 6 minor → semua diperbaiki. Uji integrasi gabungan: 268 test lulus, build ✓. Migrasi **belum** diterapkan (menunggu review pemilik, D1). |
 | 2026-10-16 | [#35](https://github.com/jepens/sahabat_umkm/pull/35) di-merge (`9c92dde`). Migrasi **0058 + 0060 diterapkan** ke produksi via Supabase MCP dan terverifikasi (policy 4 tabel + 2 bucket, grant RPC, trigger `handle_new_user`; advisor: tidak ada temuan baru). [#36](https://github.com/jepens/sahabat_umkm/pull/36) di-merge (`1ddba83`). Keputusan D4/D12/D13 diambil dan diterapkan di [#37](https://github.com/jepens/sahabat_umkm/pull/37). Deploy Easypanel belum terlihat di header produksi saat dicek — perlu konfirmasi auto-deploy. |
 | 2026-10-16 | [#37](https://github.com/jepens/sahabat_umkm/pull/37) di-merge (`e7ef424`) setelah CI hijau pada kode gabungan (main digabung ke branch: 272 test lulus). Migrasi **0059 diterapkan** & terverifikasi. **Semua kode Fase 0 sudah di `main` dan semua migrasi aktif.** ⚠️ Deploy Easypanel belum terdeteksi: setelah 15+ menit produksi masih build lama (tanpa security header baru, `/design-system` masih 200) — perlu dicek di Easypanel. Migrasi 0058/0059/0060 kompatibel dengan kode lama, jadi produksi tetap berjalan normal. |
+| 2026-10-16 | **Deploy Fase 0 live** (build Easypanel #37 sukses): 6 security header aktif, `/design-system` 404, halaman debug di-redirect. Pipeline WhatsApp belum bisa diverifikasi dari data (belum ada pesan masuk sejak deploy) — kirim 1 pesan uji. Keputusan D9: 1 user = 1 org. **Fase 1 dimulai.** |
