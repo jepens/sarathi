@@ -66,6 +66,55 @@ export async function subscribeToPush(vapidPublicKey: string): Promise<boolean> 
 }
 
 /**
+ * Resolve `promise`, but give up after `ms` — whichever comes first. Never
+ * rejects (a rejection also just resolves), so callers can await it on a path
+ * that must not block or throw, like logout.
+ */
+export function settleWithin(promise: Promise<unknown>, ms: number): Promise<void> {
+    return new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, ms);
+        promise.then(
+            () => {
+                clearTimeout(timer);
+                resolve();
+            },
+            () => {
+                clearTimeout(timer);
+                resolve();
+            },
+        );
+    });
+}
+
+/**
+ * Logout cleanup: remove this device's push subscription on the server (while
+ * the session is still valid) and in the browser, so a shared PC/tablet stops
+ * showing the org's message previews after the operator signs out (KEA-23).
+ *
+ * Best-effort and bounded: uses getRegistration() (which, unlike
+ * serviceWorker.ready, resolves even when no worker is registered) and gives up
+ * after `timeoutMs`, so logout is never blocked. The "notifications enabled"
+ * preference is kept — the next user to sign in on this device is re-subscribed
+ * under their own identity by the notification provider.
+ */
+export async function unsubscribeFromPushOnLogout(timeoutMs = 2000): Promise<void> {
+    if (!isPushSupported()) return;
+    const work = (async () => {
+        const reg = await navigator.serviceWorker.getRegistration();
+        const sub = await reg?.pushManager.getSubscription();
+        if (!sub) return;
+        const { endpoint } = sub;
+        await fetch('/api/push/unsubscribe', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ endpoint }),
+        }).catch(() => {});
+        await sub.unsubscribe().catch(() => {});
+    })();
+    await settleWithin(work, timeoutMs);
+}
+
+/**
  * Drop this device's push subscription, both in the browser and on the server.
  * Best-effort; safe to call when there's nothing to remove.
  */

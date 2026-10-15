@@ -3,20 +3,20 @@ import { createClient } from '@/lib/supabase/server';
 import { listApprovedTemplates } from '@/lib/whatsapp/templates';
 import { whatsappLogger } from '@/lib/utils/logger';
 import type { WhatsAppApiError } from '@/lib/whatsapp/client';
+import { requireEnvIntegration } from '@/lib/settings/org-context';
 
 // GET /api/chat/templates
 // Returns APPROVED message templates for the WABA. Used by the
-// SendTemplateDialog to populate its picker. Authenticated admins only.
+// SendTemplateDialog to populate its picker. Members of the default org only —
+// the WABA behind the env credentials is Sailendra's.
 
 export const runtime = 'nodejs';
 
 export async function GET() {
     const supabase = await createClient();
-    const {
-        data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const access = await requireEnvIntegration('whatsapp', supabase);
+    if (!access.ok) {
+        return NextResponse.json({ error: access.error }, { status: access.status });
     }
 
     try {

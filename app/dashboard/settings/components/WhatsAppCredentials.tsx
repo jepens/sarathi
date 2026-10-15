@@ -11,7 +11,34 @@ import { CheckCircle2, XCircle } from 'lucide-react';
 // Single-tenant: WhatsApp credentials come from server environment variables,
 // not the database. This card is read-only — it only reports whether the env is
 // configured. To change the number/token, edit the env and redeploy.
-export function WhatsAppCredentials({ envConfigured }: { envConfigured: boolean }) {
+//
+// The env number belongs to the default org. For any other org
+// (`managedByTeam`) the number is connected by the Sarathi team, so the card
+// says so instead of pointing at server env vars.
+export function WhatsAppCredentials({
+    envConfigured,
+    managedByTeam = false,
+}: {
+    envConfigured: boolean;
+    managedByTeam?: boolean;
+}) {
+    if (managedByTeam) {
+        return (
+            <Card>
+                <CardHeader>
+                    <CardTitle className="flex items-center justify-between">
+                        Kredensial WhatsApp
+                        <Badge variant="secondary">Dikelola tim Sarathi</Badge>
+                    </CardTitle>
+                    <CardDescription>
+                        Nomor WhatsApp organisasi Anda dihubungkan dan dikelola oleh tim
+                        Sarathi. Hubungi tim Sarathi untuk menghubungkan atau mengganti nomor.
+                    </CardDescription>
+                </CardHeader>
+            </Card>
+        );
+    }
+
     return (
         <Card>
             <CardHeader>

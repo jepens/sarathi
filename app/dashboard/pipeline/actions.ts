@@ -8,6 +8,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { createClient } from '@/lib/supabase/server';
 import { isPortalConfigured } from '@/lib/portal/config';
 import { postHandoff, PortalError } from '@/lib/portal/client';
+import { requireEnvIntegration } from '@/lib/settings/org-context';
 import {
     buildHandoffBody,
     handoffInputSchema,
@@ -23,6 +24,7 @@ type HandoffResult =
 // Idempotent — repeated handoffs just refresh the URL.
 async function persistLink(
     supabase: SupabaseClient,
+    orgId: string,
     phone: string,
     resp: { clientId: string; proposalUrl: string }
 ): Promise<unknown> {
@@ -33,6 +35,7 @@ async function persistLink(
             portal_last_proposal_url: resp.proposalUrl,
             updated_at: new Date().toISOString(),
         })
+        .eq('org_id', orgId)
         .eq('phone_number', phone);
     return error ?? null;
 }
@@ -63,17 +66,22 @@ export async function handoffToPortal(raw: unknown): Promise<HandoffResult> {
     const input = parsed.data;
 
     const supabase = await createClient();
-    // Auth gate only. The handoff queries key off phone_number, never org, so a
-    // getCurrentOrgId() round-trip to app_settings would be dead I/O — getUser()
-    // is the same gate without the extra query.
-    const {
-        data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) return { ok: false, error: 'Sesi tidak valid — silakan login ulang.' };
+    // The Portal (and PORTAL_INTAKE_TOKEN) belong to the default org, so only
+    // its members may hand off — checked before the Portal is called. The lead
+    // lookup + link write are scoped to that org explicitly.
+    const access = await requireEnvIntegration('portal', supabase);
+    if (!access.ok) {
+        return {
+            ok: false,
+            error: access.status === 401 ? 'Sesi tidak valid — silakan login ulang.' : access.error,
+        };
+    }
+    const orgId = access.orgId;
 
     const { data, error } = await supabase
         .from('whatsapp_chats')
         .select(LEAD_SELECT)
+        .eq('org_id', orgId)
         .eq('phone_number', input.phone)
         // Only real funnel leads — never hand off a vendor/'other' contact
         // (whatsapp_chats holds all three; mirrors GET /api/leads).
@@ -115,8 +123,8 @@ export async function handoffToPortal(raw: unknown): Promise<HandoffResult> {
     // Portal client. So retry once, and if it still fails, surface a warning that
     // tells the operator to reuse the SAME client next time (Portal dedups a
     // repeat by the stable idempotency key → relinks instead of duplicating).
-    let updateError = await persistLink(supabase, input.phone, resp);
-    if (updateError) updateError = await persistLink(supabase, input.phone, resp);
+    let updateError = await persistLink(supabase, orgId, input.phone, resp);
+    if (updateError) updateError = await persistLink(supabase, orgId, input.phone, resp);
     if (updateError) {
         console.error('Handoff succeeded but failed to persist portal_client_id:', updateError);
         return {

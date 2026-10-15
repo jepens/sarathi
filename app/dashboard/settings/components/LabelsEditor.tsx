@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
+import { useCurrentOrgId } from '@/components/current-org-provider';
+import { NO_ORG_MESSAGE } from '@/lib/settings/org-access';
 import {
     Card,
     CardContent,
@@ -36,6 +38,9 @@ import {
 
 export function LabelsEditor() {
     const supabase = createClient();
+    // Explicit org for reads + inserts (RLS checks membership; the column
+    // DEFAULT would stamp the seed org for any other tenant).
+    const orgId = useCurrentOrgId();
     const [items, setItems] = useState<Label[]>([]);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
@@ -48,14 +53,22 @@ export function LabelsEditor() {
     const [deleting, setDeleting] = useState(false);
 
     const fetchItems = useCallback(async () => {
-        const { data, error } = await supabase.from('labels').select('id, name, color');
+        if (!orgId) {
+            setItems([]);
+            setLoading(false);
+            return;
+        }
+        const { data, error } = await supabase
+            .from('labels')
+            .select('id, name, color')
+            .eq('org_id', orgId);
         if (error) {
             toast.error('Gagal memuat label');
         } else {
             setItems(sortLabels(data ?? []));
         }
         setLoading(false);
-    }, [supabase]);
+    }, [supabase, orgId]);
 
     useEffect(() => {
         fetchItems();
@@ -79,6 +92,10 @@ export function LabelsEditor() {
             toast.error('Nama label wajib diisi.');
             return;
         }
+        if (!orgId) {
+            toast.error(NO_ORG_MESSAGE);
+            return;
+        }
         setSaving(true);
         try {
             if (editingId) {
@@ -95,7 +112,9 @@ export function LabelsEditor() {
                 }
                 toast.success('Label diperbarui');
             } else {
-                const { error } = await supabase.from('labels').insert({ name: cleanName, color });
+                const { error } = await supabase
+                    .from('labels')
+                    .insert({ org_id: orgId, name: cleanName, color });
                 if (error) throw error;
                 toast.success('Label ditambahkan');
             }

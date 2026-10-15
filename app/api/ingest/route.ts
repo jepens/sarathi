@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { generateEmbedding } from '@/lib/ai/embedding'
 import { chunkText, parseFile } from '@/lib/ai/parsing'
 import { getCurrentOrgId } from '@/lib/settings/org-context'
+import { isOrgScopedObjectPath } from '@/lib/storage/object-paths'
 import { NextResponse } from 'next/server'
 
 export async function POST(request: Request) {
@@ -24,14 +25,21 @@ export async function POST(request: Request) {
 
         const { filePath, fileType } = await request.json()
 
+        // The object must live in THIS org's folder ("<org_id>/...", no '..'):
+        // never ingest — and stamp with this org — a file from another org's
+        // folder or an arbitrary bucket path (KEA-18).
+        if (!isOrgScopedObjectPath(filePath, orgId)) {
+            return NextResponse.json({ error: 'Path file tidak valid' }, { status: 400 })
+        }
+        if (typeof fileType !== 'string' || fileType.length > 200) {
+            return NextResponse.json({ error: 'Tipe file tidak valid' }, { status: 400 })
+        }
+
         // The uploaded object lives at "<org_id>/<ts>_<name>". Keep the full path
         // in metadata.source (used to download + later delete the object), but
         // expose only the "<ts>_<name>" portion as file_name so the dashboard
         // list doesn't show the org UUID (matches the pre-multi-tenant display).
-        const displayName =
-            typeof filePath === 'string' && filePath.includes('/')
-                ? filePath.slice(filePath.indexOf('/') + 1)
-                : filePath
+        const displayName = filePath.slice(filePath.indexOf('/') + 1)
 
         // 1. Download file from Supabase Storage
         const { data: fileData, error: downloadError } = await supabase.storage
@@ -39,7 +47,8 @@ export async function POST(request: Request) {
             .download(filePath)
 
         if (downloadError) {
-            return NextResponse.json({ error: 'Failed to download file', details: downloadError }, { status: 500 })
+            console.error('Ingest download failed:', downloadError)
+            return NextResponse.json({ error: 'Failed to download file' }, { status: 500 })
         }
 
         // 2. Parse file content

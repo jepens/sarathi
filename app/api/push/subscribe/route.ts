@@ -1,10 +1,24 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
-import { getCurrentOrgId } from '@/lib/settings/org-context';
+import { createServiceOrServerClient } from '@/lib/supabase/service';
+import { requireOrgMember } from '@/lib/settings/org-context';
+import { parsePushSubscriptionBody } from '@/lib/notifications/push-targets';
 
-// Register (or refresh) this browser's Web Push subscription. Auth-gated: only a
-// signed-in dashboard user can subscribe. The endpoint is the unique key, so a
+// Register (or refresh) this browser's Web Push subscription. Only a signed-in
+// MEMBER of an org can subscribe, and the row is stamped server-side with that
+// org + user (never taken from the body). The endpoint is the unique key, so a
 // device re-subscribing UPDATEs its keys rather than creating a duplicate row.
+//
+// Why the write uses the service-role client (after the checks above): the same
+// browser can be shared — user A enables notifications, user B later logs in on
+// that device. The push endpoint row still belongs to A, and under RLS
+// (user_id = auth.uid()) B can neither see nor update it, so B's
+// ON CONFLICT (endpoint) DO UPDATE would fail. The device must end up owned by
+// whoever is signed in on it now. That is safe because the caller has been
+// authenticated and their membership verified here, org_id/user_id come from
+// the server, and holding the endpoint + keys proves control of that browser's
+// subscription. Without a service-role key this falls back to the user client:
+// fresh and own-device subscriptions still work; only the reassignment fails.
 
 interface SubscribeBody {
     endpoint?: unknown;
@@ -14,9 +28,9 @@ interface SubscribeBody {
 
 export async function POST(request: Request) {
     const supabase = await createClient();
-    const orgId = await getCurrentOrgId(supabase);
-    if (!orgId) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const access = await requireOrgMember(supabase);
+    if (!access.ok) {
+        return NextResponse.json({ error: access.error }, { status: access.status });
     }
 
     let payload: SubscribeBody;
@@ -26,28 +40,29 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
     }
 
-    const endpoint = typeof payload.endpoint === 'string' ? payload.endpoint : '';
-    const p256dh = typeof payload.keys?.p256dh === 'string' ? payload.keys.p256dh : '';
-    const auth = typeof payload.keys?.auth === 'string' ? payload.keys.auth : '';
-    if (!endpoint || !p256dh || !auth) {
+    const sub = parsePushSubscriptionBody(payload);
+    if (!sub) {
         return NextResponse.json({ error: 'Missing subscription fields' }, { status: 400 });
     }
     const userAgent =
         typeof payload.userAgent === 'string' ? payload.userAgent.slice(0, 400) : null;
 
-    const { error } = await supabase.from('push_subscriptions').upsert(
+    const writer = await createServiceOrServerClient();
+    const { error } = await writer.from('push_subscriptions').upsert(
         {
-            org_id: orgId,
-            endpoint,
-            p256dh,
-            auth,
+            org_id: access.orgId,
+            user_id: access.userId,
+            endpoint: sub.endpoint,
+            p256dh: sub.p256dh,
+            auth: sub.auth,
             user_agent: userAgent,
             last_used_at: new Date().toISOString(),
         },
         { onConflict: 'endpoint' },
     );
     if (error) {
-        return NextResponse.json({ error: error.message }, { status: 500 });
+        console.error('push subscribe failed', error);
+        return NextResponse.json({ error: 'Gagal menyimpan langganan notifikasi' }, { status: 500 });
     }
     return NextResponse.json({ ok: true });
 }

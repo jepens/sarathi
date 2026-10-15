@@ -30,6 +30,7 @@ import { ModeToggle } from "@/components/mode-toggle"
 import { Brand } from "@/components/brand"
 import { FollowupBadge } from "@/components/followup-badge"
 import { NotificationBell } from "@/components/notifications/notification-bell"
+import { unsubscribeFromPushOnLogout } from "@/lib/notifications/push"
 
 type NavItem = {
     href: string
@@ -103,6 +104,10 @@ export function SidebarNav({
 
     const handleLogout = async () => {
         onNavigate?.()
+        // Drop this device's Web Push subscription BEFORE signOut (the server
+        // call needs the session). Best-effort and time-boxed — never blocks
+        // logout.
+        await unsubscribeFromPushOnLogout()
         await supabase.auth.signOut()
         router.push("/login")
         router.refresh()

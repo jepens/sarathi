@@ -9,7 +9,7 @@ import {
     type WhatsAppApiError,
 } from '@/lib/whatsapp/client';
 import { whatsappLogger } from '@/lib/utils/logger';
-import { getCurrentOrgId } from '@/lib/settings/org-context';
+import { requireEnvIntegration } from '@/lib/settings/org-context';
 
 const CHAT_MEDIA_BUCKET = 'chat-media';
 
@@ -30,10 +30,13 @@ function safeExt(filename: string, mime: string): string {
 export async function POST(request: Request) {
     try {
         const supabase = await createClient();
-        const orgId = await getCurrentOrgId(supabase);
-        if (!orgId) {
-            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        // Member of the default org only (env WhatsApp credentials) — before
+        // the Meta upload/send below.
+        const access = await requireEnvIntegration('whatsapp', supabase);
+        if (!access.ok) {
+            return NextResponse.json({ error: access.error }, { status: access.status });
         }
+        const orgId = access.orgId;
 
         const form = await request.formData();
         const phone_number = form.get('phone_number');

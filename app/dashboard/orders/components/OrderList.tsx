@@ -373,25 +373,15 @@ export function OrderList() {
     const detailOrder = detailId ? orders.find((o) => o.id === detailId) ?? null : null;
 
     const updateStatus = async (id: string, newStatus: string) => {
-        const currentOrder = orders.find((o) => o.id === id);
-        if (!currentOrder) {
+        if (!orders.some((o) => o.id === id)) {
             toast.error('Order tidak ditemukan');
             return;
         }
         try {
             const { updateOrderStatus } = await import('../actions');
-            // updateOrderStatus only needs these fields (and assumes non-null
-            // phone/delivery for stock + notifications).
-            const result = await updateOrderStatus(id, newStatus, {
-                id: currentOrder.id,
-                customer_name: currentOrder.customer_name,
-                customer_phone: currentOrder.customer_phone ?? '',
-                items: currentOrder.items,
-                total_amount: currentOrder.total_amount,
-                delivery_info: currentOrder.delivery_info ?? '',
-                order_type: currentOrder.order_type,
-                status: currentOrder.status,
-            });
+            // The server reads the order (status, items, customer) from the DB
+            // itself — only the id + target status are sent.
+            const result = await updateOrderStatus(id, newStatus);
             if (result.success) toast.success(result.message);
             else toast.error(result.message);
             await refresh();

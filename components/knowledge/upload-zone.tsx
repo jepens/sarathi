@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils"
 import { Loader2, UploadCloud } from "lucide-react"
 import { useState, useRef } from "react"
 import { toast } from "sonner"
+import { useCurrentOrgId } from "@/components/current-org-provider"
 
 interface UploadZoneProps {
     onUploadComplete?: () => void;
@@ -16,6 +17,9 @@ export function UploadZone({ onUploadComplete }: UploadZoneProps = {}) {
     const [isDragging, setIsDragging] = useState(false)
     const [isUploading, setIsUploading] = useState(false)
     const fileInputRef = useRef<HTMLInputElement>(null)
+    // The org resolved server-side (dashboard layout). /api/ingest only accepts
+    // paths under this org's "<org_id>/" folder, so client and server must agree.
+    const orgId = useCurrentOrgId()
 
     const handleDragOver = (e: React.DragEvent) => {
         e.preventDefault()
@@ -34,15 +38,8 @@ export function UploadZone({ onUploadComplete }: UploadZoneProps = {}) {
         const supabase = createClient()
 
         try {
-            // Resolve the uploader's org so KB files land under "<org_id>/..." —
-            // the documents-bucket RLS policy authorises only members of that
-            // org. RLS limits this query to the user's own membership.
-            const { data: membership } = await supabase
-                .from('organization_members')
-                .select('org_id')
-                .limit(1)
-                .maybeSingle()
-            const orgId = membership?.org_id
+            // KB files land under "<org_id>/..." — the documents-bucket RLS
+            // policy authorises only members of that org.
             if (!orgId) {
                 throw new Error('Tidak menemukan organisasi untuk akun ini.')
             }

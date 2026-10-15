@@ -1,5 +1,6 @@
 import { createClient } from '@/lib/supabase/server';
 import { NextResponse } from 'next/server';
+import { requireOrgMember } from '@/lib/settings/org-context';
 
 interface DocumentMetadata {
     file_name?: string;
@@ -100,22 +101,42 @@ export async function DELETE(request: Request) {
                 { status: 400 }
             );
         }
+        // Plain value only — it's compared with .eq() below, never spliced into
+        // a PostgREST filter string, but bound its size and refuse control chars.
+        if (fileName.length > 512 || /[\u0000-\u001f\u007f]/.test(fileName)) {
+            return NextResponse.json(
+                { error: 'fileName tidak valid' },
+                { status: 400 }
+            );
+        }
 
         const supabase = await createClient();
 
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) {
-            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        const access = await requireOrgMember(supabase);
+        if (!access.ok) {
+            return NextResponse.json({ error: access.error }, { status: access.status });
         }
 
-        // Find document chunks that match the filename in metadata
-        // We check both file_name and source fields for backward compatibility.
-        // Fetch metadata too so we can delete the underlying storage object by
-        // its real path (metadata.source is org-prefixed, e.g. "<org_id>/<ts>_<name>").
-        const { data: matchingDocs, error: fetchError } = await supabase
-            .from('documents')
-            .select('id, metadata')
-            .or(`metadata->>file_name.eq.${fileName},metadata->>source.eq.${fileName}`);
+        // Find document chunks that match the filename in metadata. We check
+        // both file_name and source for backward compatibility — as two .eq()
+        // queries: building an .or() string from raw input let a crafted name
+        // (e.g. "x,id.not.is.null") inject extra filters and wipe the whole KB
+        // (KEA-18). Fetch metadata too so we can delete the underlying storage
+        // object by its real path (metadata.source is org-prefixed, e.g.
+        // "<org_id>/<ts>_<name>").
+        const [byFileName, bySource] = await Promise.all([
+            supabase
+                .from('documents')
+                .select('id, metadata')
+                .eq('org_id', access.orgId)
+                .eq('metadata->>file_name', fileName),
+            supabase
+                .from('documents')
+                .select('id, metadata')
+                .eq('org_id', access.orgId)
+                .eq('metadata->>source', fileName),
+        ]);
+        const fetchError = byFileName.error ?? bySource.error;
 
         if (fetchError) {
             console.error('Error fetching documents:', fetchError);
@@ -125,13 +146,20 @@ export async function DELETE(request: Request) {
             );
         }
 
-        const idsToDelete = matchingDocs?.map((doc) => doc.id) || [];
+        // De-duplicate chunks matched by both columns.
+        const matchingDocs = Array.from(
+            new Map(
+                [...(byFileName.data ?? []), ...(bySource.data ?? [])].map((doc) => [doc.id, doc])
+            ).values()
+        );
+
+        const idsToDelete = matchingDocs.map((doc) => doc.id);
         // Distinct storage paths for these chunks. Editor-authored docs have no
         // bucket object (source === title) — removing a nonexistent key is a
         // harmless no-op.
         const storagePaths = Array.from(
             new Set(
-                (matchingDocs ?? [])
+                matchingDocs
                     .map((doc) => (doc.metadata as DocumentMetadata | null)?.source)
                     .filter((s): s is string => typeof s === 'string' && s.length > 0)
             )
@@ -148,6 +176,7 @@ export async function DELETE(request: Request) {
         const { error: dbError } = await supabase
             .from('documents')
             .delete()
+            .eq('org_id', access.orgId)
             .in('id', idsToDelete);
 
         if (dbError) {
@@ -177,6 +206,7 @@ export async function DELETE(request: Request) {
         const { error: kbSourceError } = await supabase
             .from('kb_sources')
             .delete()
+            .eq('org_id', access.orgId)
             .eq('title', fileName);
         if (kbSourceError) {
             console.error('Error deleting kb_source (non-fatal):', kbSourceError);
