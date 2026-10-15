@@ -76,7 +76,7 @@
 | 1.7 | Pisahkan setting platform vs tenant di `app_settings` | KEA-9 | ⬜ | |
 | 1.8 | Persona bisa dibuat untuk org baru | KUA-6 | ⬜ | |
 | 1.9 | Realtime: filter org + mitigasi event DELETE | KEA-15, PER-8 | ⬜ | |
-| 1.10 | Peran minimal owner/admin vs staff untuk aksi sensitif | KEA-17 | ⬜ | |
+| 1.10 | Peran minimal owner/admin vs staff untuk aksi sensitif | KEA-17 | ➡️ | Dipindah ke Fase 3 (3.2) bersama undangan & manajemen tim — keputusan pemilik 2026-10-16 (tenant pilot awalnya 1 owner) |
 | 1.11 | `chat-media` jadi bucket privat + signed URL (bacaan via URL publik masih lolos) | KEA-4 | ⬜ | Lanjutan dari 0.7 |
 | 1.12 | Policy bucket `documents` tanpa fallback COALESCE ke org seed + pindahkan 15 objek legacy ke prefix org | KEA-4 | ⬜ | Ditemukan saat review #36 |
 | 1.13 | `filter_org_id` wajib di `match_*` (termasuk `/api/search`) | KEA-25 | ⬜ | Ditemukan saat review #36 |
