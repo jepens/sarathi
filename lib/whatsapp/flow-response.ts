@@ -259,7 +259,10 @@ export async function handleFlowReply(params: HandleFlowReplyParams): Promise<vo
                 })(),
                 contact_type: 'lead',
             },
-            profile
+            profile,
+            // notes are appended (never overwritten) with this author label —
+            // the brief comes from the customer's form, not from the AI.
+            'WhatsApp Flow'
         );
         whatsappLogger.info(`flow-response: saveLeadInfo → ${saveResult}`);
 

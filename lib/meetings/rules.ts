@@ -9,6 +9,9 @@ export const MAX_MEETINGS_PER_DAY = 4;
 // Minimum gap (minutes) required between two meetings so they aren't back-to-back.
 // Enforced in the reserve_meeting_slot RPC's overlap check (migration 0057).
 export const MEETING_BUFFER_MIN = 15;
+// Furthest ahead the AI may book a meeting (owner decision D13, 2026-10-15): stops
+// a single chat from reserving slots months out. Becomes a per-org setting later.
+export const MAX_BOOKING_HORIZON_DAYS = 30;
 
 export interface JakartaParts {
     year: string;
@@ -109,6 +112,18 @@ export function validateMeetingDay(start: Date): SlotCheck {
         return {
             ok: false,
             error: 'Meeting hanya tersedia pada hari kerja (Senin–Jumat). Sabtu–Minggu libur. Tawarkan hari kerja terdekat.',
+        };
+    }
+    return { ok: true };
+}
+
+// Meeting must start within MAX_BOOKING_HORIZON_DAYS of `now`.
+export function validateMeetingHorizon(start: Date, now: Date = new Date()): SlotCheck {
+    const limitMs = now.getTime() + MAX_BOOKING_HORIZON_DAYS * 24 * 60 * 60_000;
+    if (start.getTime() > limitMs) {
+        return {
+            ok: false,
+            error: `Meeting hanya bisa dijadwalkan maksimal ${MAX_BOOKING_HORIZON_DAYS} hari ke depan. Tawarkan tanggal yang lebih dekat.`,
         };
     }
     return { ok: true };

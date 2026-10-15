@@ -13,7 +13,7 @@ vi.mock('@/lib/utils/logger', () => ({
 // client is injected, but mock it so next/headers isn't pulled into the test.
 vi.mock('@/lib/supabase/server', () => ({ createClient: vi.fn() }));
 
-import { processQueue, enqueueMessage, getDebounceSeconds } from '@/lib/whatsapp/queue-db';
+import { processQueue, enqueueMessage, getDebounceSeconds, HANDOFF_MANUAL_MODE_NOTICE } from '@/lib/whatsapp/queue-db';
 import { generateRAGResponse } from '@/lib/ai/rag';
 import { sendWhatsAppMessage } from '@/lib/whatsapp/client';
 import { getWhatsAppSendCreds } from '@/lib/whatsapp/credentials';
@@ -323,5 +323,72 @@ describe('processQueue — admin takeover', () => {
         expect(ragMock).not.toHaveBeenCalled();
         expect(sendMock).not.toHaveBeenCalled();
         expect(queueUpdates(fake.calls, 'completed')).toHaveLength(1);
+    });
+});
+
+describe('processQueue — handoff switches the AI off only after the reply is sent', () => {
+    const aiOffUpdates = (calls: FakeCall[]) =>
+        calls.filter(
+            (c) => c.table === 'whatsapp_chats' && c.op === 'update' && (c.payload as Record<string, unknown>)?.ai_enabled === false
+        );
+
+    it('sends the handoff reply, then sets ai_enabled=false (org-scoped) and logs a manual-mode note', async () => {
+        ragMock.mockResolvedValueOnce({ message: 'Tim kami akan menghubungi kakak', sources: [], disableAi: true });
+        const fake = clientFor({ jobs: [job('j1', 'mau bicara dengan orang', '2026-06-20T10:00:00.000Z')] });
+        await processQueue(fake.client);
+
+        expect(sendMock).toHaveBeenCalledTimes(1);
+        expect(sendMock.mock.calls[0][1]).toBe('Tim kami akan menghubungi kakak');
+        const off = aiOffUpdates(fake.calls);
+        expect(off).toHaveLength(1);
+        expect(off[0].filters).toContainEqual(['eq', 'org_id', ORG]);
+        expect(off[0].filters).toContainEqual(['eq', 'phone_number', PHONE]);
+        expect(logSystemMock).toHaveBeenCalledWith(ORG, PHONE, HANDOFF_MANUAL_MODE_NOTICE);
+        // switched off AFTER the jobs were completed (i.e. after the send)
+        const completedIdx = fake.calls.findIndex(
+            (c) => c.table === 'message_queue' && (c.payload as Record<string, unknown>)?.status === 'completed'
+        );
+        expect(fake.calls.indexOf(off[0])).toBeGreaterThan(completedIdx);
+    });
+
+    it('a normal reply never touches ai_enabled', async () => {
+        const fake = clientFor({ jobs: [job('j1', 'halo', '2026-06-20T10:00:00.000Z')] });
+        await processQueue(fake.client);
+        expect(aiOffUpdates(fake.calls)).toHaveLength(0);
+        expect(logSystemMock).not.toHaveBeenCalled();
+    });
+
+    it('handoff turn whose second AI call fails is retried and still answered', async () => {
+        // Attempt 1: the handoff tool ran, then the second OpenAI call threw —
+        // generateRAGResponse rejects. Nothing switched the AI off.
+        ragMock.mockRejectedValueOnce(new Error('OpenAI 500 on the second call'));
+        const first = clientFor({ jobs: [job('j1', 'saya kesal, mau bicara dengan orang', '2026-06-20T10:00:00.000Z')] });
+        await processQueue(first.client);
+        expect(sendMock).not.toHaveBeenCalled();
+        expect(queueUpdates(first.calls, 'pending')).toHaveLength(1);
+        expect(aiOffUpdates(first.calls)).toHaveLength(0);
+
+        // Attempt 2 (re-claimed with retries=1): ai_enabled is still true, so
+        // the turn is regenerated and the customer DOES get the handoff reply.
+        ragMock.mockResolvedValueOnce({ message: 'Baik kak, tim kami segera menghubungi', sources: [], disableAi: true });
+        const retry = clientFor({
+            jobs: [job('j1', 'saya kesal, mau bicara dengan orang', '2026-06-20T10:00:00.000Z', { retries: 1 })],
+            aiEnabled: true,
+        });
+        await processQueue(retry.client);
+        expect(sendMock).toHaveBeenCalledTimes(1);
+        expect(sendMock.mock.calls[0][1]).toBe('Baik kak, tim kami segera menghubungi');
+        expect(queueUpdates(retry.calls, 'completed')).toHaveLength(1);
+        expect(aiOffUpdates(retry.calls)).toHaveLength(1);
+    });
+
+    it('a failed send of the handoff reply re-queues without switching the AI off', async () => {
+        ragMock.mockResolvedValueOnce({ message: 'Tim kami akan menghubungi kakak', sources: [], disableAi: true });
+        sendMock.mockRejectedValueOnce(new Error('Meta 500'));
+        const fake = clientFor({ jobs: [job('j1', 'mau bicara dengan orang', '2026-06-20T10:00:00.000Z')] });
+        await processQueue(fake.client);
+        expect(queueUpdates(fake.calls, 'pending')).toHaveLength(1);
+        expect(aiOffUpdates(fake.calls)).toHaveLength(0);
+        expect(logSystemMock).not.toHaveBeenCalled();
     });
 });

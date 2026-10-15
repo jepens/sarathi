@@ -13,9 +13,14 @@ import {
     updateLeadStage,
     scheduleMeeting,
     handoffToHuman,
-    LEAD_STAGES,
-    type LeadStage,
 } from './tools';
+import {
+    buildConversationSummaryMessage,
+    checkAiLeadStage,
+    PROMPT_SECURITY_RULES,
+    sanitizeHistory,
+    wrapUntrustedContext,
+} from './guardrails';
 
 // Types
 export interface ChatMessage {
@@ -26,6 +31,10 @@ export interface ChatMessage {
 export interface RAGResponse {
     message: string;
     sources: string[];
+    // Set when handoff_to_human succeeded this turn. The caller (WhatsApp
+    // queue) switches ai_enabled off only AFTER this reply is delivered, so a
+    // failed send/second call retries normally instead of going silent.
+    disableAi?: boolean;
 }
 
 interface Document {
@@ -88,7 +97,8 @@ async function generateEmbedding(text: string): Promise<number[]> {
 
 // Summarise older conversation turns into a compact context block. Uses a
 // cheap fast model — this runs only when a conversation exceeds KEEP_LAST
-// turns, and the result is fed back as a system note so the assistant keeps
+// turns, and the result is fed back as a labelled user-role context message
+// (never system: it is distilled from customer text) so the assistant keeps
 // continuity (customer name, event details already discussed, decisions,
 // open questions) without re-sending the full transcript every turn.
 async function summarizeConversation(
@@ -414,20 +424,22 @@ PIPELINE STAGES (use update_lead_stage):
   qualifying — gathering event needs (participants, location, goals)
   quoted     — you have given an initial price estimate / range
   scheduled  — online meeting confirmed
-  booked     — DP received, event confirmed
-  won        — event completed and fully paid
-  lost       — declined or went cold
 
 Advance the stage when the conversation crosses a boundary (e.g. after giving
-a price estimate, call update_lead_stage with stage="quoted").
+a price estimate, call update_lead_stage with stage="quoted"). You may ONLY set
+the four stages above. booked (DP received), won and lost are confirmed by the
+human team after they verify payment/decision — never set them, and never tell
+the customer a payment or booking is confirmed; say the team will check it.
 
 ADVANCED ACTIONS:
 
 • check_meeting_availability — BEFORE proposing or confirming a meeting time,
   call this with the specific datetime to make sure the slot is free (weekdays
-  only, 10:00–22:00 WIB, no clash with a 15-minute buffer, max 4/day). If the
-  result "available" is false, relay the "reason" and offer another working-day
-  time — NEVER confirm a slot you haven't checked.
+  only, 10:00–22:00 WIB, no clash with a 15-minute buffer, max 4/day, max 1
+  upcoming meeting per customer). If the result "available" is false, relay the
+  "reason" and offer another working-day time — NEVER confirm a slot you haven't
+  checked. If "customer_limit" is true, do NOT offer another time: remind the
+  customer of their existing meeting and say the team can reschedule it.
 
 • schedule_meeting — MEETING CONFIRMATION FLOW, follow IN ORDER:
   1. IDENTITY FIRST: you MUST have the customer's NAME and COMPANY/INSTANSI on
@@ -458,7 +470,8 @@ ADVANCED ACTIONS:
 • handoff_to_human — call when the customer (1) explicitly asks to talk to
   someone, (2) is negotiating beyond your authority (heavy discount, custom
   scope), (3) asks technical questions you cannot answer from the Knowledge
-  Base, or (4) is frustrated. After this tool runs, ${profile.handoffPhone ? `share ${profile.handoffName}'s WhatsApp number ${profile.handoffPhone} in your reply` : `let the customer know ${profile.handoffName} will follow up`} and stop pushing the sale.
+  Base, or (4) is frustrated. After this tool runs, ${profile.handoffPhone ? `share ${profile.handoffName}'s WhatsApp number ${profile.handoffPhone} in your reply` : `let the customer know ${profile.handoffName} will follow up`} and stop pushing the sale. Automatic replies are switched off
+  for this chat after a handoff, so make that reply complete.
 
 PROPOSAL POLICY (IMPORTANT):
 You do NOT have a tool to send proposals. Proposals are reviewed and sent by
@@ -516,8 +529,10 @@ Waktu saat ini: **${nowWib} WIB**. Gunakan ini untuk menghitung tanggal/jam rela
 ${phoneNumber ? leadCaptureInstruction : ''}
 ${orderInstruction}
 
+${PROMPT_SECURITY_RULES}
+
 Konteks:
-${contextText}
+${wrapUntrustedContext(contextText)}
 `;
 
         // 5. Initialize OpenAI client with API key from database
@@ -535,22 +550,23 @@ ${contextText}
         // earlier-stated event details) that the old slice(-4) dropped, while
         // bounding token cost.
         const KEEP_LAST = 12;
-        let recentHistory = history;
+        // Only user/assistant turns may come from history: the web sandbox
+        // routes forward client-supplied history, and a 'system' turn there
+        // must never ride with system authority.
+        const safeHistory = sanitizeHistory(history);
+        let recentHistory = safeHistory;
         let conversationSummary = '';
-        if (history.length > KEEP_LAST) {
-            const older = history.slice(0, history.length - KEEP_LAST);
-            recentHistory = history.slice(-KEEP_LAST);
+        if (safeHistory.length > KEEP_LAST) {
+            const older = safeHistory.slice(0, safeHistory.length - KEEP_LAST);
+            recentHistory = safeHistory.slice(-KEEP_LAST);
             conversationSummary = await summarizeConversation(openai, older, profile.assistantName);
         }
 
         const apiMessages: ChatCompletionMessageParam[] = [
             { role: 'system', content: systemPrompt },
-            ...(conversationSummary
-                ? [{
-                      role: 'system' as const,
-                      content: `RINGKASAN PERCAKAPAN SEBELUMNYA (untuk konteks, jangan diulang ke customer):\n${conversationSummary}`,
-                  }]
-                : []),
+            // The summary is distilled from customer text, so it rides as a
+            // labelled user-role context message — never with system authority.
+            ...(conversationSummary ? [buildConversationSummaryMessage(conversationSummary)] : []),
             ...recentHistory.map((msg) => ({
                 role: msg.role,
                 content: msg.content
@@ -622,6 +638,9 @@ ${contextText}
         };
 
         let responseMessage = await runFirstCall();
+        // A successful handoff_to_human this turn → ask the caller to switch the
+        // AI off for this chat once the reply is delivered (see RAGResponse).
+        let handoffDone = false;
 
         // Handle Tool Calls
         if (responseMessage.tool_calls) {
@@ -640,13 +659,15 @@ ${contextText}
                 opts?.onToolStatus?.({ name: functionName, phase: 'executing' });
 
                 if (functionName === 'check_availability') {
-                    toolResult = await checkAvailability(functionArgs.product_name);
+                    // Org-scoped catalog read (service role + org_id filter).
+                    toolResult = await checkAvailability(orgId, functionArgs.product_name);
                 } else if (functionName === 'check_meeting_availability') {
                     // Read-only + org-scoped — safe without a phoneNumber (also
-                    // works in the web/test sandbox). Never writes anything.
-                    toolResult = await checkMeetingAvailability(orgId, functionArgs.meeting_at);
+                    // works in the web/test sandbox). Never writes anything. With
+                    // a phoneNumber it also applies the 1-active-meeting rule.
+                    toolResult = await checkMeetingAvailability(orgId, functionArgs.meeting_at, phoneNumber);
                 } else if (functionName === 'list_products') {
-                    toolResult = await listProducts(functionArgs.limit);
+                    toolResult = await listProducts(orgId, functionArgs.limit);
                 } else if (functionName === 'save_lead_info') {
                     if (!phoneNumber) {
                         toolResult = JSON.stringify({
@@ -670,22 +691,25 @@ ${contextText}
                         });
                         toolOk = false;
                     } else {
-                        // Defensive: the strict schema should already enforce
-                        // this, but reject anything unexpected before hitting
-                        // the DB CHECK constraint.
-                        const stage = functionArgs.stage as LeadStage;
-                        if (!LEAD_STAGES.includes(stage)) {
+                        // Server-side guard (KEA-12): the strict schema already
+                        // limits the enum to the AI-settable stages, but never
+                        // trust it — booked/won/lost are human-only, and an AI
+                        // call must not move a lead out of those stages either.
+                        const stageCheck = checkAiLeadStage(functionArgs.stage);
+                        if (!stageCheck.ok) {
                             toolResult = JSON.stringify({
                                 ok: false,
-                                error: `Unknown lead stage: ${stage}`,
+                                human_only: stageCheck.humanOnly,
+                                error: stageCheck.error,
                             });
                             toolOk = false;
                         } else {
                             toolResult = await updateLeadStage(
                                 orgId,
                                 phoneNumber,
-                                stage,
-                                functionArgs.reason ?? null
+                                stageCheck.stage,
+                                functionArgs.reason ?? null,
+                                { protectHumanStages: true }
                             );
                             try {
                                 toolOk = JSON.parse(toolResult).ok !== false;
@@ -733,6 +757,7 @@ ${contextText}
                         } catch {
                             toolOk = true;
                         }
+                        if (toolOk) handoffDone = true;
                     }
                 } else if (functionName === 'create_order') {
                     // create_order is privileged — phoneNumber MUST come from the
@@ -821,6 +846,7 @@ ${contextText}
         return {
             message: finalContent,
             sources: sources,
+            ...(handoffDone ? { disableAi: true } : {}),
         };
 
     } catch (error) {
