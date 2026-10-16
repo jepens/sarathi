@@ -193,12 +193,10 @@ publication). It contains catalog SELECTs only.
 - `expected-diff.txt`: differences that are known and explained, one per line
   (`<` only in production, `>` only in the replay), each with a reason:
   permanent ones, or *pending* lines of a migration not yet applied to
-  production (see above). Entries that no longer differ fail as stale. Apart
-  from the pending block `0063_revoke_anon_table_privileges` (the 20 anon
-  `relpriv` pairs) it is empty: the replay up to 0062 matches production
-  exactly (re-checked 2026-10-16 after applying 0062, against a fresh
-  read-only production query: 563 lines, md5
-  `bf9733425504e2bcbdc1a93ae91a413f`).
+  production (see above). Entries that no longer differ fail as stale. It is
+  currently empty: the replay matches production exactly (re-checked
+  2026-10-16 after applying 0063, against a fresh read-only production query:
+  563 lines, md5 `d64ce8915b69c05d3de67eac556d11bd`).
 - Not fingerprinted: sequence privileges, column-level privileges, MAINTAIN,
   foreign-table privileges and default privileges (`pg_default_acl`); the
   `relpriv` lines cover only `arwdDxt` on tables and views. Whenever

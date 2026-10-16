@@ -33,6 +33,8 @@
 | D17 · Skrip service-role (1.12) | Dijalankan Claude di mesin pemilik (`.env.local`). Hasil dry-run & verifikasi ditinjau dulu; setiap langkah yang mengubah data disetujui pemilik (2026-10-16) |
 | D18 · `chat-media` privat (1.11) | Dialihkan segera setelah deploy terverifikasi; link publik lama berhenti ±1 jam kemudian (cache CDN) (2026-10-16) |
 | D19 · Push di perangkat bersama | Perangkat mengikuti user yang sedang login; notifikasi user sebelumnya di perangkat itu berhenti (2026-10-16) |
+| D20 · Dokumen 50–100 MB | Diterima dulu: tetap terkirim ke pelanggan, dashboard menampilkan keterangan "salinan tidak disimpan"; batas dinaikkan ke 100 MB setelah upgrade Pro (0.15) (2026-10-16) |
+| D21 · Hapus kontak | File media kontak di storage ikut dihapus bersama kontaknya (PR kecil setelah `chat-media` privat) (2026-10-16) |
 
 ### Menunggu keputusan
 
@@ -79,7 +81,7 @@
 | 1.6 | Trigger vendor & persona sadar org | KEA-14 | ✅ | [#41](https://github.com/jepens/sahabat_umkm/pull/41): trigger vendor hanya menyentuh org yang sama; 1 persona aktif per org (index unik parsial) |
 | 1.7 | Pisahkan setting platform vs tenant di `app_settings` | KEA-9 | ✅ | [#41](https://github.com/jepens/sahabat_umkm/pull/41): tabel `platform_settings` (khusus service role); key platform keluar dari `app_settings` (0062); `verify_webhook_token` hanya membaca `platform_settings` |
 | 1.8 | Persona bisa dibuat untuk org baru | KUA-6 | ✅ | [#41](https://github.com/jepens/sahabat_umkm/pull/41): `PUT /api/system-message` dengan id `default` membuat persona pertama org baru; id tak dikenal → 404 |
-| 1.9 | Realtime: filter org + mitigasi event DELETE | KEA-15, PER-8 | 🔄 | langkah 0 (cabut hak anon, 0063) — PR menyusul |
+| 1.9 | Realtime: filter org + mitigasi event DELETE | KEA-15, PER-8 | 🔄 | Langkah 0 selesai: 0063 (cabut hak tabel anon) diterapkan 2026-10-16 ([#43](https://github.com/jepens/sahabat_umkm/pull/43)); anon key tidak lagi menerima kolom event DELETE. Sisa: bus Realtime per org (0064 + klien + kontrak 0068) |
 | 1.10 | Peran minimal owner/admin vs staff untuk aksi sensitif | KEA-17 | ➡️ | Dipindah ke Fase 3 (3.2) bersama undangan & manajemen tim — keputusan pemilik 2026-10-16 (tenant pilot awalnya 1 owner) |
 | 1.11 | `chat-media` jadi bucket privat + signed URL (bacaan via URL publik masih lolos) | KEA-4 | ⬜ | Lanjutan dari 0.7 |
 | 1.12 | Policy bucket `documents` tanpa fallback COALESCE ke org seed + pindahkan 15 objek legacy ke prefix org | KEA-4 | ⬜ | Ditemukan saat review #36 |
@@ -131,7 +133,7 @@
 | 5.2 | Skala: fairness antrean, rate limiter per tenant, RLS set-based, index ANN, higiene index | PER-6, PER-9, PER-7, PER-10, PER-11 | ⬜ | |
 | 5.3 | Siklus hidup data: retensi, ekspor/offboarding tenant, audit log | KUA-21 | ⬜ | |
 | 5.4 | Self-serve signup (org baru + CAPTCHA server-side) + Embedded Signup | — | ⬜ | |
-| 5.5 | Perapian | KEA-26, KEA-28, KUA-23, KUA-24, KUA-25, UXA-9 | ⬜ | KEA-28 bagian tabel + default privileges: 0063 (PR menyusul); sisa: EXECUTE anon/authenticated pada `cleanup_*` |
+| 5.5 | Perapian | KEA-26, KEA-28, KUA-23, KUA-24, KUA-25, UXA-9 | ⬜ | KEA-28 bagian tabel + default privileges selesai lewat 0063 ([#43](https://github.com/jepens/sahabat_umkm/pull/43)); sisa: EXECUTE anon/authenticated pada `cleanup_*` |
 
 ## Log progres
 
@@ -147,3 +149,4 @@
 | 2026-10-16 | Fase 1 gelombang 1 selesai: [#39](https://github.com/jepens/sahabat_umkm/pull/39) (F1-A, 2 major + 4 minor review diperbaiki) dan [#40](https://github.com/jepens/sahabat_umkm/pull/40) (F1-B, 1 major + 9 minor diperbaiki). Uji integrasi gabungan: 466 test, `next build` ✓ (Proxy terdeteksi). Keputusan: 1.10 (peran) dipindah ke Fase 3. |
 | 2026-10-16 | [#39](https://github.com/jepens/sahabat_umkm/pull/39) di-merge (`8e48cb6`) dan [#40](https://github.com/jepens/sahabat_umkm/pull/40) di-merge (`c43008c`). Ternyata **deploy produksi manual** (pemilik menekan Deploy di Easypanel; merge tidak men-deploy apa pun). Setelah deploy, #40 terverifikasi live: body 401 baru dan `/dashboard` → `/login`. |
 | 2026-10-16 | **Fase 1 gelombang 2 selesai ([#41](https://github.com/jepens/sahabat_umkm/pull/41)).** Urutannya: 0061 (expand) diterapkan sebelum merge dan diverifikasi; fingerprint 570 baris cocok dengan kueri hash produksi. #41 di-merge (`4cfe994`), lalu deploy manual. Build baru dipastikan live lewat log Supabase: server membaca `platform_settings`, bukan `app_settings`. Sesudah itu **0062 (contract) diterapkan**. Verifikasi: tidak ada lagi `DEFAULT org_id`, unique global sudah di-drop, key platform hanya di `platform_settings`, token webhook valid, dan log bersih (0 pelanggaran NOT NULL/ON CONFLICT). **Skema produksi kini identik dengan replay migrasi** (563 baris, md5 bf973342…). |
+| 2026-10-16 | Fase 1 gelombang 3 dimulai. Desain read-only (6 PR, kritik adversarial: 3 major sudah dimasukkan ke rencana). Keputusan pemilik D16–D21. [#43](https://github.com/jepens/sahabat_umkm/pull/43): **0063 diterapkan** (versi `20261016132423`): 0 relasi `public` dengan hak anon, default ACL postgres/public tanpa anon, `authenticated` tetap normal; skema produksi = replay (563 baris, md5 d64ce891…). **Gerbang tenant ke-2:** belum boleh ada data nyata tenant lain sebelum 0067 (`chat-media` privat) dan 0068 (kontrak Realtime + "Allow public access" mati) live. |
