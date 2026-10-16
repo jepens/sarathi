@@ -7,15 +7,21 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 //   - no session → 401 before any data query; no membership → 403; a failed
 //     membership lookup → 500 (never silently "no org");
 //   - members get { supabase, userId, orgId, role } from organization_members;
-//   - requireEnvIntegration builds on it and keeps the default-org rule.
+//   - requireEnvIntegration builds on it, keeps the default-org rule and
+//     verifies the session STRICTLY with auth.getUser() (Auth round trip), so
+//     a revoked session cannot trigger external side effects;
+//   - an Auth outage / retryable error answers 503, never 401 (no /login
+//     redirect loop, no "you are signed out" for a transient failure).
 
 const DEFAULT_ORG = '5a11e024-0001-4000-8000-000000000001';
 const PILOT_ORG = '0b0e6c1e-1111-4222-8333-444455556666';
 
-type Session = 'none' | 'error' | 'throws' | 'user';
+type Session = 'none' | 'error' | 'throws' | 'retryable' | 'auth5xx' | 'user';
+type ServerUser = 'user' | 'revoked' | 'retryable' | 'none';
 
 const state = vi.hoisted(() => ({
-    session: 'user' as 'none' | 'error' | 'throws' | 'user',
+    session: 'user' as 'none' | 'error' | 'throws' | 'retryable' | 'auth5xx' | 'user',
+    serverUser: 'user' as 'user' | 'revoked' | 'retryable' | 'none',
     membership: null as { org_id: string; role: string } | null,
     membershipError: null as unknown,
     tables: [] as string[],
@@ -36,10 +42,22 @@ const userClient = {
             const s: Session = state.session;
             if (s === 'throws') throw new Error('network down');
             if (s === 'error') return { data: null, error: { message: 'invalid JWT' } };
+            if (s === 'retryable') return { data: null, error: new AuthRetryableFetchError('fetch failed', 0) };
+            if (s === 'auth5xx') return { data: null, error: new AuthApiError('boom', 500, undefined) };
             if (s === 'none') return { data: null, error: null };
             return { data: { claims: { sub: 'user-1' } }, error: null };
         }),
-        getUser: vi.fn(),
+        getUser: vi.fn(async () => {
+            const u: ServerUser = state.serverUser;
+            if (u === 'revoked') {
+                return { data: { user: null }, error: new AuthApiError('Session not found', 403, 'session_not_found') };
+            }
+            if (u === 'retryable') {
+                return { data: { user: null }, error: new AuthRetryableFetchError('Service unavailable', 503) };
+            }
+            if (u === 'none') return { data: { user: null }, error: new AuthSessionMissingError() };
+            return { data: { user: { id: 'user-1' } }, error: null };
+        }),
     },
     from: (table: string) => {
         state.tables.push(table);
@@ -60,6 +78,7 @@ vi.mock('@/lib/supabase/service', () => ({
     })),
 }));
 
+import { AuthApiError, AuthRetryableFetchError, AuthSessionMissingError } from '@supabase/supabase-js';
 import {
     accessDeniedResponse,
     isDefaultOrg,
@@ -72,11 +91,13 @@ import {
     NO_ORG_MESSAGE,
     NOT_SIGNED_IN_MESSAGE,
     ORG_LOOKUP_FAILED_MESSAGE,
+    SESSION_CHECK_FAILED_MESSAGE,
 } from '@/lib/settings/org-access';
 
 beforeEach(() => {
     vi.clearAllMocks();
     state.session = 'user';
+    state.serverUser = 'user';
     state.membership = null;
     state.membershipError = null;
     state.tables = [];
@@ -86,7 +107,7 @@ beforeEach(() => {
 });
 
 describe('requireOrgContext', () => {
-    it.each(['none', 'error', 'throws'] as const)(
+    it.each(['none', 'error'] as const)(
         'answers 401 without a verified session (%s) and queries nothing',
         async (session) => {
             state.session = session;
@@ -94,6 +115,19 @@ describe('requireOrgContext', () => {
                 ok: false,
                 status: 401,
                 error: NOT_SIGNED_IN_MESSAGE,
+            });
+            expect(state.tables).toEqual([]);
+        }
+    );
+
+    it.each(['retryable', 'auth5xx', 'throws'] as const)(
+        'answers 503 (not 401) when the session cannot be verified right now (%s)',
+        async (session) => {
+            state.session = session;
+            await expect(requireOrgContext()).resolves.toEqual({
+                ok: false,
+                status: 503,
+                error: SESSION_CHECK_FAILED_MESSAGE,
             });
             expect(state.tables).toEqual([]);
         }
@@ -137,7 +171,46 @@ describe('requireOrgContext', () => {
     });
 });
 
+describe('requireOrgContext({ strict: true })', () => {
+    it('verifies the session with the Auth server (getUser), not getClaims', async () => {
+        state.membership = { org_id: PILOT_ORG, role: 'owner' };
+        await expect(requireOrgContext({ strict: true })).resolves.toMatchObject({ ok: true, userId: 'user-1' });
+        expect(userClient.auth.getUser).toHaveBeenCalledTimes(1);
+        expect(userClient.auth.getClaims).not.toHaveBeenCalled();
+    });
+
+    it.each(['revoked', 'none'] as const)(
+        'answers 401 for a %s session even though the JWT still verifies locally',
+        async (serverUser) => {
+            state.serverUser = serverUser;
+            state.membership = { org_id: DEFAULT_ORG, role: 'owner' };
+            await expect(requireOrgContext({ strict: true })).resolves.toEqual({
+                ok: false,
+                status: 401,
+                error: NOT_SIGNED_IN_MESSAGE,
+            });
+            expect(state.tables).toEqual([]);
+        }
+    );
+
+    it('answers 503 when the Auth server is unreachable', async () => {
+        state.serverUser = 'retryable';
+        await expect(requireOrgContext({ strict: true })).resolves.toMatchObject({ ok: false, status: 503 });
+        expect(state.tables).toEqual([]);
+    });
+});
+
 describe('requireEnvIntegration', () => {
+    it('checks the session strictly — a revoked session cannot reach the integration', async () => {
+        state.membership = { org_id: DEFAULT_ORG, role: 'owner' };
+        state.serverUser = 'revoked';
+        await expect(requireEnvIntegration('whatsapp')).resolves.toMatchObject({ ok: false, status: 401 });
+        expect(userClient.auth.getUser).toHaveBeenCalledTimes(1);
+        expect(userClient.auth.getClaims).not.toHaveBeenCalled();
+        expect(state.tables).toEqual([]);
+        expect(state.serviceTables).toEqual([]);
+    });
+
     it('lets default-org members through (no Sailendra regression)', async () => {
         state.membership = { org_id: DEFAULT_ORG, role: 'owner' };
         await expect(requireEnvIntegration('whatsapp')).resolves.toMatchObject({
@@ -158,9 +231,9 @@ describe('requireEnvIntegration', () => {
     });
 
     it('never resolves the default org for a caller without a session or org', async () => {
-        state.session = 'none';
+        state.serverUser = 'none';
         await expect(requireEnvIntegration('zoom')).resolves.toMatchObject({ status: 401 });
-        state.session = 'user';
+        state.serverUser = 'user';
         await expect(requireEnvIntegration('zoom')).resolves.toMatchObject({ status: 403 });
         expect(state.serviceTables).toEqual([]);
     });
@@ -179,6 +252,11 @@ describe('requireUserContext', () => {
     it('answers 401 without a session', async () => {
         state.session = 'none';
         await expect(requireUserContext()).resolves.toMatchObject({ ok: false, status: 401 });
+    });
+
+    it('answers 503 when the session cannot be verified right now', async () => {
+        state.session = 'retryable';
+        await expect(requireUserContext()).resolves.toMatchObject({ ok: false, status: 503 });
     });
 });
 

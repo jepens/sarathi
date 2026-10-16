@@ -13,9 +13,13 @@ const DEFAULT_ORG = '5a11e024-0001-4000-8000-000000000001';
 
 const h = vi.hoisted(() => ({
     session: true,
+    // JWT still verifies locally (getClaims) but the Auth server says the
+    // session was revoked (sign-out elsewhere / banned user).
+    revoked: false,
     tables: [] as string[],
     rpcs: [] as string[],
     storage: 0,
+    serviceCalls: [] as string[],
     generateEmbedding: vi.fn(),
     generateRAGResponse: vi.fn(),
     sendWhatsAppMessage: vi.fn(),
@@ -45,6 +49,12 @@ const fakeClient = {
                 ? { data: { claims: { sub: 'user-1' } }, error: null }
                 : { data: null, error: null }
         ),
+        // Strict check (requireEnvIntegration → requireOrgContext({ strict: true })).
+        getUser: vi.fn(async () =>
+            h.session && !h.revoked
+                ? { data: { user: { id: 'user-1' } }, error: null }
+                : { data: { user: null }, error: null }
+        ),
     },
     from: (table: string) => {
         h.tables.push(table);
@@ -61,14 +71,26 @@ const fakeClient = {
 };
 
 vi.mock('@/lib/supabase/server', () => ({ createClient: vi.fn(async () => fakeClient) }));
+// Service-role stub: records every call as "method(args)" so tests can prove
+// the exact filters of a service-role write (it bypasses RLS).
 vi.mock('@/lib/supabase/service', () => ({
-    createServiceOrServerClient: vi.fn(async () => ({
-        from: () => ({
-            select: () => ({
-                eq: () => ({ maybeSingle: async () => ({ data: { value: DEFAULT_ORG } }) }),
-            }),
-        }),
-    })),
+    createServiceOrServerClient: vi.fn(async () => {
+        const q: Record<string, unknown> = {};
+        for (const m of ['select', 'delete', 'eq']) {
+            q[m] = (...args: unknown[]) => {
+                h.serviceCalls.push(`${m}(${args.map((a) => JSON.stringify(a)).join(',')})`);
+                return q;
+            };
+        }
+        q.maybeSingle = async () => ({ data: { value: DEFAULT_ORG } });
+        q.then = (resolve: (v: unknown) => unknown) => resolve({ data: null, error: null });
+        return {
+            from: (table: string) => {
+                h.serviceCalls.push(`from(${JSON.stringify(table)})`);
+                return q;
+            },
+        };
+    }),
 }));
 vi.mock('@/lib/ai/embedding', () => ({ generateEmbedding: h.generateEmbedding }));
 vi.mock('@/lib/ai/rag', () => ({ generateRAGResponse: h.generateRAGResponse }));
@@ -228,9 +250,11 @@ const externals = () => [
 beforeEach(() => {
     vi.clearAllMocks();
     h.session = true;
+    h.revoked = false;
     h.tables = [];
     h.rpcs = [];
     h.storage = 0;
+    h.serviceCalls = [];
 });
 
 describe.each(routes)('$name', ({ request, call }) => {
@@ -264,6 +288,37 @@ describe.each(routes)('$name', ({ request, call }) => {
     });
 });
 
+describe('env-integration routes verify the session with the Auth server', () => {
+    const sideEffectRoutes = routes.filter((r) => r.name.startsWith('POST /api/chat/send'));
+
+    it('covers the WhatsApp send routes', () => {
+        expect(sideEffectRoutes.map((r) => r.name)).toEqual(['POST /api/chat/send', 'POST /api/chat/send-media']);
+    });
+
+    describe.each(sideEffectRoutes)('$name', ({ request, call }) => {
+        it('401 for a revoked session whose JWT still verifies locally — nothing is sent', async () => {
+            h.revoked = true;
+            const req = request();
+
+            const res = await call(req);
+
+            expect(res.status).toBe(401);
+            expect(await res.json()).toEqual({ error: NOT_SIGNED_IN_MESSAGE });
+            expect(fakeClient.auth.getUser).toHaveBeenCalled();
+            expect(req.bodyUsed).toBe(false);
+            expect(h.tables).toEqual([]);
+            for (const ext of externals()) expect(ext).not.toHaveBeenCalled();
+        });
+    });
+
+    it('non-integration routes keep the local getClaims check (no Auth round trip)', async () => {
+        h.revoked = true;
+        const res = await leadsGET(new Request('http://localhost/api/leads'));
+        expect(res.status).toBe(403); // signed in per JWT, no membership in the stub
+        expect(fakeClient.auth.getUser).not.toHaveBeenCalled();
+    });
+});
+
 describe('POST /api/push/unsubscribe (session-only gate)', () => {
     const req = () => jsonReq('http://localhost/api/push/unsubscribe', { endpoint: 'https://push.example/1' });
 
@@ -273,12 +328,28 @@ describe('POST /api/push/unsubscribe (session-only gate)', () => {
         expect(res.status).toBe(401);
         expect(await res.json()).toEqual({ error: NOT_SIGNED_IN_MESSAGE });
         expect(h.tables).toEqual([]);
+        expect(h.serviceCalls).toEqual([]);
     });
 
-    it('lets a signed-in user without membership remove their own device', async () => {
+    it('lets a signed-in user without membership remove their own device (service role, own rows only)', async () => {
         const res = await pushUnsubscribePOST(req());
         expect(res.status).toBe(200);
-        expect(h.tables).toEqual(['push_subscriptions']);
+        // RLS on push_subscriptions requires membership, so the delete runs with
+        // the service-role client — strictly scoped to this endpoint AND the
+        // verified user. Nothing goes through the RLS client.
+        expect(h.tables).toEqual([]);
+        expect(h.serviceCalls).toEqual([
+            'from("push_subscriptions")',
+            'delete()',
+            'eq("endpoint","https://push.example/1")',
+            'eq("user_id","user-1")',
+        ]);
+    });
+
+    it('never runs an unscoped service-role delete on a bad body', async () => {
+        const res = await pushUnsubscribePOST(jsonReq('http://localhost/api/push/unsubscribe', { endpoint: 42 }));
+        expect(res.status).toBe(400);
+        expect(h.serviceCalls).toEqual([]);
     });
 });
 

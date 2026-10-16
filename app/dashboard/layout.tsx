@@ -21,7 +21,13 @@ export default async function DashboardLayout({
     // same resolver as the API routes. A signed-in non-member gets orgId null
     // (writes refuse with a clear message).
     const access = await requireOrgContext()
+    // Redirect ONLY when there is genuinely no session (401). If the session
+    // could not be verified right now (503: Auth unreachable / retryable
+    // error) the proxy may still see the user as signed in and bounce /login
+    // back here — a redirect loop. Throw instead so Next renders the error
+    // page (app/error.tsx — the boundary above this layout — offers a retry).
     if (!access.ok && access.status === 401) redirect("/login")
+    if (!access.ok && access.status === 503) throw new Error(access.error)
     const orgId = access.ok ? access.orgId : null
     return (
         // Stack on mobile (top bar + content), side-by-side rail + content on md+.

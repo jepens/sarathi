@@ -1,5 +1,6 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
+import { isSessionCheckUnavailable } from './session-errors'
 
 // Responses that set auth cookies must never be cached by a CDN / reverse
 // proxy, or one user's session could be served to another. @supabase/ssr
@@ -53,13 +54,24 @@ export async function updateSession(request: NextRequest) {
   // setAll above) and verifies the JWT signature — locally when the project
   // uses asymmetric signing keys, otherwise via the Auth server. Removing it
   // makes users randomly logged out of server-rendered pages.
-  const { data } = await supabase.auth.getClaims()
-  const signedIn = !!data?.claims?.sub
+  let signedIn = false
+  // Auth could not answer right now (outage / retryable error / unexpected
+  // throw). Then do not bounce /dashboard to /login: the dashboard layout
+  // re-checks and shows a retryable error page instead.
+  let unverifiable = false
+  try {
+    const { data, error } = await supabase.auth.getClaims()
+    signedIn = !!data?.claims?.sub
+    unverifiable = !signedIn && isSessionCheckUnavailable(error)
+  } catch (err) {
+    console.error('proxy session check failed', err)
+    unverifiable = true
+  }
 
   const { pathname } = request.nextUrl
   let response: NextResponse = supabaseResponse
 
-  if (pathname.startsWith('/dashboard') && !signedIn) {
+  if (pathname.startsWith('/dashboard') && !signedIn && !unverifiable) {
     response = redirectKeepingCookies(new URL('/login', request.url), supabaseResponse)
   } else if (
     (pathname.startsWith('/login') || pathname.startsWith('/signup')) &&

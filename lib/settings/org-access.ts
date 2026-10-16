@@ -22,6 +22,7 @@ export type OrgRole = 'owner' | 'admin' | 'staff';
 export const NOT_SIGNED_IN_MESSAGE = 'Sesi tidak valid — silakan login ulang.';
 export const NO_ORG_MESSAGE = 'Akun Anda belum terdaftar di organisasi mana pun.';
 export const ORG_LOOKUP_FAILED_MESSAGE = 'Gagal memuat data organisasi. Silakan coba lagi.';
+export const SESSION_CHECK_FAILED_MESSAGE = 'Gagal memverifikasi sesi. Silakan coba lagi.';
 
 export const INTEGRATION_NOT_CONFIGURED_MESSAGE: Record<EnvIntegration, string> = {
     whatsapp: 'Integrasi WhatsApp belum dikonfigurasi untuk organisasi ini.',
@@ -30,8 +31,12 @@ export const INTEGRATION_NOT_CONFIGURED_MESSAGE: Record<EnvIntegration, string> 
     email: 'Integrasi email belum dikonfigurasi untuk organisasi ini.',
 };
 
-/** A refused gate — routes answer it verbatim as `{ error }` with `status`. */
-export type OrgAccessDenied = { ok: false; status: 401 | 403 | 500; error: string };
+/**
+ * A refused gate — routes answer it verbatim as `{ error }` with `status`.
+ * 401 = genuinely no valid session; 503 = the session could not be verified
+ * right now (Auth unreachable / retryable failure) — NOT a sign-out.
+ */
+export type OrgAccessDenied = { ok: false; status: 401 | 403 | 500 | 503; error: string };
 
 export type OrgGateResult = { ok: true; orgId: string } | OrgAccessDenied;
 
