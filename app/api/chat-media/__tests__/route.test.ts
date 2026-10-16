@@ -19,7 +19,7 @@ const PHONE = '620000000000';
 const KEY = `${ORG}/${PHONE}/5e1f0000-0000-4000-8000-000000000001.jpg`;
 const ORIGIN = 'https://abcdefghijklmnop.supabase.co';
 const PUBLIC_URL = `${ORIGIN}/storage/v1/object/public/chat-media/${KEY}`;
-const SIGNED_URL = `${ORIGIN}/storage/v1/object/sign/chat-media/${KEY}?token=eyJhbGciOiJIUzI1NiJ9.e30.c2ln`;
+const SIGNED_URL = `${ORIGIN}/storage/v1/object/sign/chat-media/${KEY}?token=fake-signature-for-tests`;
 
 const h = vi.hoisted(() => ({
     session: true,

@@ -19,7 +19,7 @@ const OTHER = '0b0e6c1e-1111-4222-8333-444455556666';
 const KEY = `${ORG}/620000000000/5e1f0000-0000-4000-8000-000000000001.jpg`;
 const ORIGIN = 'https://abcdefghijklmnop.supabase.co';
 const publicUrl = (key: string) => `${ORIGIN}/storage/v1/object/public/chat-media/${key}`;
-const signedUrl = (key: string) => `${ORIGIN}/storage/v1/object/sign/chat-media/${key}?token=eyJhbGciOiJIUzI1NiJ9.e30.c2ln`;
+const signedUrl = (key: string) => `${ORIGIN}/storage/v1/object/sign/chat-media/${key}?token=fake-signature-for-tests`;
 
 describe('chatMediaObjectPath', () => {
     it('reads the same key from a public URL, a signed URL with a token and a bare key', () => {
