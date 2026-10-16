@@ -12,6 +12,8 @@ import {
     chatMediaHref,
     chatMediaObjectPath,
     chatMediaSignedSeconds,
+    contactMediaFolder,
+    safePhoneSegment,
     storageContentType,
 } from '@/lib/storage/chat-media';
 import { OUTBOUND_MEDIA_MIMES, classifyMedia } from '@/lib/whatsapp/client';
@@ -187,5 +189,23 @@ describe('chatMediaHref', () => {
             '/api/chat-media/5e1f0000-0000-4000-8000-000000000009'
         );
         expect(chatMediaHref('a/b?c')).toBe('/api/chat-media/a%2Fb%3Fc');
+    });
+});
+
+describe("safePhoneSegment / contactMediaFolder (D21: a contact's files go with it)", () => {
+    it('keeps a wa_id or BSUID as it is, and replaces everything that could add a folder', () => {
+        expect(safePhoneSegment('620000000000')).toBe('620000000000');
+        expect(safePhoneSegment('US.1234567890')).toBe('US.1234567890');
+        expect(safePhoneSegment('+62 811/../x')).toBe('_62_811_.._x');
+    });
+
+    it('names the contact folder only when the phone is a segment as it is', () => {
+        expect(contactMediaFolder(ORG, '620000000000')).toBe(`${ORG}/620000000000`);
+        // '+62811' and '_62811' would share '<org>/_62811': only their own keys are removed.
+        expect(contactMediaFolder(ORG, '+62811')).toBeNull();
+        expect(contactMediaFolder(ORG, '..')).toBeNull();
+        expect(contactMediaFolder(ORG, '.')).toBeNull();
+        expect(contactMediaFolder(ORG, '')).toBeNull();
+        expect(contactMediaFolder('', '620000000000')).toBeNull();
     });
 });

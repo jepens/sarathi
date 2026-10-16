@@ -11,7 +11,7 @@ import { webhookSummary } from '@/lib/whatsapp/webhook-summary';
 import { logSystemMessage } from '@/lib/whatsapp/history';
 import { sendPushToOrg } from '@/lib/notifications/web-push';
 import { handleFlowReply } from '@/lib/whatsapp/flow-response';
-import { CHAT_MEDIA_BUCKET, CHAT_MEDIA_MAX_BYTES, storageContentType } from '@/lib/storage/chat-media';
+import { CHAT_MEDIA_BUCKET, CHAT_MEDIA_MAX_BYTES, safePhoneSegment, storageContentType } from '@/lib/storage/chat-media';
 
 import { checkVerifyToken } from '@/lib/settings/app-settings';
 
@@ -204,7 +204,7 @@ async function handleInboundMedia(params: InboundMediaParams): Promise<void> {
         // owner decision D20: not even attempted) → null media_url → placeholder
         // + "Salinan tidak disimpan" in the UI; the row is inserted either way.
         // Sanitise the phone segment; orgId + the random UUID are safe.
-        const safePhone = contactKey.replace(/[^a-zA-Z0-9._-]/g, '_');
+        const safePhone = safePhoneSegment(contactKey);
         const path = `${orgId}/${safePhone}/${crypto.randomUUID()}.${inboundMediaExt(mime, filename)}`;
         let mediaPath: string | null = null;
         if (media.size > CHAT_MEDIA_MAX_BYTES) {

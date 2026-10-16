@@ -906,8 +906,9 @@ export function ContactList() {
                             <span className="font-medium text-foreground">
                                 {deleteContact?.contact_name || deleteContact?.phone_number}
                             </span>{' '}
-                            akan dihapus permanen beserta data lead-nya. Kontak yang punya
-                            riwayat chat atau booking tidak bisa dihapus.
+                            akan dihapus permanen beserta riwayat chat, file media
+                            (foto, dokumen, pesan suara), dan data lead-nya. Kontak yang
+                            punya booking tidak bisa dihapus.
                         </DialogDescription>
                     </DialogHeader>
                     <DialogFooter>

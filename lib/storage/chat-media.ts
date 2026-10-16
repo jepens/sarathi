@@ -65,6 +65,26 @@ export function storageContentType(mime: string | null | undefined): string {
     return CHAT_MEDIA_ALLOWED_MIME.includes(base) ? base : OCTET_STREAM;
 }
 
+/**
+ * The phone segment of a chat-media key, as both writers build it: every
+ * character outside [a-zA-Z0-9._-] becomes '_', so nothing can add a '/' or
+ * '..' to the key.
+ */
+export function safePhoneSegment(phone: string): string {
+    return phone.replace(/[^a-zA-Z0-9._-]/g, '_');
+}
+
+/**
+ * The folder that holds one contact's chat media, '<org>/<phone>', or null
+ * when the phone is not a segment as it is (it had characters to replace, or
+ * is '.' / '..'): two contacts could then share a folder, so only the keys
+ * that contact's own messages name may be removed (owner decision D21).
+ */
+export function contactMediaFolder(orgId: string, phone: string): string | null {
+    if (!orgId || !phone || phone === '.' || phone === '..') return null;
+    return safePhoneSegment(phone) === phone ? `${orgId}/${phone}` : null;
+}
+
 /** The dashboard URL of a message's media: redirects to a short-lived signed URL. */
 export function chatMediaHref(messageId: string): string {
     return '/api/chat-media/' + encodeURIComponent(messageId);
