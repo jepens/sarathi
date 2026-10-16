@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest';
 import {
     FOLLOWUP_RESYNC_MS,
     rejoinDelay,
@@ -32,6 +32,8 @@ type SocketState = 'closed' | 'connecting' | 'open' | 'disconnecting';
 class FakeSocket {
     state: SocketState = 'closed';
     connects = 0;
+    /** The pending or open connection (RealtimeClient.conn); close() fails a pending connect. */
+    conn: { close: Mock<(code?: number, reason?: string) => void> } | null = null;
     disconnects = 0;
     sendBuffer: string[] = [];
     sent: string[] = [];
@@ -41,6 +43,12 @@ class FakeSocket {
         if (this.state !== 'closed') return;
         this.state = 'connecting';
         this.connects += 1;
+        const conn = {
+            close: vi.fn<(code?: number, reason?: string) => void>(() => {
+                if (this.conn === conn && this.state === 'connecting') this.failConnect();
+            }),
+        };
+        this.conn = conn;
     }
     isConnected() {
         return this.state === 'open';
@@ -392,6 +400,37 @@ describe('startOrgChannel', () => {
         await vi.advanceTimersByTimeAsync(60_000);
         expect(channels).toHaveLength(2);
         expect(client.channel).toHaveBeenCalledTimes(2);
+    });
+
+    it('a connect that hangs for a whole stall period is failed and redone; the channel is kept', async () => {
+        const { client, socket, channels } = fakeClient();
+        start(client);
+        await vi.advanceTimersByTimeAsync(0);
+        const first = socket.conn!;
+        expect(socket.state).toBe('connecting'); // the network swallows the attempt: no error, no close
+        await vi.advanceTimersByTimeAsync(20_000);
+        expect(first.close).not.toHaveBeenCalled(); // first sighting only
+        await vi.advanceTimersByTimeAsync(20_000);
+        expect(first.close).toHaveBeenCalledTimes(1); // the same attempt a stall period later
+        await vi.advanceTimersByTimeAsync(150);
+        expect(socket.connects).toBe(2); // connected again at once, not after realtime-js's backoff
+        expect(socket.conn).not.toBe(first);
+        expect(channels).toHaveLength(1);
+        expect(channels[0].removed).toBe(false);
+        socket.opened();
+        channels[0].status('SUBSCRIBED'); // realtime-js rejoined the same channel
+    });
+
+    it('wake() during a pending connect redoes it at once (it most likely hangs on the dead network)', async () => {
+        const { client, socket, channels } = fakeClient();
+        const { controller } = start(client);
+        await vi.advanceTimersByTimeAsync(0);
+        const pending = socket.conn!;
+        controller.wake();
+        expect(pending.close).toHaveBeenCalledTimes(1);
+        await vi.advanceTimersByTimeAsync(150);
+        expect(socket.connects).toBe(2);
+        expect(channels).toHaveLength(1);
     });
 
     it('wake() connects an idle socket without re-creating a joined channel', async () => {

@@ -60,6 +60,13 @@ export interface OrgRealtimeSocket {
     isConnected(): boolean;
     isConnecting(): boolean;
     isDisconnecting(): boolean;
+    /**
+     * The current WebSocket (RealtimeClient.conn). Closing it is how
+     * realtime-js itself recovers from a heartbeat timeout: it fails the
+     * connection and reconnects with its own backoff, and the channels rejoin
+     * (disconnect() would tear the channels down instead).
+     */
+    conn?: { close(code?: number, reason?: string): void } | null;
 }
 
 export interface OrgRealtimeClient {
@@ -138,6 +145,8 @@ export function startOrgChannel(
     let stallTimer: ReturnType<typeof setTimeout> | undefined;
     let socketTimer: ReturnType<typeof setTimeout> | undefined;
     let followupTimer: ReturnType<typeof setTimeout> | undefined;
+    // The socket connection seen 'connecting' at the last stall check.
+    let connectingConn: unknown = null;
     let status: OrgRealtimeStatus = 'connecting';
 
     const report = (next: OrgRealtimeStatus, detail: string) => {
@@ -191,17 +200,38 @@ export function startOrgChannel(
         if (stallTimer === undefined) stallTimer = setTimeout(onStall, RECREATE_AFTER_STALL_MS);
     };
 
+    // Fails a pending connect attempt (realtime-js sees error + close and the
+    // channel rejoins after the next connect) and connects again right away
+    // rather than after realtime-js's backoff (up to 10 s).
+    const retryConnect = (conn: { close(code?: number, reason?: string): void }, why: string) => {
+        connectingConn = null;
+        console.info(`[realtime] ${topic} ${why}, connecting again`);
+        conn.close(1000, why);
+        clearTimeout(socketTimer);
+        socketTimer = setTimeout(ensureSocket, SOCKET_RETRY_MS);
+    };
+
     // No join for a while: on a connected socket the channel is stuck, so it
     // is re-created; on a socket that is down, the socket gets a nudge and
-    // the channel waits for realtime-js to rejoin it.
+    // the channel waits for realtime-js to rejoin it. A connect attempt still
+    // pending a whole stall period later hangs (no error, no close: a silent
+    // network); closing it makes realtime-js fail it and try again.
     const onStall = () => {
         stallTimer = undefined;
         if (stopped) return;
         if (socket.isConnected()) {
+            connectingConn = null;
             void recreate();
             return;
         }
-        ensureSocket();
+        if (socket.isConnecting()) {
+            const conn = socket.conn ?? null;
+            if (conn && conn === connectingConn) retryConnect(conn, 'connect stalled');
+            else connectingConn = conn;
+        } else {
+            connectingConn = null;
+            ensureSocket();
+        }
         armStall();
     };
 
@@ -278,7 +308,11 @@ export function startOrgChannel(
     return {
         wake() {
             if (stopped) return;
-            ensureSocket();
+            // Back online or visible: a connect attempt still pending from
+            // before most likely hangs on the dead network; redo it now.
+            const conn = socket.isConnecting() ? (socket.conn ?? null) : null;
+            if (conn) retryConnect(conn, 'woke up while connecting');
+            else ensureSocket();
             if (retryTimer === undefined) return;
             clearTimeout(retryTimer);
             retryTimer = undefined;

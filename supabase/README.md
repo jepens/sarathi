@@ -201,7 +201,10 @@ tenants; only an empty publication closes it.
   flushed in one burst on reconnect); a socket drop reports CHANNEL_ERROR
   twice and does not count as a failed join. Only unmounting uses
   removeChannel (it closes the socket with the last channel); a channel
-  opened while the socket is still disconnecting retries `connect()`. Views
+  opened while the socket is still disconnecting retries `connect()`. A
+  connect attempt still pending a whole stall period later (a network that
+  swallows packets) is closed and redone, like realtime-js does after a
+  heartbeat timeout, and so is a pending one when the tab wakes up. Views
   that also apply rows by id (the open chat, Bookings) guard their
   whole-list reads (`lib/realtime/list-guard.ts`), so a slow read never
   undoes a newer merge or delete. `useOrgRealtimeStatus()` gives `live` / `paused`; the console logs
