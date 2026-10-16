@@ -12,16 +12,17 @@ export const BUCKET = 'documents';
 export const SEED_ORG_ID = '5a11e024-0001-4000-8000-000000000001';
 /** Same pattern as the CASE guard of the storage policies (0058 / 0066). */
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-export const PHASES = ['plan', 'copy', 'verify', 'delete-originals', 'restore'];
+export const PHASES = ['plan', 'copy', 'verify', 'delete-originals', 'restore', 'remove-copies'];
 /** Phases that change Storage when run with --confirm (dry-run without it). */
-export const WRITE_PHASES = new Set(['copy', 'delete-originals', 'restore']);
+export const WRITE_PHASES = new Set(['copy', 'delete-originals', 'restore', 'remove-copies']);
 export const DEFAULT_SOAK_HOURS = 72;
 export const MANIFEST_KIND = 'sarathi-legacy-kb-objects';
 export const MANIFEST_VERSION = 1;
 
 /**
  * Command line: --phase=<p> --expect-ref=<ref> --out=<dir> [--confirm]
- * [--soak-hours=<n>]. Only the `--name=value` form, like the other scripts.
+ * [--soak-hours=<n>] [--only-user-deleted]. Only the `--name=value` form, like
+ * the other scripts.
  * @param {string[]} argv process.argv.slice(2)
  */
 export function parseArgs(argv) {
@@ -31,12 +32,17 @@ export function parseArgs(argv) {
         out: /** @type {string|null} */ (null),
         confirm: false,
         soakHours: DEFAULT_SOAK_HOURS,
+        onlyUserDeleted: false,
     };
     /** @type {string[]} */
     const errors = [];
     for (const arg of argv) {
         if (arg === '--confirm') {
             opts.confirm = true;
+            continue;
+        }
+        if (arg === '--only-user-deleted') {
+            opts.onlyUserDeleted = true;
             continue;
         }
         const m = /^--(phase|expect-ref|out|soak-hours)=(.*)$/s.exec(arg);
@@ -62,6 +68,9 @@ export function parseArgs(argv) {
     if (!opts.out) errors.push('--out=<directory outside the repository> is required');
     if (opts.confirm && !WRITE_PHASES.has(opts.phase)) {
         errors.push(`--confirm is only accepted by the phases ${[...WRITE_PHASES].join(', ')}`);
+    }
+    if (opts.onlyUserDeleted && opts.phase !== 'delete-originals') {
+        errors.push('--only-user-deleted is only accepted by --phase=delete-originals');
     }
     return { opts, errors };
 }
@@ -236,16 +245,19 @@ export function isRootSource(src) {
  * @typedef {{ id: string, org_id: string, metadata: unknown }} DocRow
  * @typedef {{
  *   total: number, fileBacked: number, editor: number, editorRootSource: number,
- *   other: number, prefixed: number, rootSource: number, rootSourceOtherOrg: number,
- *   rootSourceDangling: number, outsideOrgFolder: number, blocking: number,
- *   referencedObjects: number,
+ *   other: number, prefixed: number, relinked: number, rootSource: number,
+ *   rootSourceOtherOrg: number, rootSourceDangling: number, outsideOrgFolder: number,
+ *   blocking: number, referencedObjects: number,
  * }} RowCounts
  */
 
 /**
  * Sorts the documents rows the way 0066 sees them.
  * - byName: root-level object name -> ids of the seed-org file-backed rows
- *   whose source is that name (0066 relinks exactly these).
+ *   whose source is that name (0066 relinks exactly these), or is already its
+ *   copy '<seed>/<that name>' (a plan made again after 0066: the rows still
+ *   belong to that object, so a KB entry a user deletes later is still
+ *   recognised as deleted by the user and never copied back).
  * - blocking: file-backed rows the relink cannot fix (another org, a source
  *   that names no object, a source outside the row's org folder); the 0066
  *   guard would refuse while they exist.
@@ -264,6 +276,7 @@ export function analyseRows(rows, rootNames, seedOrgId = SEED_ORG_ID) {
         editorRootSource: 0,
         other: 0,
         prefixed: 0,
+        relinked: 0,
         rootSource: 0,
         rootSourceOtherOrg: 0,
         rootSourceDangling: 0,
@@ -285,7 +298,15 @@ export function analyseRows(rows, rootNames, seedOrgId = SEED_ORG_ID) {
         counts.fileBacked++;
         const src = metadataText(meta, 'source');
         if (typeof src === 'string' && src.startsWith(`${row.org_id}/`)) {
-            counts.prefixed++;
+            const rootName = row.org_id === seedOrgId ? src.slice(seedOrgId.length + 1) : null;
+            if (rootName !== null && rootNames.has(rootName) && destinationFor(rootName, seedOrgId) === src) {
+                counts.relinked++;
+                const ids = byName.get(rootName) ?? [];
+                ids.push(row.id);
+                byName.set(rootName, ids);
+            } else {
+                counts.prefixed++;
+            }
         } else if (isRootSource(src)) {
             counts.rootSource++;
             if (row.org_id !== seedOrgId) counts.rootSourceOtherOrg++;
@@ -369,37 +390,78 @@ export function restoreDecision(s) {
 }
 
 /**
- * Hours of the soak still ahead. It counts from the last copy verification
- * (0066 is applied right after the copy phase); with no verification yet the
- * whole soak is ahead.
- * @param {{ copy?: { verified_at?: string|null } }[]} objects
+ * Hours of the soak still ahead. The soak is the time the originals stay in
+ * place while the new policy (0066) is live, so it counts from
+ * manifest.soak_started_at, which the verify phase records the first time it
+ * sees 0066 in effect (soakStartReady). Not started yet = the whole soak is
+ * ahead.
+ * @param {string|null|undefined} soakStartedAt ISO time
  * @param {number} soakHours
  * @param {number} now epoch ms
  */
-export function soakRemainingHours(objects, soakHours, now = Date.now()) {
-    const times = objects
-        .map((o) => o.copy?.verified_at)
-        .filter((t) => typeof t === 'string')
-        .map((t) => Date.parse(/** @type {string} */ (t)))
-        .filter((t) => Number.isFinite(t));
-    if (times.length === 0) return soakHours;
-    const remainingMs = Math.max(...times) + soakHours * 3_600_000 - now;
+export function soakRemainingHours(soakStartedAt, soakHours, now = Date.now()) {
+    const start = typeof soakStartedAt === 'string' ? Date.parse(soakStartedAt) : NaN;
+    if (!Number.isFinite(start)) return soakHours;
+    const remainingMs = start + soakHours * 3_600_000 - now;
     return remainingMs > 0 ? remainingMs / 3_600_000 : 0;
 }
 
 /**
- * Why delete-originals must not run yet ([] = go).
+ * Whether verify may record the soak start: 0066 is in effect (no file-backed
+ * row names a root-level object any more), every live manifest row points at
+ * its copy, and every copy verified.
  * @param {{
  *   rows: DocRow[],
  *   objects: { dest: string, row_ids: string[], user_deleted_at?: string|null }[],
  *   verifyFailures: number,
+ * }} s
+ */
+export function soakStartReady(s) {
+    if (s.verifyFailures > 0) return false;
+    if (s.rows.some((r) => isFileBackedRow(r.metadata) && isRootSource(metadataText(r.metadata, 'source')))) {
+        return false;
+    }
+    return manifestRowsNotRelinked(s.rows, s.objects) === 0;
+}
+
+/**
+ * Live manifest rows (of entries not deleted by a user) whose source is not
+ * their object's copy.
+ * @param {DocRow[]} rows
+ * @param {{ dest: string, row_ids: string[], user_deleted_at?: string|null }[]} objects
+ */
+function manifestRowsNotRelinked(rows, objects) {
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    let notRelinked = 0;
+    for (const o of objects) {
+        if (o.user_deleted_at) continue;
+        for (const id of o.row_ids) {
+            const row = byId.get(id);
+            if (row && metadataText(row.metadata, 'source') !== o.dest) notRelinked++;
+        }
+    }
+    return notRelinked;
+}
+
+/**
+ * Why delete-originals must not run yet ([] = go). With onlyUserDeleted (the
+ * first step of a rollback during the soak: the originals of KB entries users
+ * deleted must be gone before the 0038 fallback returns) only verify failures
+ * block; the soak and the relink are not required.
+ * @param {{
+ *   rows: DocRow[],
+ *   objects: { dest: string, row_ids: string[], user_deleted_at?: string|null }[],
+ *   verifyFailures: number,
+ *   soakStartedAt: string|null|undefined,
  *   soakHoursLeft: number,
+ *   onlyUserDeleted?: boolean,
  * }} s
  */
 export function deleteOriginalsBlockers(s) {
     /** @type {string[]} */
     const blockers = [];
     if (s.verifyFailures > 0) blockers.push(`verify failed for ${s.verifyFailures} object(s)`);
+    if (s.onlyUserDeleted) return blockers;
     // The critique fix: only file-backed rows count. Editor rows keep a
     // source without '/' (their title) forever.
     const stillRoot = s.rows.filter(
@@ -408,20 +470,32 @@ export function deleteOriginalsBlockers(s) {
     if (stillRoot > 0) {
         blockers.push(`${stillRoot} file-backed documents row(s) still name a root-level object (apply 0066 first)`);
     }
-    const byId = new Map(s.rows.map((r) => [r.id, r]));
-    let notRelinked = 0;
-    for (const o of s.objects) {
-        if (o.user_deleted_at) continue;
-        for (const id of o.row_ids) {
-            const row = byId.get(id);
-            if (row && metadataText(row.metadata, 'source') !== o.dest) notRelinked++;
-        }
-    }
+    const notRelinked = manifestRowsNotRelinked(s.rows, s.objects);
     if (notRelinked > 0) blockers.push(`${notRelinked} manifest row(s) do not point at their copy`);
-    if (s.soakHoursLeft > 0) {
+    if (!s.soakStartedAt) {
+        blockers.push('the soak has not started: run --phase=verify once 0066 is live (it records the start)');
+    } else if (s.soakHoursLeft > 0) {
         blockers.push(`the soak is not over: ${s.soakHoursLeft.toFixed(1)} h left (--soak-hours)`);
     }
     return blockers;
+}
+
+/**
+ * remove-copies phase (rollback before delete-originals), per object: removes
+ * exactly the manifest copy, only while nothing depends on it.
+ * @param {{ userDeleted: boolean, original: 'present'|'absent'|'changed',
+ *           copy: 'identical'|'absent'|'different', rowsPointAtCopy: number }} s
+ * @returns {{ action: 'remove'|'skip-absent'|'abort', reason?: string }}
+ */
+export function removeCopyDecision(s) {
+    if (s.copy === 'absent') return { action: 'skip-absent' };
+    if (s.copy === 'different') return { action: 'abort', reason: 'the copy no longer matches the manifest' };
+    if (s.rowsPointAtCopy > 0) {
+        return { action: 'abort', reason: `${s.rowsPointAtCopy} documents row(s) still point at the copy (revert the 0066 relink first)` };
+    }
+    if (s.userDeleted) return { action: 'remove' };
+    if (s.original !== 'present') return { action: 'abort', reason: 'the original is not in place (run --phase=restore first)' };
+    return { action: 'remove' };
 }
 
 /** @param {Uint8Array} buf */
@@ -471,22 +545,37 @@ export function manifestProblems(m, expected) {
     if (m.project_ref !== expected.ref) problems.push(`it was made for project ${m.project_ref}`);
     if (m.bucket !== BUCKET) problems.push('it is for another bucket');
     if (m.seed_org_id !== SEED_ORG_ID) problems.push('it is for another org');
+    if (m.soak_started_at != null && !Number.isFinite(Date.parse(m.soak_started_at))) {
+        problems.push('its soak_started_at is not a time');
+    }
     if (!Array.isArray(m.objects)) return [...problems, 'it has no object list'];
     m.objects.forEach((/** @type {any} */ o, /** @type {number} */ i) => {
         const ok =
             o &&
             o.index === i + 1 &&
             typeof o.id === 'string' &&
+            UUID_RE.test(o.id) &&
             isRootObjectName(o.name) &&
             o.dest === destinationFor(o.name, SEED_ORG_ID) &&
             Number.isInteger(o.size) &&
             typeof o.sha256 === 'string' &&
             /^[0-9a-f]{64}$/.test(o.sha256) &&
             Array.isArray(o.row_ids) &&
-            typeof o.backup_file === 'string';
+            // Exactly the form the plan writes: a manifest entry can never point
+            // restore at a file outside --out/backup.
+            o.backup_file === backupFileFor(i + 1, o.id);
         if (!ok) problems.push(`object entry ${i + 1} is incomplete`);
     });
     return problems;
+}
+
+/**
+ * The backup file of manifest entry `index` (1-based), relative to --out.
+ * @param {number} index
+ * @param {string} id object id
+ */
+export function backupFileFor(index, id) {
+    return path.posix.join('backup', `${String(index).padStart(2, '0')}-${id}.bin`);
 }
 
 /**

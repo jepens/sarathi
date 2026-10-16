@@ -104,8 +104,10 @@ stops the `supabase_*_sarathi` containers; never use `--all`.
   tracker 1.11 (chat-media bucket is public). Remove the `todo` when fixing
   it. (1.12, the documents seed-org fallback, is fixed by 0066; its
   production data move follows `docs/RUNBOOK_LEGACY_KB_OBJECTS.md`, and
-  `170_documents_org_prefix.test.sql` pins the new policy and the 0066
-  guard.)
+  `170_documents_org_prefix.test.sql` pins the new policy and runs copies of
+  the 0066 relink and guard predicates, which
+  `scripts/lib/__tests__/migration-0066-parity.test.ts` keeps identical to the
+  migration, refusal condition included.)
 - `150_realtime_org_broadcast.test.sql` needs the `realtime.messages`
   partition of today (UTC). `db start` / `db reset` create the partitions
   from yesterday to +3 days, and no Realtime server runs afterwards to add
@@ -285,12 +287,10 @@ line to `production.txt`.
 - `expected-diff.txt`: differences that are known and explained, one per line
   (`<` only in production, `>` only in the replay), each with a reason:
   permanent ones, or *pending* lines of a migration not yet applied to
-  production (see above). Entries that no longer differ fail as stale. Apart
-  from the pending block `0066_documents_storage_org_prefix_only` (the old
-  and the new `documents bucket org members` policy) it is empty: the replay
-  up to 0065 matches production exactly (re-checked 2026-10-16 after applying
-  0064 and 0065, against a fresh read-only production query: 591 lines, md5
-  `d438f1ae53748103fde1baab4ab11ee3`).
+  production (see above). Entries that no longer differ fail as stale. It is
+  currently empty: the replay matches production exactly (re-checked
+  2026-10-16 after applying 0066, against a fresh read-only production query:
+  591 lines, md5 `21e9979435c772701da8c85417fba71f`).
 - Not fingerprinted: sequence privileges, column-level privileges, MAINTAIN,
   foreign-table privileges and default privileges (`pg_default_acl`); the
   `relpriv` lines cover only `arwdDxt` on tables and views. Whenever

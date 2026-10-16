@@ -13,9 +13,11 @@
 --      never editor rows; the three guard predicates (verbatim from 0066 b)
 --      find nothing for consistent fixtures and catch each kind of violation.
 --      The guard queries are restricted to this file's fixtures, so the test
---      does not assume an empty database.
+--      does not assume an empty database. A vitest parity test
+--      (scripts/lib/__tests__/migration-0066-parity.test.ts) keeps these copies
+--      and the guard's IF condition identical to 0066.
 begin;
-select plan(45);
+select plan(48);
 
 select tests.create_two_orgs();
 select tests.create_supabase_user('5a11e024-5eed-4000-8000-0000000000aa', 'seed@tes.local',
@@ -60,23 +62,25 @@ select is(
     'documents policy: the seed org uuid appears nowhere');
 
 -- ---------------------------------------------------------------------------
--- 2. Behaviour (21)
+-- 2. Behaviour (24)
 -- ---------------------------------------------------------------------------
 -- A legacy root-level object, its copy under the seed folder (as the script
--- makes it), two more seed objects and one of org A.
+-- makes it), two more seed objects, one of org A and an org-A key with a '..'
+-- segment that names the seed folder further down (its first folder is org A).
 insert into storage.objects (bucket_id, name, metadata) values
     ('documents', '1700000000000_legacy root, v1.pdf', '{"size": 10, "mimetype": "application/pdf"}'),
     ('documents', tests.seed_org() || '/1700000000000_legacy root, v1.pdf', '{"size": 10, "mimetype": "application/pdf"}'),
     ('documents', tests.seed_org() || '/x.pdf', null),
     ('documents', tests.seed_org() || '/y.pdf', null),
-    ('documents', tests.org_a() || '/a.pdf', null);
+    ('documents', tests.org_a() || '/a.pdf', null),
+    ('documents', tests.org_a() || '/../' || tests.seed_org() || '/titip.pdf', null);
 
 select is(
     (select count(*)::int from storage.objects
-      where bucket_id = 'documents' and (storage.foldername(name))[1] is null),
-    1, 'precondition: a root-level object exists');
+      where bucket_id = 'documents' and name = '1700000000000_legacy root, v1.pdf'),
+    1, 'precondition: the legacy root-level fixture exists');
 
--- Member of org A: nothing under the seed folder, no root, no odd folder (8)
+-- Member of org A: nothing under the seed folder, no root, no odd folder (9)
 select tests.authenticate_as(tests.user_a1());
 set local storage.allow_delete_query = 'true';
 
@@ -110,8 +114,13 @@ select throws_ok(
     $$ insert into storage.objects (bucket_id, name) values ('documents', '/garis-miring.pdf') $$,
     '42501', null,
     'a name with a leading slash (empty first folder) is refused');
+select throws_ok(
+    format($$ insert into storage.objects (bucket_id, name) values ('documents', %L) $$,
+           upper(tests.seed_org()::text) || '/besar.pdf'),
+    '42501', null,
+    'org A member: an upper-case seed folder is still the seed org (refused)');
 
--- Seed-org member: root-level objects are gone for it too; its folder works (12)
+-- Seed-org member: root-level objects are gone for it too; its folder works (14)
 select tests.authenticate_as('5a11e024-5eed-4000-8000-0000000000aa');
 set local storage.allow_delete_query = 'true';
 
@@ -157,6 +166,14 @@ select is_empty(
 select is_empty(
     format($$ delete from storage.objects where bucket_id = 'documents' and name like %L returning 1 $$, tests.org_a() || '/%'),
     'seed member: deletes nothing of org A');
+select lives_ok(
+    format($$ insert into storage.objects (bucket_id, name) values ('documents', %L) $$,
+           upper(tests.seed_org()::text) || '/besar.pdf'),
+    'seed member: an upper-case seed folder is its own org (the same tenant)');
+select is_empty(
+    format($$ select 1 from storage.objects where bucket_id = 'documents' and name = %L $$,
+           tests.org_a() || '/../' || tests.seed_org() || '/titip.pdf'),
+    'seed member: an org-A key with a ''..'' segment stays org A''s (first folder decides)');
 
 -- ---------------------------------------------------------------------------
 -- 3. 0066 relink and guard on fixtures (18)
@@ -166,7 +183,7 @@ set local storage.allow_delete_query = 'true';
 
 select is(
     (select count(*)::int from storage.objects
-      where bucket_id = 'documents' and (storage.foldername(name))[1] is null),
+      where bucket_id = 'documents' and name = '1700000000000_legacy root, v1.pdf'),
     1, 'precondition: the root-level object survived every client attempt');
 
 -- documents rows (fixed ids d0..): two file-backed chunks of the legacy object

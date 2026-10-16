@@ -14,14 +14,4 @@
 #    migration is applied to production with apply_migration, refresh
 #    production.txt and delete these lines in the same commit.
 #
-
-# pending production apply: 0066_documents_storage_org_prefix_only
-# (tracker 1.12, audit KEA-4, owner decisions D16/D17: the documents policy
-# loses its COALESCE fallback to the seed org; root-level objects and
-# non-uuid folders are refused, like chat-media and proposals since 0058).
-# Apply ONLY after the script's copy + verify phases
-# (docs/RUNBOOK_LEGACY_KB_OBJECTS.md, steps 1-3); the migration's guard
-# refuses otherwise. Then refresh production.txt, delete this block and
-# update the expected-diff sentence in supabase/README.md.
-< pol storage.objects "documents bucket org members" PERMISSIVE cmd=ALL roles=authenticated using=((bucket_id = 'documents'::text) AND private.is_org_member((COALESCE((storage.foldername(name))[1], '5a11e024-0001-4000-8000-000000000001'::text))::uuid)) check=((bucket_id = 'documents'::text) AND private.is_org_member((COALESCE((storage.foldername(name))[1], '5a11e024-0001-4000-8000-000000000001'::text))::uuid))
-> pol storage.objects "documents bucket org members" PERMISSIVE cmd=ALL roles=authenticated using=((bucket_id = 'documents'::text) AND CASE WHEN ((storage.foldername(name))[1] ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'::text) THEN private.is_org_member(((storage.foldername(name))[1])::uuid) ELSE false END) check=((bucket_id = 'documents'::text) AND CASE WHEN ((storage.foldername(name))[1] ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'::text) THEN private.is_org_member(((storage.foldername(name))[1])::uuid) ELSE false END)
+# Currently empty: the replay matches production exactly.

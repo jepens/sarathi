@@ -19,9 +19,14 @@
 //   node --env-file=.env.local scripts/migrate-legacy-kb-objects.mjs \
 //       --phase=plan --expect-ref=<project ref> --out=<dir outside the repo>
 //   ... --phase=copy [--confirm]       copy each object, check size, type, sha256
-//   ... --phase=verify                 read-only re-hash of every copy
-//   ... --phase=delete-originals [--confirm] [--soak-hours=72]
+//   ... --phase=verify                 re-hash every copy (Storage read-only);
+//                                      once 0066 is in effect it records the
+//                                      start of the soak in manifest.json
+//   ... --phase=delete-originals [--confirm] [--soak-hours=72] [--only-user-deleted]
 //   ... --phase=restore [--confirm]    put missing originals back
+//   ... --phase=remove-copies [--confirm]
+//                                      rollback before delete-originals: remove
+//                                      exactly the manifest copies
 //
 // Safety rails: refuses when the project ref of NEXT_PUBLIC_SUPABASE_URL is
 // not --expect-ref, when the key is not a service-role key, and when --out is
@@ -32,7 +37,8 @@
 //
 // A KB entry deleted in the dashboard during the soak (all of its documents
 // rows gone) counts as deleted by the user: its bytes are never copied or
-// restored again, and delete-originals removes its original too.
+// restored again, and delete-originals removes its original too. The soak
+// counts from the first verify that sees 0066 in effect, not from the copy.
 //
 // Exit codes: 0 = ok, 1 = a check failed or the run stopped, 2 = usage or a
 // safety rail (nothing was done).
@@ -49,6 +55,7 @@ import {
     UUID_RE,
     WRITE_PHASES,
     analyseRows,
+    backupFileFor,
     copyDecision,
     deleteOriginalsBlockers,
     destinationFor,
@@ -61,10 +68,12 @@ import {
     outDirProblem,
     parseArgs,
     projectRefFromUrl,
+    removeCopyDecision,
     restoreDecision,
     rowState,
     sha256Hex,
     soakRemainingHours,
+    soakStartReady,
     verifyStatus,
 } from './lib/legacy-kb.mjs';
 
@@ -72,8 +81,8 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 const PAGE = 1000;
 const USAGE =
     'Usage: node --env-file=.env.local scripts/migrate-legacy-kb-objects.mjs ' +
-    '--phase=<plan|copy|verify|delete-originals|restore> --expect-ref=<project ref> ' +
-    '--out=<dir outside the repo> [--confirm] [--soak-hours=<n>]';
+    '--phase=<plan|copy|verify|delete-originals|restore|remove-copies> --expect-ref=<project ref> ' +
+    '--out=<dir outside the repo> [--confirm] [--soak-hours=<n>] [--only-user-deleted]';
 
 class Stop extends Error {
     /** @param {number} code @param {string} message */
@@ -244,7 +253,7 @@ async function checkStored(sb, key, o) {
  *   user_deleted_at: string|null,
  * }} ManifestObject
  * @typedef {{ sb: import('@supabase/supabase-js').SupabaseClient, ref: string, out: string,
- *   confirm: boolean, soakHours: number, phase: string }} Ctx
+ *   confirm: boolean, soakHours: number, phase: string, onlyUserDeleted: boolean }} Ctx
  */
 
 /** @param {Ctx} ctx */
@@ -372,7 +381,7 @@ async function phasePlan(ctx) {
             size: bytes.length,
             mimetype: entry.mimetype,
             sha256: sha,
-            backup_file: path.posix.join('backup', `${String(i + 1).padStart(2, '0')}-${entry.id}.bin`),
+            backup_file: backupFileFor(i + 1, entry.id),
             row_ids: rowIds,
             row_old_source: rowIds.length ? name : null,
             row_org_id: rowIds.length ? SEED_ORG_ID : null,
@@ -540,12 +549,30 @@ async function runVerify(ctx, m, snap) {
     return res;
 }
 
-/** verify: read-only. @param {Ctx} ctx */
+/**
+ * verify: read-only for Supabase. The first time it sees 0066 in effect (every
+ * live manifest row on its copy, no file-backed row left at the root) it
+ * records the start of the soak in manifest.json; delete-originals counts the
+ * soak from there.
+ * @param {Ctx} ctx
+ */
 async function phaseVerify(ctx) {
     const m = loadManifest(ctx);
     const snap = await snapshot(ctx);
     const res = await runVerify(ctx, m, snap);
     if (res.failures) stop(1, `verify failed for ${res.failures} object(s)`);
+    if (!m.soak_started_at && soakStartReady({ rows: snap.rows, objects: m.objects, verifyFailures: res.failures })) {
+        m.soak_started_at = nowIso();
+        addLog(m, { phase: 'verify', soak_started: true });
+        saveManifest(ctx, m);
+        console.log(`0066 is in effect: the soak starts now (${m.soak_started_at}).`);
+    }
+    if (m.soak_started_at) {
+        const left = soakRemainingHours(m.soak_started_at, ctx.soakHours);
+        console.log(`soak started at ${m.soak_started_at}; ${left > 0 ? `${left.toFixed(1)} h left` : 'over'} (--soak-hours=${ctx.soakHours})`);
+    } else {
+        console.log('soak not started: 0066 is not in effect yet (rows still at the root or not on their copy).');
+    }
     console.log('verify ok.');
 }
 
@@ -559,12 +586,16 @@ async function phaseDeleteOriginals(ctx) {
         rows: snap.rows,
         objects: m.objects,
         verifyFailures: v.failures,
-        soakHoursLeft: soakRemainingHours(m.objects, ctx.soakHours),
+        soakStartedAt: m.soak_started_at,
+        soakHoursLeft: soakRemainingHours(m.soak_started_at, ctx.soakHours),
+        onlyUserDeleted: ctx.onlyUserDeleted,
     });
+    if (ctx.onlyUserDeleted) console.log('--only-user-deleted: only KB entries deleted by a user are touched.');
     /** @type {{ o: ManifestObject, removeOriginal: boolean, removeCopy: boolean, userDeleted: boolean }[]} */
     const work = [];
     for (const o of /** @type {ManifestObject[]} */ (m.objects)) {
         const userDeleted = Boolean(o.user_deleted_at) || rowState(o.row_ids, snap.live) === 'user-deleted';
+        if (ctx.onlyUserDeleted && !userDeleted) continue;
         const original = originalState(o, snap.root.files);
         if (original === 'changed') {
             blockers.push(`${logLine(o, total, 'the root-level object under this name is not the one in the manifest')}`);
@@ -614,9 +645,60 @@ async function phaseDeleteOriginals(ctx) {
         }
         saveManifest(ctx, m);
     }
-    addLog(m, { phase: 'delete-originals', originals, user_deleted_copies: copies });
+    addLog(m, { phase: 'delete-originals', originals, user_deleted_copies: copies, only_user_deleted: ctx.onlyUserDeleted });
     saveManifest(ctx, m);
     console.log('\ndelete-originals done. Run the final check of the runbook (step 8).');
+}
+
+/**
+ * remove-copies (rollback before delete-originals): removes exactly the
+ * manifest copies, after the relink has been reverted and while each original
+ * is still in place. Storage writes with --confirm; never writes the database.
+ * @param {Ctx} ctx
+ */
+async function phaseRemoveCopies(ctx) {
+    const m = loadManifest(ctx);
+    const total = m.objects.length;
+    const snap = await snapshot(ctx);
+    const byDest = new Map();
+    for (const r of snap.rows) {
+        const src = metadataText(r.metadata, 'source');
+        if (src) byDest.set(src, (byDest.get(src) ?? 0) + 1);
+    }
+    /** @type {{ o: ManifestObject, action: string, reason?: string }[]} */
+    const decisions = [];
+    for (const o of /** @type {ManifestObject[]} */ (m.objects)) {
+        const userDeleted = Boolean(o.user_deleted_at) || rowState(o.row_ids, snap.live) === 'user-deleted';
+        const copy = await copyState(ctx, o, snap.seed.files);
+        const d = removeCopyDecision({
+            userDeleted,
+            original: originalState(o, snap.root.files),
+            copy,
+            rowsPointAtCopy: byDest.get(o.dest) ?? 0,
+        });
+        decisions.push({ o, ...d });
+        console.log(logLine(o, total, `copy=${copy} -> ${d.action}${d.reason ? ` (${d.reason})` : ''}`));
+    }
+    const count = (/** @type {string} */ a) => decisions.filter((d) => d.action === a).length;
+    console.log(`\nto remove ${count('remove')}, already absent ${count('skip-absent')}, need a human ${count('abort')}`);
+    if (count('abort')) stop(1, 'remove-copies stopped before any write: see the objects marked abort above');
+    if (!ctx.confirm) {
+        console.log('(dry-run: nothing removed. Add --confirm to remove.)');
+        return;
+    }
+    for (const d of decisions) {
+        if (d.action !== 'remove') continue;
+        const o = d.o;
+        const { error } = await bucket(ctx.sb).remove([o.dest]);
+        if (error) stop(1, logLine(o, total, `removing the copy failed: ${errText(error)}`));
+        if (await objectExists(ctx.sb, o.dest)) stop(1, logLine(o, total, 'the copy still exists after remove()'));
+        o.copy = { ...o.copy, deleted_at: nowIso() };
+        saveManifest(ctx, m);
+        console.log(logLine(o, total, 'copy removed; exists() = false'));
+    }
+    addLog(m, { phase: 'remove-copies', removed: count('remove') });
+    saveManifest(ctx, m);
+    console.log('\nremove-copies done.');
 }
 
 /** restore: Storage writes with --confirm; never writes the database. @param {Ctx} ctx */
@@ -736,13 +818,17 @@ async function main() {
         auth: { persistSession: false, autoRefreshToken: false },
     });
     /** @type {Ctx} */
-    const ctx = { sb, ref, out, confirm: opts.confirm, soakHours: opts.soakHours, phase: opts.phase };
+    const ctx = {
+        sb, ref, out, confirm: opts.confirm, soakHours: opts.soakHours, phase: opts.phase,
+        onlyUserDeleted: opts.onlyUserDeleted,
+    };
     const phases = {
         plan: phasePlan,
         copy: phaseCopy,
         verify: phaseVerify,
         'delete-originals': phaseDeleteOriginals,
         restore: phaseRestore,
+        'remove-copies': phaseRemoveCopies,
     };
     await phases[/** @type {keyof typeof phases} */ (opts.phase)](ctx);
 }

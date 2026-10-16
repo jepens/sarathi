@@ -4,6 +4,7 @@ import { isOrgScopedObjectPath as appIsOrgScopedObjectPath } from '@/lib/storage
 import {
     SEED_ORG_ID,
     analyseRows,
+    backupFileFor,
     copyDecision,
     deleteOriginalsBlockers,
     destinationFor,
@@ -18,10 +19,12 @@ import {
     outDirProblem,
     parseArgs,
     projectRefFromUrl,
+    removeCopyDecision,
     restoreDecision,
     rowState,
     sha256Hex,
     soakRemainingHours,
+    soakStartReady,
     verifyStatus,
 } from '../legacy-kb.mjs';
 
@@ -41,8 +44,17 @@ describe('parseArgs', () => {
 
     it('accepts --confirm only for the writing phases', () => {
         expect(parseArgs(['--phase=copy', '--expect-ref=a', '--out=/x', '--confirm']).errors).toEqual([]);
+        expect(parseArgs(['--phase=remove-copies', '--expect-ref=a', '--out=/x', '--confirm']).errors).toEqual([]);
         expect(parseArgs(['--phase=verify', '--expect-ref=a', '--out=/x', '--confirm']).errors).toHaveLength(1);
         expect(parseArgs(['--phase=plan', '--expect-ref=a', '--out=/x', '--confirm']).errors).toHaveLength(1);
+    });
+
+    it('accepts --only-user-deleted only for delete-originals', () => {
+        const ok = parseArgs(['--phase=delete-originals', '--expect-ref=a', '--out=/x', '--only-user-deleted']);
+        expect(ok.errors).toEqual([]);
+        expect(ok.opts.onlyUserDeleted).toBe(true);
+        expect(parseArgs(['--phase=copy', '--expect-ref=a', '--out=/x', '--only-user-deleted']).errors).toHaveLength(1);
+        expect(parseArgs(['--expect-ref=a', '--out=/x']).opts.onlyUserDeleted).toBe(false);
     });
 
     it('requires --expect-ref and --out and refuses unknown arguments and phases', () => {
@@ -190,6 +202,18 @@ describe('documents rows', () => {
             referencedObjects: 1,
         });
     });
+
+    it('after 0066 (a plan made again) the relinked rows still belong to their object', () => {
+        const after = [
+            { id: 'r1', org_id: SEED, metadata: { source: `${SEED}/${NAME}`, file_name: NAME } },
+            { id: 'r2', org_id: SEED, metadata: { source: `${SEED}/${NAME}`, file_name: NAME } },
+            { id: 'p1', org_id: SEED, metadata: { source: `${SEED}/1700_baru.txt` } },
+            { id: 'b1', org_id: ORG_B, metadata: { source: `${ORG_B}/${NAME}` } },
+        ];
+        const { byName, counts } = analyseRows(after, new Set([NAME]));
+        expect(byName.get(NAME)).toEqual(['r1', 'r2']);
+        expect(counts).toMatchObject({ fileBacked: 4, relinked: 2, prefixed: 2, rootSource: 0, blocking: 0, referencedObjects: 1 });
+    });
 });
 
 describe('user-deleted detection (no resurrection)', () => {
@@ -236,37 +260,76 @@ describe('delete-originals preconditions', () => {
     const dest = `${SEED}/${NAME}`;
     const objects = [{ dest, row_ids: ['r1'] }, { dest: `${SEED}/unused.pdf`, row_ids: [] }];
     const relinked = { id: 'r1', org_id: SEED, metadata: { source: dest } };
+    const root = { id: 'r1', org_id: SEED, metadata: { source: NAME } };
     const editor = { id: 'e1', org_id: SEED, metadata: { source: 'Judul editor', origin: 'editor' } };
+    const started = '2026-10-16T10:00:00Z';
+    const go = { verifyFailures: 0, soakStartedAt: started, soakHoursLeft: 0 };
 
     it('ignores editor rows: their source keeps no "/" forever (critique fix)', () => {
-        expect(deleteOriginalsBlockers({ rows: [relinked, editor], objects, verifyFailures: 0, soakHoursLeft: 0 })).toEqual([]);
+        expect(deleteOriginalsBlockers({ rows: [relinked, editor], objects, ...go })).toEqual([]);
     });
 
     it('refuses before 0066 (a file-backed row still names a root object)', () => {
-        const root = { id: 'r1', org_id: SEED, metadata: { source: NAME } };
-        const blockers = deleteOriginalsBlockers({ rows: [root, editor], objects, verifyFailures: 0, soakHoursLeft: 0 });
+        const blockers = deleteOriginalsBlockers({ rows: [root, editor], objects, ...go });
         expect(blockers.join('\n')).toMatch(/1 file-backed documents row\(s\) still name a root-level object/);
         expect(blockers.join('\n')).toMatch(/1 manifest row\(s\) do not point at their copy/);
     });
 
     it('refuses on a failed verify and during the soak', () => {
-        const blockers = deleteOriginalsBlockers({ rows: [relinked], objects, verifyFailures: 2, soakHoursLeft: 5.5 });
+        const blockers = deleteOriginalsBlockers({ rows: [relinked], objects, ...go, verifyFailures: 2, soakHoursLeft: 5.5 });
         expect(blockers.join('\n')).toMatch(/verify failed for 2/);
         expect(blockers.join('\n')).toMatch(/5\.5 h left/);
     });
 
-    it('a user-deleted object (rows gone) does not block', () => {
-        expect(deleteOriginalsBlockers({ rows: [editor], objects, verifyFailures: 0, soakHoursLeft: 0 })).toEqual([]);
+    it('refuses while the soak has not started (no verify has seen 0066 in effect)', () => {
+        const blockers = deleteOriginalsBlockers({ rows: [relinked], objects, ...go, soakStartedAt: null });
+        expect(blockers.join('\n')).toMatch(/soak has not started/);
     });
 
-    it('counts the soak from the last copy verification', () => {
-        const t0 = Date.parse('2026-10-16T10:00:00Z');
-        const objs = [{ copy: { verified_at: '2026-10-16T09:00:00Z' } }, { copy: { verified_at: '2026-10-16T10:00:00Z' } }, { copy: {} }];
-        expect(soakRemainingHours(objs, 72, t0)).toBe(72);
-        expect(soakRemainingHours(objs, 72, t0 + 71 * 3_600_000)).toBe(1);
-        expect(soakRemainingHours(objs, 72, t0 + 73 * 3_600_000)).toBe(0);
-        expect(soakRemainingHours(objs, 0, t0)).toBe(0);
-        expect(soakRemainingHours([{ copy: {} }], 72, t0)).toBe(72);
+    it('a user-deleted object (rows gone) does not block', () => {
+        expect(deleteOriginalsBlockers({ rows: [editor], objects, ...go })).toEqual([]);
+    });
+
+    it('--only-user-deleted (rollback during the soak) needs neither the relink nor the soak, only a clean verify', () => {
+        const base = { rows: [root, editor], objects, soakStartedAt: null, soakHoursLeft: 72, onlyUserDeleted: true };
+        expect(deleteOriginalsBlockers({ ...base, verifyFailures: 0 })).toEqual([]);
+        expect(deleteOriginalsBlockers({ ...base, verifyFailures: 1 }).join()).toMatch(/verify failed for 1/);
+    });
+
+    it('counts the soak from the recorded start (0066 in effect), not from the copy', () => {
+        const t0 = Date.parse(started);
+        expect(soakRemainingHours(started, 72, t0)).toBe(72);
+        expect(soakRemainingHours(started, 72, t0 + 71 * 3_600_000)).toBe(1);
+        expect(soakRemainingHours(started, 72, t0 + 73 * 3_600_000)).toBe(0);
+        expect(soakRemainingHours(started, 0, t0)).toBe(0);
+        expect(soakRemainingHours(null, 72, t0)).toBe(72);
+        expect(soakRemainingHours('not a time', 72, t0)).toBe(72);
+    });
+
+    it('verify records the soak start only once 0066 is in effect and every copy verified', () => {
+        expect(soakStartReady({ rows: [relinked, editor], objects, verifyFailures: 0 })).toBe(true);
+        expect(soakStartReady({ rows: [editor], objects, verifyFailures: 0 })).toBe(true); // KB entry deleted by the user
+        expect(soakStartReady({ rows: [root, editor], objects, verifyFailures: 0 })).toBe(false);
+        expect(soakStartReady({ rows: [relinked], objects, verifyFailures: 1 })).toBe(false);
+        const other = { id: 'r1', org_id: SEED, metadata: { source: `${SEED}/lain.pdf` } };
+        expect(soakStartReady({ rows: [other], objects, verifyFailures: 0 })).toBe(false);
+    });
+});
+
+describe('remove-copies (rollback before delete-originals)', () => {
+    const base = { userDeleted: false, original: 'present', copy: 'identical', rowsPointAtCopy: 0 } as const;
+
+    it('removes a manifest copy only while its original is in place and no row points at it', () => {
+        expect(removeCopyDecision(base).action).toBe('remove');
+        expect(removeCopyDecision({ ...base, copy: 'absent' }).action).toBe('skip-absent');
+        expect(removeCopyDecision({ ...base, copy: 'different' }).action).toBe('abort');
+        expect(removeCopyDecision({ ...base, rowsPointAtCopy: 2 }).reason).toMatch(/revert the 0066 relink first/);
+        expect(removeCopyDecision({ ...base, original: 'absent' }).reason).toMatch(/restore first/);
+        expect(removeCopyDecision({ ...base, original: 'changed' }).action).toBe('abort');
+    });
+
+    it('removes the leftover copy of a KB entry deleted by the user even without its original', () => {
+        expect(removeCopyDecision({ ...base, userDeleted: true, original: 'absent' }).action).toBe('remove');
     });
 });
 
@@ -287,6 +350,7 @@ describe('logging and manifest', () => {
     });
 
     it('accepts only a complete manifest of the same project', () => {
+        const id = '2b157109-6bfa-4e39-acb9-8070f883a935';
         const good = {
             kind: 'sarathi-legacy-kb-objects',
             version: 1,
@@ -296,19 +360,34 @@ describe('logging and manifest', () => {
             objects: [
                 {
                     index: 1,
-                    id: 'uuid-1',
+                    id,
                     name: NAME,
                     dest: `${SEED}/${NAME}`,
                     size: 3,
                     sha256: 'ab'.repeat(32),
                     row_ids: [],
-                    backup_file: 'backup/01-uuid-1.bin',
+                    backup_file: `backup/01-${id}.bin`,
                 },
             ],
         };
-        expect(manifestProblems(good, { ref: 'local-58821' })).toEqual([]);
+        const ref = { ref: 'local-58821' };
+        expect(backupFileFor(1, id)).toBe(`backup/01-${id}.bin`);
+        expect(manifestProblems(good, ref)).toEqual([]);
+        expect(manifestProblems({ ...good, soak_started_at: '2026-10-16T15:49:03Z' }, ref)).toEqual([]);
+        expect(manifestProblems({ ...good, soak_started_at: 'kemarin' }, ref).join()).toMatch(/soak_started_at/);
         expect(manifestProblems(good, { ref: 'abcdefghijklmnopqrst' }).join()).toMatch(/made for project local-58821/);
-        expect(manifestProblems({ ...good, objects: [{ ...good.objects[0], dest: `${ORG_B}/${NAME}` }] }, { ref: 'local-58821' })).toHaveLength(1);
-        expect(manifestProblems({ kind: 'x' }, { ref: 'local-58821' })).toEqual(['not a manifest of this script']);
+        expect(manifestProblems({ ...good, objects: [{ ...good.objects[0], dest: `${ORG_B}/${NAME}` }] }, ref)).toHaveLength(1);
+        expect(manifestProblems({ kind: 'x' }, ref)).toEqual(['not a manifest of this script']);
+    });
+
+    it('refuses a manifest entry that would point restore outside --out/backup', () => {
+        const id = '2b157109-6bfa-4e39-acb9-8070f883a935';
+        const entry = { index: 1, id, name: NAME, dest: `${SEED}/${NAME}`, size: 3, sha256: 'ab'.repeat(32), row_ids: [] };
+        const m = (o: object) => ({
+            kind: 'sarathi-legacy-kb-objects', version: 1, project_ref: 'p', bucket: 'documents', seed_org_id: SEED, objects: [o],
+        });
+        expect(manifestProblems(m({ ...entry, backup_file: '../../secrets.bin' }), { ref: 'p' })).toHaveLength(1);
+        expect(manifestProblems(m({ ...entry, backup_file: `backup/02-${id}.bin` }), { ref: 'p' })).toHaveLength(1);
+        expect(manifestProblems(m({ ...entry, id: 'not-a-uuid', backup_file: 'backup/01-not-a-uuid.bin' }), { ref: 'p' })).toHaveLength(1);
     });
 });
