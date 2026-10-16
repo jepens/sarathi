@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { buildSystemMessage } from '@/lib/ai/system-message';
+import { saveFirstPersona, SYNTHETIC_PERSONA_ID } from '@/lib/ai/persona-store';
 import { getBusinessProfile } from '@/lib/settings/business-profile';
 import { accessDeniedResponse, requireOrgContext } from '@/lib/settings/org-context';
 
@@ -35,7 +36,7 @@ export async function GET(request: Request) {
             if (error.code === 'PGRST116') {
                 const content = buildSystemMessage(await getBusinessProfile(supabase, orgId));
                 return NextResponse.json({
-                    id: 'default',
+                    id: SYNTHETIC_PERSONA_ID,
                     name: 'Default System Message',
                     content,
                     is_active: true,
@@ -59,7 +60,9 @@ export async function GET(request: Request) {
 
 /**
  * PUT /api/system-message
- * Update system message content or activate a different one
+ * Update system message content or activate a different one. Saving the
+ * synthetic persona (id 'default', returned by GET when the org has none)
+ * creates the org's first persona instead (tracker 1.8).
  */
 export async function PUT(request: Request) {
     try {
@@ -124,6 +127,21 @@ export async function PUT(request: Request) {
             updateData.is_active = is_active;
         }
 
+        if (id === SYNTHETIC_PERSONA_ID) {
+            // The org has no saved persona yet: create it, scoped to the org.
+            // The first persona is always the org's active one (it replaces
+            // the synthetic persona the AI uses today).
+            if (updateData.content === undefined) {
+                return NextResponse.json(
+                    { error: 'Content is required to save a new persona' },
+                    { status: 400 }
+                );
+            }
+            const saved = await saveFirstPersona(supabase, orgId, updateData.content);
+            if (!saved.ok) throw saved.error;
+            return NextResponse.json(saved.row, { status: saved.created ? 201 : 200 });
+        }
+
         const { data, error } = await supabase
             .from('system_message')
             .update(updateData)
@@ -132,7 +150,16 @@ export async function PUT(request: Request) {
             .select()
             .single();
 
-        if (error) throw error;
+        if (error) {
+            // No row of this org with that id (RLS + org filter).
+            if (error.code === 'PGRST116') {
+                return NextResponse.json(
+                    { error: 'System message not found' },
+                    { status: 404 }
+                );
+            }
+            throw error;
+        }
 
         return NextResponse.json(data);
     } catch (error) {

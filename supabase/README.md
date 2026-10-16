@@ -156,9 +156,10 @@ publication). It contains catalog SELECTs only.
 - `expected-diff.txt`: differences that are known and explained, one per line
   (`<` only in production, `>` only in the replay), each with a reason:
   permanent ones, or *pending* lines of a migration not yet applied to
-  production (see above). Entries that no longer differ fail as stale. It is
-  currently empty: the replay matches production exactly (re-checked
-  2026-10-16 against a fresh read-only production query: 552 lines, md5
+  production (see above). Entries that no longer differ fail as stale. Apart
+  from the pending block of `0061_tenant_schema_expand` it is empty: the
+  replay matched production exactly before 0061 (re-checked 2026-10-16
+  against a fresh read-only production query: 552 lines, md5
   `d17c90453caa0ec2b719e0ac361aa9aa`).
 
 Compare a fresh replay with the snapshot:

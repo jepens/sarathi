@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase/server';
 import { createServiceOrServerClient } from '@/lib/supabase/service';
 import { isSessionCheckUnavailable } from '@/lib/supabase/session-errors';
 import { fetchMembership } from '@/lib/settings/membership';
+import { getPlatformSetting, SEED_ORG_ID } from '@/lib/settings/platform-settings';
 import {
     decideEnvIntegrationAccess,
     decideOrgContext,
@@ -45,9 +46,6 @@ import {
 // (WhatsApp, Portal, Zoom, Resend). Routes that use those credentials must gate
 // on requireEnvIntegration() so another tenant can never act as Sailendra.
 
-// Matches the seed org in migration 0026. Fallback if app_settings is empty.
-const SEED_ORG_ID = '5a11e024-0001-4000-8000-000000000001';
-
 /** The signed-in member's context. `supabase` is the cookie-bound (RLS) client. */
 export interface OrgContext {
     supabase: SupabaseClient;
@@ -65,22 +63,19 @@ export type UserAccess =
 export type { OrgAccessDenied };
 
 /**
- * The default org for service-role writes/reads. Read from app_settings so it
- * can change without a deploy; falls back to the seed constant.
- * Pass a service-role client (bypasses RLS).
+ * The default org for service-role writes/reads. A platform setting
+ * (platform_settings, service role only — tenants cannot change it; legacy
+ * app_settings fallback during the rollout), so it can change without a
+ * deploy; falls back to the seed org (migration 0026).
+ * Pass a service-role client.
  */
 export async function getDefaultOrgId(client: SupabaseClient): Promise<string> {
-    const { data } = await client
-        .from('app_settings')
-        .select('value')
-        .eq('key', 'default_org_id')
-        .maybeSingle();
-    return (data?.value as string) || SEED_ORG_ID;
+    return (await getPlatformSetting(client, 'default_org_id')) || SEED_ORG_ID;
 }
 
 /**
  * The default org id, resolved with the service-role client so the answer
- * doesn't depend on the caller's app_settings visibility. Memoized per render.
+ * doesn't depend on the caller's visibility of platform settings. Memoized per render.
  */
 const getDefaultOrgIdForRequest = cache(async (): Promise<string> => {
     const svc = await createServiceOrServerClient();

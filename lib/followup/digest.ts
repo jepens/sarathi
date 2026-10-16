@@ -33,10 +33,14 @@ function wibDateHour(d: Date): { date: string; hour: number } {
     return { date, hour };
 }
 
-async function getLastSent(supabase: SupabaseClient): Promise<string | null> {
+// The last-sent date is a TENANT setting: app_settings row (org_id, key) of the
+// org the digest reports on (tracker 1.7 — platform keys live in
+// platform_settings).
+export async function getLastSent(supabase: SupabaseClient, orgId: string): Promise<string | null> {
     const { data } = await supabase
         .from('app_settings')
         .select('value')
+        .eq('org_id', orgId)
         .eq('key', LAST_SENT_KEY)
         .maybeSingle();
     return (data?.value as string | undefined) ?? null;
@@ -44,21 +48,28 @@ async function getLastSent(supabase: SupabaseClient): Promise<string | null> {
 
 // Atomically claim today for this tick. Returns true only for the single tick
 // that flips the stored value to `today` — so overlapping every-minute cron
-// ticks can never both send. Relies on app_settings.key being UNIQUE.
-async function claimToday(supabase: SupabaseClient, today: string): Promise<boolean> {
+// ticks can never both send. Relies on app_settings (org_id, key) being UNIQUE
+// (app_settings_org_key_key, migration 0061).
+export async function claimToday(supabase: SupabaseClient, orgId: string, today: string): Promise<boolean> {
     // Make sure the row exists (idempotent: ON CONFLICT DO NOTHING — concurrent
     // inserts don't error, and an existing value is preserved).
     await supabase
         .from('app_settings')
         .upsert(
-            { key: LAST_SENT_KEY, value: '', description: 'Last WIB date the follow-up digest was sent' },
-            { onConflict: 'key', ignoreDuplicates: true }
+            {
+                org_id: orgId,
+                key: LAST_SENT_KEY,
+                value: '',
+                description: 'Last WIB date the follow-up digest was sent',
+            },
+            { onConflict: 'org_id,key', ignoreDuplicates: true }
         );
     // Flip to today only if it isn't already today. Postgres applies the WHERE
     // atomically, so exactly one concurrent tick gets a returned row.
     const { data, error } = await supabase
         .from('app_settings')
         .update({ value: today })
+        .eq('org_id', orgId)
         .eq('key', LAST_SENT_KEY)
         .neq('value', today)
         .select('id');
@@ -79,17 +90,17 @@ export async function maybeSendFollowupDigest(supabase: SupabaseClient): Promise
     if (nowHour < sendHour) return; // too early today
 
     try {
-        // Cheap early-out for the rest of the day once a digest has been sent.
-        if ((await getLastSent(supabase)) === today) return;
-
         const orgId = await getDefaultOrgId(supabase);
+        // Cheap early-out for the rest of the day once a digest has been sent.
+        if ((await getLastSent(supabase, orgId)) === today) return;
+
         const data = await computeFollowup(supabase, orgId);
         // Nothing to report yet — DON'T claim the day, so a later tick (once a
         // lead crosses the staleness threshold / a booking nears) can still send.
         if (data.counts.total === 0) return;
 
         // Claim atomically; only the winning tick proceeds to send.
-        if (!(await claimToday(supabase, today))) return;
+        if (!(await claimToday(supabase, orgId, today))) return;
 
         const dateLabel = new Date().toLocaleDateString('id-ID', {
             day: 'numeric',
