@@ -21,7 +21,8 @@ export const MANIFEST_VERSION = 1;
 
 /**
  * Command line: --phase=<p> --expect-ref=<ref> --out=<dir> [--confirm]
- * [--soak-hours=<n>] [--only-user-deleted]. Only the `--name=value` form, like
+ * [--soak-hours=<n>] [--allow-short-soak] [--only-user-deleted]
+ * [--unreferenced-only] [--allow-replan]. Only the `--name=value` form, like
  * the other scripts.
  * @param {string[]} argv process.argv.slice(2)
  */
@@ -32,34 +33,36 @@ export function parseArgs(argv) {
         out: /** @type {string|null} */ (null),
         confirm: false,
         soakHours: DEFAULT_SOAK_HOURS,
+        allowShortSoak: false,
         onlyUserDeleted: false,
+        unreferencedOnly: false,
+        allowReplan: false,
     };
     /** @type {string[]} */
     const errors = [];
     for (const arg of argv) {
-        if (arg === '--confirm') {
-            opts.confirm = true;
-            continue;
-        }
-        if (arg === '--only-user-deleted') {
-            opts.onlyUserDeleted = true;
-            continue;
-        }
-        const m = /^--(phase|expect-ref|out|soak-hours)=(.*)$/s.exec(arg);
-        if (!m) {
-            errors.push(`unknown argument: ${arg}`);
-            continue;
-        }
-        const [, key, value] = m;
-        if (key === 'phase') opts.phase = value;
-        else if (key === 'expect-ref') opts.expectRef = value;
-        else if (key === 'out') opts.out = value;
+        if (arg === '--confirm') opts.confirm = true;
+        else if (arg === '--allow-short-soak') opts.allowShortSoak = true;
+        else if (arg === '--only-user-deleted') opts.onlyUserDeleted = true;
+        else if (arg === '--unreferenced-only') opts.unreferencedOnly = true;
+        else if (arg === '--allow-replan') opts.allowReplan = true;
         else {
-            const n = Number(value);
-            if (value.trim() === '' || !Number.isFinite(n) || n < 0) {
-                errors.push('--soak-hours must be a number >= 0');
-            } else {
-                opts.soakHours = n;
+            const m = /^--(phase|expect-ref|out|soak-hours)=(.*)$/s.exec(arg);
+            if (!m) {
+                errors.push(`unknown argument: ${arg}`);
+                continue;
+            }
+            const [, key, value] = m;
+            if (key === 'phase') opts.phase = value;
+            else if (key === 'expect-ref') opts.expectRef = value;
+            else if (key === 'out') opts.out = value;
+            else {
+                const n = Number(value);
+                if (value.trim() === '' || !Number.isFinite(n) || n < 0) {
+                    errors.push('--soak-hours must be a number >= 0');
+                } else {
+                    opts.soakHours = n;
+                }
             }
         }
     }
@@ -71,6 +74,12 @@ export function parseArgs(argv) {
     }
     if (opts.onlyUserDeleted && opts.phase !== 'delete-originals') {
         errors.push('--only-user-deleted is only accepted by --phase=delete-originals');
+    }
+    if (opts.unreferencedOnly && opts.phase !== 'remove-copies') {
+        errors.push('--unreferenced-only is only accepted by --phase=remove-copies');
+    }
+    if (opts.allowReplan && opts.phase !== 'plan') {
+        errors.push('--allow-replan is only accepted by --phase=plan');
     }
     return { opts, errors };
 }
@@ -95,6 +104,24 @@ export function projectRefFromUrl(raw) {
         return `local-${url.port}`;
     }
     return null;
+}
+
+/** A local stack's ref ("local-<port>", projectRefFromUrl). @param {unknown} ref */
+export function isLocalRef(ref) {
+    return typeof ref === 'string' && /^local-\d+$/.test(ref);
+}
+
+/**
+ * Why --soak-hours is not acceptable, or null. The soak is the time the
+ * originals stay in place while 0066 is live (the rollback window): below 72 h
+ * only on a local stack (rehearsals), or with the explicit --allow-short-soak.
+ * The runbook forbids both in production.
+ * @param {{ soakHours: number, ref: string, allowShortSoak: boolean }} s
+ */
+export function soakHoursProblem(s) {
+    if (s.soakHours >= DEFAULT_SOAK_HOURS || isLocalRef(s.ref) || s.allowShortSoak) return null;
+    return `--soak-hours=${s.soakHours} is below ${DEFAULT_SOAK_HOURS} for project ${s.ref}, which is not a local stack ` +
+        '(never shorten the soak in production; only --allow-short-soak overrides this)';
 }
 
 /**
@@ -249,15 +276,25 @@ export function isRootSource(src) {
  *   rootSourceOtherOrg: number, rootSourceDangling: number, outsideOrgFolder: number,
  *   blocking: number, referencedObjects: number,
  * }} RowCounts
+ * @typedef {{ dest: string, row_ids: string[], user_deleted_at?: string|null, d16_deleted_at?: string|null }} EntryLike
  */
+
+/**
+ * File-backed rows whose source is a root-level name: 0066 is not in effect
+ * (not applied yet, or reverted). Editor rows keep a source without '/'
+ * (their title) forever and do not count.
+ * @param {DocRow[]} rows
+ */
+export function fileBackedRootRows(rows) {
+    return rows.filter((r) => isFileBackedRow(r.metadata) && isRootSource(metadataText(r.metadata, 'source'))).length;
+}
 
 /**
  * Sorts the documents rows the way 0066 sees them.
  * - byName: root-level object name -> ids of the seed-org file-backed rows
  *   whose source is that name (0066 relinks exactly these), or is already its
- *   copy '<seed>/<that name>' (a plan made again after 0066: the rows still
- *   belong to that object, so a KB entry a user deletes later is still
- *   recognised as deleted by the user and never copied back).
+ *   copy '<seed>/<that name>' (rows relinked by 0066). rowsAtRoot and
+ *   rowsOnCopy count the two kinds per name.
  * - blocking: file-backed rows the relink cannot fix (another org, a source
  *   that names no object, a source outside the row's org folder); the 0066
  *   guard would refuse while they exist.
@@ -268,6 +305,10 @@ export function isRootSource(src) {
 export function analyseRows(rows, rootNames, seedOrgId = SEED_ORG_ID) {
     /** @type {Map<string, string[]>} */
     const byName = new Map();
+    /** @type {Map<string, number>} */
+    const rowsAtRoot = new Map();
+    /** @type {Map<string, number>} */
+    const rowsOnCopy = new Map();
     /** @type {RowCounts} */
     const counts = {
         total: rows.length,
@@ -283,6 +324,13 @@ export function analyseRows(rows, rootNames, seedOrgId = SEED_ORG_ID) {
         outsideOrgFolder: 0,
         blocking: 0,
         referencedObjects: 0,
+    };
+    /** @param {Map<string, number>} map @param {string} name @param {string} id */
+    const add = (map, name, id) => {
+        const ids = byName.get(name) ?? [];
+        ids.push(id);
+        byName.set(name, ids);
+        map.set(name, (map.get(name) ?? 0) + 1);
     };
     for (const row of rows) {
         const meta = row.metadata;
@@ -301,9 +349,7 @@ export function analyseRows(rows, rootNames, seedOrgId = SEED_ORG_ID) {
             const rootName = row.org_id === seedOrgId ? src.slice(seedOrgId.length + 1) : null;
             if (rootName !== null && rootNames.has(rootName) && destinationFor(rootName, seedOrgId) === src) {
                 counts.relinked++;
-                const ids = byName.get(rootName) ?? [];
-                ids.push(row.id);
-                byName.set(rootName, ids);
+                add(rowsOnCopy, rootName, row.id);
             } else {
                 counts.prefixed++;
             }
@@ -311,18 +357,72 @@ export function analyseRows(rows, rootNames, seedOrgId = SEED_ORG_ID) {
             counts.rootSource++;
             if (row.org_id !== seedOrgId) counts.rootSourceOtherOrg++;
             else if (!rootNames.has(/** @type {string} */ (src))) counts.rootSourceDangling++;
-            else {
-                const ids = byName.get(/** @type {string} */ (src)) ?? [];
-                ids.push(row.id);
-                byName.set(/** @type {string} */ (src), ids);
-            }
+            else add(rowsAtRoot, /** @type {string} */ (src), row.id);
         } else {
             counts.outsideOrgFolder++;
         }
     }
     counts.blocking = counts.rootSourceOtherOrg + counts.rootSourceDangling + counts.outsideOrgFolder;
     counts.referencedObjects = byName.size;
-    return { byName, counts };
+    return { byName, rowsAtRoot, rowsOnCopy, counts };
+}
+
+/**
+ * The copy stage a plan finds, and why it may not plan. A bucket the copy
+ * phase has already run on (rows relinked by 0066, or seed copies identical to
+ * a root-level object) must not be planned again: the manifest of the first
+ * plan is the only record of which documents rows each object had, so a new
+ * plan cannot tell a KB entry a user deleted since. Recover manifest.json
+ * from its second copy instead; only --allow-replan overrides this.
+ * - 'fresh': nothing copied yet, a normal plan.
+ * - 'after-0066': rows are relinked and none names a root-level object.
+ * - 'before-0066': rows name root-level objects and none is relinked (0066
+ *   not applied yet, or reverted).
+ * - 'unknown': neither (all referenced entries gone, or both kinds of rows):
+ *   refused even with --allow-replan.
+ * @param {{ relinked: number, rootSource: number, identicalCopies: number, allowReplan: boolean }} s
+ * @returns {{ stage: 'fresh'|'after-0066'|'before-0066'|'unknown', problems: string[] }}
+ */
+export function replanCheck(s) {
+    if (s.relinked === 0 && s.identicalCopies === 0) return { stage: 'fresh', problems: [] };
+    /** @type {'after-0066'|'before-0066'|'unknown'} */
+    let stage = 'unknown';
+    if (s.relinked > 0 && s.rootSource === 0) stage = 'after-0066';
+    else if (s.relinked === 0 && s.rootSource > 0) stage = 'before-0066';
+    /** @type {string[]} */
+    const problems = [];
+    if (!s.allowReplan) {
+        problems.push(`the bucket was already copied (relinked rows ${s.relinked}, seed copies identical to a root-level ` +
+            `object ${s.identicalCopies}): do not plan again; recover manifest.json from its second copy (runbook). ` +
+            'Only --allow-replan overrides this');
+    } else if (stage === 'unknown') {
+        problems.push(`--allow-replan: cannot tell whether 0066 is in effect (relinked rows ${s.relinked}, rows naming a ` +
+            `root-level object ${s.rootSource}); a human decides`);
+    }
+    return { stage, problems };
+}
+
+/**
+ * plan, per root-level object: what it means that it has (or has not) an
+ * identical copy at its destination, given the copy stage (replanCheck).
+ * - 'plan': planned as usual (copied, or skipped as identical).
+ * - 'user-deleted': no copy after 0066. 0066's guard proved that every
+ *   root-level object had a same-size copy, so a copy that is gone since was
+ *   removed with its KB entry (DELETE /api/documents): the manifest marks it
+ *   deleted by a user and its bytes are never copied back.
+ * - 'copy-missing': rows name its copy, which does not exist (refused).
+ * - 'ambiguous': no copy and no row before 0066 (or at an unknown stage) in a
+ *   bucket already copied: an interrupted copy, or a KB entry a user deleted
+ *   while 0066 was in effect before a revert; refused, a human decides.
+ * @param {{ stage: string, destState: 'absent'|'identical'|'different', rowsAtRoot: number, rowsOnCopy: number }} s
+ * @returns {'plan'|'user-deleted'|'copy-missing'|'ambiguous'}
+ */
+export function planDisposition(s) {
+    if (s.destState !== 'absent') return 'plan';
+    if (s.rowsOnCopy > 0) return 'copy-missing';
+    if (s.stage === 'fresh' || s.rowsAtRoot > 0) return 'plan';
+    if (s.stage === 'after-0066') return 'user-deleted';
+    return 'ambiguous';
 }
 
 /**
@@ -348,13 +448,15 @@ export function rowState(manifestRowIds, liveRowIds) {
 }
 
 /**
- * copy phase, per object.
- * @param {{ rows: string, userDeleted: boolean, dest: 'absent'|'identical'|'different',
+ * copy phase, per object. An entry deleted by a user or removed under D16
+ * (owner decision, remove-copies --unreferenced-only) is never copied again.
+ * @param {{ rows: string, userDeleted: boolean, d16Deleted?: boolean, dest: 'absent'|'identical'|'different',
  *           original: 'present'|'absent'|'changed' }} s
- * @returns {{ action: 'copy'|'skip-identical'|'skip-user-deleted'|'abort', reason?: string }}
+ * @returns {{ action: 'copy'|'skip-identical'|'skip-user-deleted'|'skip-d16-deleted'|'abort', reason?: string }}
  */
 export function copyDecision(s) {
     if (s.userDeleted || s.rows === 'user-deleted') return { action: 'skip-user-deleted' };
+    if (s.d16Deleted) return { action: 'skip-d16-deleted' };
     if (s.rows === 'rows-partial') return { action: 'abort', reason: 'only some of its documents rows still exist' };
     if (s.dest === 'different') return { action: 'abort', reason: 'the destination exists with different content' };
     if (s.dest === 'identical') return { action: 'skip-identical' };
@@ -364,25 +466,34 @@ export function copyDecision(s) {
 }
 
 /**
- * verify phase, per object.
- * @param {{ rows: string, userDeleted: boolean, copy: 'identical'|'absent'|'different' }} s
+ * verify phase, per object. Neither an entry deleted by a user nor one removed
+ * under D16 needs its copy, so neither is a failure.
+ * @param {{ rows: string, userDeleted: boolean, d16Deleted?: boolean, d16Started?: boolean,
+ *           copy: 'identical'|'absent'|'different' }} s
  */
 export function verifyStatus(s) {
     if (s.userDeleted || s.rows === 'user-deleted') return 'user-deleted';
+    if (s.d16Deleted) return 'd16-deleted';
     if (s.rows === 'rows-partial') return 'fail: only some of its documents rows still exist';
-    if (s.copy === 'absent') return 'fail: the copy is missing';
+    if (s.copy === 'absent') {
+        return s.d16Started
+            ? 'fail: the copy is missing (a D16 removal was interrupted: run remove-copies --unreferenced-only again)'
+            : 'fail: the copy is missing';
+    }
     if (s.copy === 'different') return 'fail: the copy differs from the manifest';
     return 'ok';
 }
 
 /**
  * restore phase, per object: puts a missing original back, from the copy
- * when it is intact, else from the byte backup. Never for a user-deleted one.
- * @param {{ rows: string, userDeleted: boolean, original: 'present'|'absent'|'changed',
+ * when it is intact, else from the byte backup. Never for an entry deleted by
+ * a user or removed under D16.
+ * @param {{ rows: string, userDeleted: boolean, d16Deleted?: boolean, original: 'present'|'absent'|'changed',
  *           copy: 'identical'|'absent'|'different', backupOk: boolean }} s
  */
 export function restoreDecision(s) {
     if (s.userDeleted || s.rows === 'user-deleted') return { action: 'skip-user-deleted' };
+    if (s.d16Deleted) return { action: 'skip-d16-deleted' };
     if (s.original !== 'absent') return { action: 'skip-present' };
     if (s.copy === 'identical') return { action: 'from-copy' };
     if (s.backupOk) return { action: 'from-backup' };
@@ -407,34 +518,57 @@ export function soakRemainingHours(soakStartedAt, soakHours, now = Date.now()) {
 }
 
 /**
+ * One line for verify and delete-originals: the recorded soak start, the
+ * --soak-hours in force, when the soak ends and how much is left (or over).
+ * @param {string|null|undefined} soakStartedAt ISO time
+ * @param {number} soakHours
+ * @param {number} now epoch ms
+ */
+export function soakSummary(soakStartedAt, soakHours, now = Date.now()) {
+    const start = typeof soakStartedAt === 'string' ? Date.parse(soakStartedAt) : NaN;
+    if (!Number.isFinite(start)) {
+        return `soak: not started (no verify has seen 0066 in effect yet); --soak-hours=${soakHours}`;
+    }
+    const endMs = start + soakHours * 3_600_000;
+    const leftH = (endMs - now) / 3_600_000;
+    const state = leftH > 0 ? `${leftH.toFixed(1)} h left` : `over for ${(-leftH).toFixed(1)} h`;
+    return `soak: started at ${soakStartedAt}, --soak-hours=${soakHours}, ends ${new Date(endMs).toISOString()}: ${state}`;
+}
+
+/**
  * Whether verify may record the soak start: 0066 is in effect (no file-backed
  * row names a root-level object any more), every live manifest row points at
  * its copy, and every copy verified.
- * @param {{
- *   rows: DocRow[],
- *   objects: { dest: string, row_ids: string[], user_deleted_at?: string|null }[],
- *   verifyFailures: number,
- * }} s
+ * @param {{ rows: DocRow[], objects: EntryLike[], verifyFailures: number }} s
  */
 export function soakStartReady(s) {
     if (s.verifyFailures > 0) return false;
-    if (s.rows.some((r) => isFileBackedRow(r.metadata) && isRootSource(metadataText(r.metadata, 'source')))) {
-        return false;
-    }
+    if (fileBackedRootRows(s.rows) > 0) return false;
     return manifestRowsNotRelinked(s.rows, s.objects) === 0;
 }
 
 /**
- * Live manifest rows (of entries not deleted by a user) whose source is not
- * their object's copy.
+ * Whether verify must clear the recorded soak start: a file-backed row names
+ * a root-level object again, so 0066 is no longer in effect (a rollback
+ * reverted it) and the originals are needed again. If 0066 comes back, the
+ * next verify records a new start, so delete-originals gets a full soak.
+ * @param {{ soakStartedAt: string|null|undefined, rows: DocRow[] }} s
+ */
+export function soakInterrupted(s) {
+    return Boolean(s.soakStartedAt) && fileBackedRootRows(s.rows) > 0;
+}
+
+/**
+ * Live manifest rows (of entries neither deleted by a user nor removed under
+ * D16) whose source is not their object's copy.
  * @param {DocRow[]} rows
- * @param {{ dest: string, row_ids: string[], user_deleted_at?: string|null }[]} objects
+ * @param {EntryLike[]} objects
  */
 function manifestRowsNotRelinked(rows, objects) {
     const byId = new Map(rows.map((r) => [r.id, r]));
     let notRelinked = 0;
     for (const o of objects) {
-        if (o.user_deleted_at) continue;
+        if (o.user_deleted_at || o.d16_deleted_at) continue;
         for (const id of o.row_ids) {
             const row = byId.get(id);
             if (row && metadataText(row.metadata, 'source') !== o.dest) notRelinked++;
@@ -444,14 +578,22 @@ function manifestRowsNotRelinked(rows, objects) {
 }
 
 /**
- * Why delete-originals must not run yet ([] = go). With onlyUserDeleted (the
- * first step of a rollback during the soak: the originals of KB entries users
- * deleted must be gone before the 0038 fallback returns) only verify failures
- * block; the soak and the relink are not required.
+ * Why delete-originals must not run yet ([] = go). The per-entry refusal (a
+ * root-level object under a manifest name that is not the manifest's object)
+ * comes from deleteOriginalDecision.
+ * - normal run: a clean verify, 0066 in effect (no file-backed row at the
+ *   root, every live manifest row on its copy) and the soak over.
+ * - onlyUserDeleted (the first step of a rollback during the soak: the
+ *   originals of KB entries users deleted must be gone before the 0038
+ *   fallback returns): it touches only those entries, so only their verify
+ *   failures count (verify never fails one: it does not need its copy). The
+ *   other entries' copies, the relink and the soak do not matter here, so a
+ *   broken copy elsewhere, or remove-copies having run, never blocks it.
  * @param {{
  *   rows: DocRow[],
- *   objects: { dest: string, row_ids: string[], user_deleted_at?: string|null }[],
+ *   objects: EntryLike[],
  *   verifyFailures: number,
+ *   verifyFailuresUserDeleted?: number,
  *   soakStartedAt: string|null|undefined,
  *   soakHoursLeft: number,
  *   onlyUserDeleted?: boolean,
@@ -460,13 +602,13 @@ function manifestRowsNotRelinked(rows, objects) {
 export function deleteOriginalsBlockers(s) {
     /** @type {string[]} */
     const blockers = [];
+    if (s.onlyUserDeleted) {
+        const failed = s.verifyFailuresUserDeleted ?? 0;
+        if (failed > 0) blockers.push(`verify failed for ${failed} KB entr${failed === 1 ? 'y' : 'ies'} deleted by a user`);
+        return blockers;
+    }
     if (s.verifyFailures > 0) blockers.push(`verify failed for ${s.verifyFailures} object(s)`);
-    if (s.onlyUserDeleted) return blockers;
-    // The critique fix: only file-backed rows count. Editor rows keep a
-    // source without '/' (their title) forever.
-    const stillRoot = s.rows.filter(
-        (r) => isFileBackedRow(r.metadata) && isRootSource(metadataText(r.metadata, 'source'))
-    ).length;
+    const stillRoot = fileBackedRootRows(s.rows);
     if (stillRoot > 0) {
         blockers.push(`${stillRoot} file-backed documents row(s) still name a root-level object (apply 0066 first)`);
     }
@@ -481,20 +623,101 @@ export function deleteOriginalsBlockers(s) {
 }
 
 /**
- * remove-copies phase (rollback before delete-originals), per object: removes
- * exactly the manifest copy, only while nothing depends on it.
- * @param {{ userDeleted: boolean, original: 'present'|'absent'|'changed',
+ * delete-originals, per manifest entry.
+ * - an entry removed under D16 is never touched (nothing of it is left);
+ * - onlyUserDeleted: every entry not deleted by a user is skipped untouched;
+ * - a root-level object under the entry's name that is not the manifest's
+ *   object ('changed') refuses the whole run;
+ * - else the original goes if present, and for an entry deleted by a user
+ *   also any copy left over. A live entry's copy is re-verified right before
+ *   its original goes (recheckCopy).
+ * @param {{ onlyUserDeleted: boolean, userDeleted: boolean, d16Deleted: boolean,
+ *           original: 'present'|'absent'|'changed', copyPresent: boolean }} s
+ * @returns {{ action: 'skip'|'refuse'|'remove', removeOriginal: boolean, removeCopy: boolean,
+ *             recheckCopy: boolean, reason?: string }}
+ */
+export function deleteOriginalDecision(s) {
+    const none = { removeOriginal: false, removeCopy: false, recheckCopy: false };
+    if (s.d16Deleted) return { action: 'skip', ...none, reason: 'removed under D16' };
+    if (s.onlyUserDeleted && !s.userDeleted) return { action: 'skip', ...none, reason: 'not deleted by a user' };
+    if (s.original === 'changed') {
+        return { action: 'refuse', ...none, reason: 'the root-level object under this name is not the one in the manifest' };
+    }
+    const removeOriginal = s.original === 'present';
+    return {
+        action: 'remove',
+        removeOriginal,
+        removeCopy: s.userDeleted && s.copyPresent,
+        recheckCopy: removeOriginal && !s.userDeleted,
+    };
+}
+
+/**
+ * remove-copies (rollback while the originals are in place), per manifest
+ * entry.
+ * - live entry: removes exactly the manifest copy, only while its original
+ *   (the manifest's object) is in place and no documents row names the copy;
+ *   its original is never touched;
+ * - entry deleted by a user: removes whatever is left of it, its copy and its
+ *   original, so it ends with neither (the original would be readable again
+ *   once the 0038 fallback returns);
+ * - entry removed under D16: never touched.
+ * Any abort stops the whole run before the first write.
+ * @param {{ userDeleted: boolean, d16Deleted?: boolean, original: 'present'|'absent'|'changed',
  *           copy: 'identical'|'absent'|'different', rowsPointAtCopy: number }} s
- * @returns {{ action: 'remove'|'skip-absent'|'abort', reason?: string }}
+ * @returns {{ action: 'remove'|'skip-absent'|'skip-d16-deleted'|'abort', removeCopy: boolean,
+ *             removeOriginal: boolean, reason?: string }}
  */
 export function removeCopyDecision(s) {
-    if (s.copy === 'absent') return { action: 'skip-absent' };
-    if (s.copy === 'different') return { action: 'abort', reason: 'the copy no longer matches the manifest' };
-    if (s.rowsPointAtCopy > 0) {
-        return { action: 'abort', reason: `${s.rowsPointAtCopy} documents row(s) still point at the copy (revert the 0066 relink first)` };
+    const none = { removeCopy: false, removeOriginal: false };
+    /** @param {string} reason */
+    const abort = (reason) => ({ action: /** @type {const} */ ('abort'), ...none, reason });
+    if (s.d16Deleted) return { action: 'skip-d16-deleted', ...none };
+    if (s.copy === 'different') return abort('the copy no longer matches the manifest');
+    if (s.copy === 'identical' && s.rowsPointAtCopy > 0) {
+        return abort(`${s.rowsPointAtCopy} documents row(s) still point at the copy (revert the 0066 relink first)`);
     }
-    if (s.userDeleted) return { action: 'remove' };
-    if (s.original !== 'present') return { action: 'abort', reason: 'the original is not in place (run --phase=restore first)' };
+    if (s.userDeleted) {
+        if (s.original === 'changed') return abort('the root-level object under this name is not the one in the manifest');
+        const removeCopy = s.copy === 'identical';
+        const removeOriginal = s.original === 'present';
+        return removeCopy || removeOriginal ? { action: 'remove', removeCopy, removeOriginal } : { action: 'skip-absent', ...none };
+    }
+    if (s.copy === 'absent') return { action: 'skip-absent', ...none };
+    if (s.original === 'changed') return abort('the root-level object under this name is not the one in the manifest');
+    if (s.original !== 'present') return abort('the original is not in place (run --phase=restore first)');
+    return { action: 'remove', removeCopy: true, removeOriginal: false };
+}
+
+/**
+ * remove-copies --unreferenced-only (owner decision D16, runbook step 8b,
+ * after delete-originals), per manifest entry: deletes for good the copy of
+ * an object no documents row had at plan time. Only entries with
+ * row_ids = [] that are not deleted by a user; the original must be gone
+ * already (delete-originals), the copy must match the manifest's sha256 and
+ * no documents row may name it. Any abort stops the whole run before the
+ * first write. 'mark' completes an interrupted run: the copy of an entry whose
+ * removal had started (d16_delete_started_at) is already gone.
+ * @param {{ rowIds: number, userDeleted: boolean, d16Deleted: boolean, d16Started: boolean,
+ *           original: 'present'|'absent'|'changed', copy: 'identical'|'absent'|'different',
+ *           rowsPointAtCopy: number }} s
+ * @returns {{ action: 'remove'|'mark'|'skip-referenced'|'skip-user-deleted'|'skip-done'|'abort', reason?: string }}
+ */
+export function d16Decision(s) {
+    if (s.rowIds > 0) return { action: 'skip-referenced' };
+    if (s.userDeleted) return { action: 'skip-user-deleted' };
+    if (s.d16Deleted) return { action: 'skip-done' };
+    if (s.original === 'changed') {
+        return { action: 'abort', reason: 'the root-level object under this name is not the one in the manifest' };
+    }
+    if (s.original === 'present') {
+        return { action: 'abort', reason: 'the original is still in place (D16 comes after delete-originals)' };
+    }
+    if (s.copy === 'different') return { action: 'abort', reason: 'the copy differs from the manifest' };
+    if (s.copy === 'absent') {
+        return s.d16Started ? { action: 'mark' } : { action: 'abort', reason: 'the copy is missing (verify fails on it); a human looks' };
+    }
+    if (s.rowsPointAtCopy > 0) return { action: 'abort', reason: `${s.rowsPointAtCopy} documents row(s) name the copy` };
     return { action: 'remove' };
 }
 
@@ -532,6 +755,9 @@ export function makeRedactor(names) {
     };
 }
 
+/** null/undefined, or a string Date.parse understands. @param {unknown} v */
+const isTimeOrNull = (v) => v == null || (typeof v === 'string' && Number.isFinite(Date.parse(v)));
+
 /**
  * The manifest belongs to this project, bucket and seed org, and has the
  * fields every later phase relies on.
@@ -545,9 +771,7 @@ export function manifestProblems(m, expected) {
     if (m.project_ref !== expected.ref) problems.push(`it was made for project ${m.project_ref}`);
     if (m.bucket !== BUCKET) problems.push('it is for another bucket');
     if (m.seed_org_id !== SEED_ORG_ID) problems.push('it is for another org');
-    if (m.soak_started_at != null && !Number.isFinite(Date.parse(m.soak_started_at))) {
-        problems.push('its soak_started_at is not a time');
-    }
+    if (!isTimeOrNull(m.soak_started_at)) problems.push('its soak_started_at is not a time');
     if (!Array.isArray(m.objects)) return [...problems, 'it has no object list'];
     m.objects.forEach((/** @type {any} */ o, /** @type {number} */ i) => {
         const ok =
@@ -563,7 +787,10 @@ export function manifestProblems(m, expected) {
             Array.isArray(o.row_ids) &&
             // Exactly the form the plan writes: a manifest entry can never point
             // restore at a file outside --out/backup.
-            o.backup_file === backupFileFor(i + 1, o.id);
+            o.backup_file === backupFileFor(i + 1, o.id) &&
+            isTimeOrNull(o.user_deleted_at) &&
+            isTimeOrNull(o.d16_deleted_at) &&
+            isTimeOrNull(o.d16_delete_started_at);
         if (!ok) problems.push(`object entry ${i + 1} is incomplete`);
     });
     return problems;

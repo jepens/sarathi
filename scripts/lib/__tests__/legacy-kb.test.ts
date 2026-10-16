@@ -6,10 +6,13 @@ import {
     analyseRows,
     backupFileFor,
     copyDecision,
+    d16Decision,
+    deleteOriginalDecision,
     deleteOriginalsBlockers,
     destinationFor,
     encodeObjectPath,
     isFileBackedRow,
+    isLocalRef,
     isOrgScopedObjectPath,
     isRootObjectName,
     keyRole,
@@ -18,13 +21,18 @@ import {
     manifestProblems,
     outDirProblem,
     parseArgs,
+    planDisposition,
     projectRefFromUrl,
     removeCopyDecision,
+    replanCheck,
     restoreDecision,
     rowState,
     sha256Hex,
+    soakHoursProblem,
+    soakInterrupted,
     soakRemainingHours,
     soakStartReady,
+    soakSummary,
     verifyStatus,
 } from '../legacy-kb.mjs';
 
@@ -290,10 +298,14 @@ describe('delete-originals preconditions', () => {
         expect(deleteOriginalsBlockers({ rows: [editor], objects, ...go })).toEqual([]);
     });
 
-    it('--only-user-deleted (rollback during the soak) needs neither the relink nor the soak, only a clean verify', () => {
+    it('--only-user-deleted (rollback during the soak) needs neither the relink, the soak nor the other copies', () => {
         const base = { rows: [root, editor], objects, soakStartedAt: null, soakHoursLeft: 72, onlyUserDeleted: true };
         expect(deleteOriginalsBlockers({ ...base, verifyFailures: 0 })).toEqual([]);
-        expect(deleteOriginalsBlockers({ ...base, verifyFailures: 1 }).join()).toMatch(/verify failed for 1/);
+        // A broken copy of another entry (or remove-copies having run) never blocks it.
+        expect(deleteOriginalsBlockers({ ...base, verifyFailures: 14 })).toEqual([]);
+        expect(deleteOriginalsBlockers({ ...base, verifyFailures: 1, verifyFailuresUserDeleted: 1 }).join()).toMatch(
+            /verify failed for 1 KB entry deleted by a user/
+        );
     });
 
     it('counts the soak from the recorded start (0066 in effect), not from the copy', () => {
@@ -328,8 +340,126 @@ describe('remove-copies (rollback before delete-originals)', () => {
         expect(removeCopyDecision({ ...base, original: 'changed' }).action).toBe('abort');
     });
 
-    it('removes the leftover copy of a KB entry deleted by the user even without its original', () => {
-        expect(removeCopyDecision({ ...base, userDeleted: true, original: 'absent' }).action).toBe('remove');
+    it('removes whatever is left of a KB entry deleted by the user: its copy and its original', () => {
+        expect(removeCopyDecision({ ...base, userDeleted: true, original: 'absent' })).toMatchObject({
+            action: 'remove', removeCopy: true, removeOriginal: false,
+        });
+        expect(removeCopyDecision({ ...base, userDeleted: true, copy: 'absent', original: 'present' })).toMatchObject({
+            action: 'remove', removeCopy: false, removeOriginal: true,
+        });
+        expect(removeCopyDecision({ ...base, userDeleted: true, copy: 'absent', original: 'absent' }).action).toBe('skip-absent');
+        expect(removeCopyDecision({ ...base, userDeleted: true, original: 'changed' }).action).toBe('abort');
+    });
+
+    it('never touches an entry removed under D16, nor the original of a live entry', () => {
+        expect(removeCopyDecision({ ...base, d16Deleted: true }).action).toBe('skip-d16-deleted');
+        expect(removeCopyDecision(base)).toMatchObject({ action: 'remove', removeCopy: true, removeOriginal: false });
+    });
+});
+
+describe('D16: remove-copies --unreferenced-only (after delete-originals)', () => {
+    const base = {
+        rowIds: 0, userDeleted: false, d16Deleted: false, d16Started: false,
+        original: 'absent', copy: 'identical', rowsPointAtCopy: 0,
+    } as const;
+
+    it('removes only the copy of an object no row had, once its original is gone', () => {
+        expect(d16Decision(base).action).toBe('remove');
+        expect(d16Decision({ ...base, rowIds: 4 }).action).toBe('skip-referenced');
+        expect(d16Decision({ ...base, userDeleted: true }).action).toBe('skip-user-deleted');
+        expect(d16Decision({ ...base, d16Deleted: true }).action).toBe('skip-done');
+    });
+
+    it('refuses before delete-originals, on a different copy or when a row names the copy', () => {
+        expect(d16Decision({ ...base, original: 'present' }).reason).toMatch(/after delete-originals/);
+        expect(d16Decision({ ...base, original: 'changed' }).action).toBe('abort');
+        expect(d16Decision({ ...base, copy: 'different' }).action).toBe('abort');
+        expect(d16Decision({ ...base, rowsPointAtCopy: 1 }).action).toBe('abort');
+    });
+
+    it('completes an interrupted removal, and refuses a copy that vanished on its own', () => {
+        expect(d16Decision({ ...base, copy: 'absent', d16Started: true }).action).toBe('mark');
+        expect(d16Decision({ ...base, copy: 'absent' }).action).toBe('abort');
+    });
+
+    it('copy, verify and restore leave a D16 entry alone', () => {
+        expect(copyDecision({ rows: 'unreferenced', userDeleted: false, d16Deleted: true, dest: 'absent', original: 'absent' }).action)
+            .toBe('skip-d16-deleted');
+        expect(verifyStatus({ rows: 'unreferenced', userDeleted: false, d16Deleted: true, copy: 'absent' })).toBe('d16-deleted');
+        expect(verifyStatus({ rows: 'unreferenced', userDeleted: false, d16Started: true, copy: 'absent' })).toMatch(/interrupted/);
+        expect(restoreDecision({ rows: 'unreferenced', userDeleted: false, d16Deleted: true, original: 'absent', copy: 'absent', backupOk: true }).action)
+            .toBe('skip-d16-deleted');
+    });
+});
+
+describe('delete-originals per entry', () => {
+    const base = { onlyUserDeleted: false, userDeleted: false, d16Deleted: false, original: 'present', copyPresent: true } as const;
+
+    it('removes a live original after re-checking its copy, and everything of a user-deleted entry', () => {
+        expect(deleteOriginalDecision(base)).toMatchObject({ action: 'remove', removeOriginal: true, removeCopy: false, recheckCopy: true });
+        expect(deleteOriginalDecision({ ...base, userDeleted: true })).toMatchObject({
+            action: 'remove', removeOriginal: true, removeCopy: true, recheckCopy: false,
+        });
+        expect(deleteOriginalDecision({ ...base, original: 'absent' })).toMatchObject({ action: 'remove', removeOriginal: false });
+    });
+
+    it('skips D16 entries and, with --only-user-deleted, every live entry; refuses a replaced original', () => {
+        expect(deleteOriginalDecision({ ...base, d16Deleted: true }).action).toBe('skip');
+        expect(deleteOriginalDecision({ ...base, onlyUserDeleted: true }).action).toBe('skip');
+        expect(deleteOriginalDecision({ ...base, onlyUserDeleted: true, userDeleted: true }).action).toBe('remove');
+        expect(deleteOriginalDecision({ ...base, original: 'changed' }).action).toBe('refuse');
+    });
+});
+
+describe('re-plan guard', () => {
+    it('plans a fresh bucket and refuses one already copied unless --allow-replan', () => {
+        expect(replanCheck({ relinked: 0, rootSource: 8, identicalCopies: 0, allowReplan: false })).toEqual({ stage: 'fresh', problems: [] });
+        expect(replanCheck({ relinked: 8, rootSource: 0, identicalCopies: 15, allowReplan: false }).problems.join()).toMatch(/do not plan again/);
+        expect(replanCheck({ relinked: 8, rootSource: 0, identicalCopies: 15, allowReplan: true })).toEqual({ stage: 'after-0066', problems: [] });
+        expect(replanCheck({ relinked: 0, rootSource: 8, identicalCopies: 15, allowReplan: true }).stage).toBe('before-0066');
+        expect(replanCheck({ relinked: 4, rootSource: 4, identicalCopies: 15, allowReplan: true }).problems.join()).toMatch(/a human decides/);
+    });
+
+    it('after 0066 a root object without its copy was deleted with its KB entry (never copied back)', () => {
+        expect(planDisposition({ stage: 'after-0066', destState: 'absent', rowsAtRoot: 0, rowsOnCopy: 0 })).toBe('user-deleted');
+        expect(planDisposition({ stage: 'after-0066', destState: 'identical', rowsAtRoot: 0, rowsOnCopy: 4 })).toBe('plan');
+        expect(planDisposition({ stage: 'after-0066', destState: 'absent', rowsAtRoot: 0, rowsOnCopy: 4 })).toBe('copy-missing');
+        expect(planDisposition({ stage: 'before-0066', destState: 'absent', rowsAtRoot: 0, rowsOnCopy: 0 })).toBe('ambiguous');
+        expect(planDisposition({ stage: 'before-0066', destState: 'absent', rowsAtRoot: 4, rowsOnCopy: 0 })).toBe('plan');
+        expect(planDisposition({ stage: 'fresh', destState: 'absent', rowsAtRoot: 0, rowsOnCopy: 0 })).toBe('plan');
+    });
+});
+
+describe('soak hours and start', () => {
+    it('refuses a soak below 72 h for a cloud project unless explicitly overridden', () => {
+        expect(soakHoursProblem({ soakHours: 72, ref: 'abcdefghijklmnopqrst', allowShortSoak: false })).toBeNull();
+        expect(soakHoursProblem({ soakHours: 0, ref: 'abcdefghijklmnopqrst', allowShortSoak: false })).toMatch(/never shorten the soak/);
+        expect(soakHoursProblem({ soakHours: 0, ref: 'local-58821', allowShortSoak: false })).toBeNull();
+        expect(soakHoursProblem({ soakHours: 0, ref: 'abcdefghijklmnopqrst', allowShortSoak: true })).toBeNull();
+        expect(isLocalRef('local-58821')).toBe(true);
+        expect(isLocalRef('abcdefghijklmnopqrst')).toBe(false);
+    });
+
+    it('accepts the new flags only for their phase', () => {
+        const ok = (args: string[]) => parseArgs(['--expect-ref=a', '--out=/x', ...args]).errors;
+        expect(ok(['--phase=remove-copies', '--unreferenced-only'])).toEqual([]);
+        expect(ok(['--phase=copy', '--unreferenced-only'])).toHaveLength(1);
+        expect(ok(['--phase=plan', '--allow-replan'])).toEqual([]);
+        expect(ok(['--phase=copy', '--allow-replan'])).toHaveLength(1);
+        expect(parseArgs(['--expect-ref=a', '--out=/x', '--phase=delete-originals', '--allow-short-soak', '--soak-hours=0']).opts)
+            .toMatchObject({ allowShortSoak: true, soakHours: 0 });
+    });
+
+    it('prints when the soak ends and clears the start when 0066 is reverted', () => {
+        const t0 = Date.parse('2026-10-16T16:02:21Z');
+        expect(soakSummary('2026-10-16T16:02:21Z', 72, t0)).toMatch(/ends 2026-10-19T16:02:21\.000Z: 72\.0 h left/);
+        expect(soakSummary('2026-10-16T16:02:21Z', 72, t0 + 73 * 3_600_000)).toMatch(/over for 1\.0 h/);
+        expect(soakSummary(null, 72, t0)).toMatch(/not started/);
+        const rootRow = { id: 'r1', org_id: SEED, metadata: { source: NAME } };
+        const onCopy = { id: 'r1', org_id: SEED, metadata: { source: `${SEED}/${NAME}` } };
+        expect(soakInterrupted({ soakStartedAt: '2026-10-16T16:02:21Z', rows: [rootRow] })).toBe(true);
+        expect(soakInterrupted({ soakStartedAt: '2026-10-16T16:02:21Z', rows: [onCopy] })).toBe(false);
+        expect(soakInterrupted({ soakStartedAt: null, rows: [rootRow] })).toBe(false);
     });
 });
 
@@ -389,5 +519,9 @@ describe('logging and manifest', () => {
         expect(manifestProblems(m({ ...entry, backup_file: '../../secrets.bin' }), { ref: 'p' })).toHaveLength(1);
         expect(manifestProblems(m({ ...entry, backup_file: `backup/02-${id}.bin` }), { ref: 'p' })).toHaveLength(1);
         expect(manifestProblems(m({ ...entry, id: 'not-a-uuid', backup_file: 'backup/01-not-a-uuid.bin' }), { ref: 'p' })).toHaveLength(1);
+        const okEntry = { ...entry, backup_file: `backup/01-${id}.bin` };
+        expect(manifestProblems(m({ ...okEntry, d16_deleted_at: '2026-10-20T10:00:00Z', user_deleted_at: null }), { ref: 'p' })).toEqual([]);
+        expect(manifestProblems(m({ ...okEntry, d16_deleted_at: 'besok' }), { ref: 'p' })).toHaveLength(1);
+        expect(manifestProblems(m({ ...okEntry, user_deleted_at: 42 }), { ref: 'p' })).toHaveLength(1);
     });
 });

@@ -17,7 +17,7 @@
 --      (scripts/lib/__tests__/migration-0066-parity.test.ts) keeps these copies
 --      and the guard's IF condition identical to 0066.
 begin;
-select plan(48);
+select plan(49);
 
 select tests.create_two_orgs();
 select tests.create_supabase_user('5a11e024-5eed-4000-8000-0000000000aa', 'seed@tes.local',
@@ -62,7 +62,7 @@ select is(
     'documents policy: the seed org uuid appears nowhere');
 
 -- ---------------------------------------------------------------------------
--- 2. Behaviour (24)
+-- 2. Behaviour (25)
 -- ---------------------------------------------------------------------------
 -- A legacy root-level object, its copy under the seed folder (as the script
 -- makes it), two more seed objects, one of org A and an org-A key with a '..'
@@ -77,10 +77,11 @@ insert into storage.objects (bucket_id, name, metadata) values
 
 select is(
     (select count(*)::int from storage.objects
-      where bucket_id = 'documents' and name = '1700000000000_legacy root, v1.pdf'),
-    1, 'precondition: the legacy root-level fixture exists');
+      where bucket_id = 'documents' and name = '1700000000000_legacy root, v1.pdf'
+        and (storage.foldername(name))[1] is null),
+    1, 'precondition: the legacy fixture exists and is root-level for storage.foldername');
 
--- Member of org A: nothing under the seed folder, no root, no odd folder (9)
+-- Member of org A: nothing under the seed folder, no root, no odd folder (10)
 select tests.authenticate_as(tests.user_a1());
 set local storage.allow_delete_query = 'true';
 
@@ -119,6 +120,10 @@ select throws_ok(
            upper(tests.seed_org()::text) || '/besar.pdf'),
     '42501', null,
     'org A member: an upper-case seed folder is still the seed org (refused)');
+select isnt_empty(
+    format($$ select 1 from storage.objects where bucket_id = 'documents' and name = %L $$,
+           tests.org_a() || '/../' || tests.seed_org() || '/titip.pdf'),
+    'org A member: the org-A key with a ''..'' segment is its own (positive control for the seed check below)');
 
 -- Seed-org member: root-level objects are gone for it too; its folder works (14)
 select tests.authenticate_as('5a11e024-5eed-4000-8000-0000000000aa');
