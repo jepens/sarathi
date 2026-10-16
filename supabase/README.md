@@ -25,9 +25,12 @@ tenant data that means at least:
 - a new storage bucket/policy: `040_storage.test.sql`.
 
 `070_catalog_guards.test.sql` fails automatically when a public table has RLS
-off, a policy is not org-scoped, a SECURITY DEFINER function is executable by
-anon or is new to the reviewed list for `authenticated`, or an app function
-has no pinned `search_path`, so a forgotten test is often caught anyway.
+off, a policy on an org_id table is not org-scoped (`is_org_member(...)`; a
+policy scoped only to `user_id = auth.uid()` must be on the reviewed allowlist
+in guard 4, so e.g. `auth.uid() IS NOT NULL` fails), a SECURITY DEFINER
+function is executable by anon or is new to the reviewed list for
+`authenticated`, or an app function has no pinned `search_path`, so a
+forgotten test is often caught anyway.
 
 ## Run the stack and the tests locally
 
@@ -57,14 +60,20 @@ stops the `supabase_*_sarathi` containers; never use `--all`.
   with fixtures (two tenant orgs A/B, users a1/a2/b1, provisioned through the
   real `handle_new_user` path) and helpers. This schema exists only in the
   local database; it is not a migration.
-- Every `*.test.sql` runs in `begin; ... rollback;`.
+- Every `*.test.sql` runs in `begin; ... rollback;`. The tests do not assume
+  an empty database (counts are taken relative to a baseline), but
+  `npx supabase db reset` first is the reference run, as in CI.
 - `tests.authenticate_as(user)` / `authenticate_as_anon()` /
   `authenticate_as_service_role()` switch the transaction to the real API role
   and set the JWT claims `auth.uid()` reads. They raise an exception if the
   switch did not take effect, so an "is empty" assertion can never pass just
   because the test still runs as `postgres` (which bypasses RLS). 010 also
-  asserts `current_user`/`auth.uid()` explicitly and checks that foreign rows
-  exist before testing that they are invisible.
+  asserts `current_user`/`auth.uid()` explicitly.
+- Every assertion set in 010 (`check_tenant_table`, `check_cross_org_blind`,
+  `check_no_access`) starts with a precondition counted through
+  `tests.rows_ignoring_rls()` (SECURITY DEFINER, bypasses RLS): the rows the
+  role must not read/update/delete really exist. A denial can therefore never
+  pass on an empty table; a new table needs fixtures in 010 or it fails.
 - Known, not-yet-fixed gaps are `todo` tests (reported as
   `Failed (TODO)` without failing the run) and start passing once fixed:
   tracker 1.11 (chat-media bucket is public) and 1.12 (documents policy
@@ -109,16 +118,31 @@ histories are not meant to line up.
 Production is changed only through the Supabase MCP `apply_migration` tool,
 one migration per call, using the file's content and its name without the
 `.sql` extension (e.g. `0061_add_x`). The platform records it under a
-timestamp version (see `list_migrations`). Order of work:
-
-1. Write `migrations/00NN_name.sql` + its test; `npx supabase db reset` and
-   `npx supabase test db` are green locally (and in CI).
-2. Apply the same file to production with `apply_migration`.
-3. Refresh `fingerprint/production.txt` (below) and commit it with the
-   migration; `compare.sh` must report 0 unexpected differences.
+timestamp version (see `list_migrations`).
 
 The `db-tests` CI job (`.github/workflows/ci.yml`) runs `supabase db start`,
-`supabase test db` and `compare.sh` on every push and pull request.
+`supabase test db` and `compare.sh` on every push and pull request; all three
+steps are blocking. Because `production.txt` describes production, a new
+migration is first an *expected, pending* difference. Order of work, all in
+one PR:
+
+1. **PR, before production.** Write `migrations/00NN_name.sql` + its test.
+   Run `npx supabase db reset`, `npx supabase test db` and
+   `bash supabase/fingerprint/compare.sh`. compare.sh lists the lines the
+   migration adds (`>`) or changes (`<` old / `>` new) as unexpected; copy
+   them verbatim into `fingerprint/expected-diff.txt` under a comment
+   `# pending production apply: 00NN_name`. Now everything is green locally
+   and in CI, and the PR is reviewed with production untouched.
+2. **After approval, apply.** Apply the same file to production with
+   `apply_migration`.
+3. **Close the loop in the same PR.** Refresh `fingerprint/production.txt`
+   (below) and delete the pending lines from `expected-diff.txt`. compare.sh
+   must report 0 differences; leftover pending lines now fail as *stale*, so
+   they cannot be forgotten. Merge.
+
+If the PR is merged before step 2 (not recommended), main stays green with
+the pending lines; steps 2-3 then happen in a follow-up PR. Never apply a
+migration to production that has not passed step 1 and review.
 
 ## Schema fingerprint (production vs replay)
 
@@ -130,9 +154,12 @@ publication). It contains catalog SELECTs only.
 - `production.txt`: output of the query on production (committed snapshot).
 - `local.txt`: output on a fresh local replay, kept for review.
 - `expected-diff.txt`: differences that are known and explained, one per line
-  (`<` only in production, `>` only in the replay), each with a reason. It is
-  currently empty: the replay matches production exactly (checked 2026-10-16,
-  552 lines, md5 `d17c90453caa0ec2b719e0ac361aa9aa`).
+  (`<` only in production, `>` only in the replay), each with a reason:
+  permanent ones, or *pending* lines of a migration not yet applied to
+  production (see above). Entries that no longer differ fail as stale. It is
+  currently empty: the replay matches production exactly (re-checked
+  2026-10-16 against a fresh read-only production query: 552 lines, md5
+  `d17c90453caa0ec2b719e0ac361aa9aa`).
 
 Compare a fresh replay with the snapshot:
 
@@ -148,7 +175,8 @@ Refresh the production snapshot (read-only):
    `execute_sql` tool against production.
 2. Write the `line` values, one per line, in the returned order, to
    `production.txt` (LF line endings, trailing newline).
-3. Run `compare.sh`; explain or fix every difference.
+3. Run `compare.sh`; explain or fix every difference and remove pending
+   entries that are now applied.
 
 Quick drift check without copying 500+ lines: replace the final
 `select line ... order by line collate "C";` of the query with
@@ -159,6 +187,7 @@ from (select regexp_replace(line, '\s+', ' ', 'g') as line from lines) normalize
 ```
 
 and run it on production; compare with
-`grep -v '^$' supabase/fingerprint/production.txt | tr -d '\r' | head -c -1 | md5sum`
+`printf '%s' "$(grep -v '^$' supabase/fingerprint/production.txt | tr -d '\r')" | md5sum`
+(portable: works with GNU and BSD/macOS tools)
 (or run the same modified query on the local stack). Equal hashes mean the
 snapshot is current.

@@ -29,7 +29,10 @@ select is_empty(
     'every org_id table has at least one RLS policy');
 
 -- 4. ...and each of its policies is scoped to the caller: org membership
---    (is_org_member), the caller's own rows (auth.uid()), or a hard deny.
+--    (is_org_member) or a hard deny. A policy scoped only to the caller's own
+--    rows must compare user_id with auth.uid() for equality AND be on the
+--    reviewed allowlist below; "auth.uid() IS NOT NULL" and the like (any
+--    signed-in user of any tenant) therefore fail this guard.
 select is_empty(
     $$ select p.tablename || '.' || p.policyname from pg_policies p
        where p.schemaname = 'public'
@@ -39,11 +42,15 @@ select is_empty(
                        and a.attname = 'org_id' and not a.attisdropped)
          and (   not (coalesce(p.qual, 'false') = 'false'
                       or p.qual like '%is_org_member(%'
-                      or p.qual like '%auth.uid()%')
+                      or (p.qual ~ 'user_id = (\( SELECT auth\.uid\(\) AS uid\)|auth\.uid\(\))'
+                          and p.tablename || '.' || p.policyname = any (array[
+                              'organization_members.read own memberships'])))
               or (p.with_check is not null
                   and not (p.with_check = 'false'
                            or p.with_check like '%is_org_member(%'
-                           or p.with_check like '%auth.uid()%'))) $$,
+                           or (p.with_check ~ 'user_id = (\( SELECT auth\.uid\(\) AS uid\)|auth\.uid\(\))'
+                               and p.tablename || '.' || p.policyname = any (array[
+                                   'organization_members.read own memberships']))))) $$,
     'every policy on an org_id table is scoped to the caller''s org / own rows (or denies)');
 
 -- 5. Every storage.objects policy is scoped to an org folder via is_org_member.

@@ -86,6 +86,7 @@ jobs:
   db-tests:
     name: Database (migrations · pgTAP · fingerprint)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -107,6 +108,10 @@ jobs:
       - name: Run pgTAP tests
         run: supabase test db
 
+      # Blocking. A migration PR passes before production is touched by listing
+      # its lines as "pending" in supabase/fingerprint/expected-diff.txt; the
+      # production.txt refresh after apply_migration removes them again
+      # (stale entries fail too). See supabase/README.md.
       - name: Compare schema with the production fingerprint
         run: bash supabase/fingerprint/compare.sh
 

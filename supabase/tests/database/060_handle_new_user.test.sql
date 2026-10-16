@@ -5,11 +5,16 @@
 begin;
 select plan(11);
 
+-- Baseline taken before the fixture so the counts below hold on any local
+-- database, not only on a freshly reset one.
+create temp table baseline on commit drop as
+    select count(*)::int as orgs from public.organizations;
+
 insert into public.organizations (id, name) values (tests.org_a(), 'Tes Org A');
 
 select is(
     (select count(*)::int from public.organizations),
-    2, 'fixture: the seed org + org A exist');
+    (select orgs + 1 from baseline), 'fixture: org A was added to the existing orgs');
 
 -- 1. No app_metadata: no membership at all (and no org created).
 select tests.create_supabase_user('00000000-0000-4000-8000-0000000000c1', 'c1@tes.local');
@@ -76,7 +81,7 @@ select is_empty(
     'nobody was added to the seed org');
 select is(
     (select count(*)::int from public.organizations),
-    2, 'no organization was created by sign-up');
+    (select orgs + 1 from baseline), 'no organization was created by sign-up');
 select is(
     (select count(*)::int from public.organization_members where org_id = tests.org_a()),
     3, 'org A has exactly the three provisioned members');

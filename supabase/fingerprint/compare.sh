@@ -10,8 +10,16 @@
 # same query (schema_fingerprint.sql) through the Supabase MCP execute_sql tool
 # (read-only). See supabase/README.md to refresh it.
 #
-# Exit codes: 0 = only the differences listed in expected-diff.txt remain,
-#             1 = unexpected differences (printed), 2 = setup error.
+# Exit codes: 0 = exactly the differences listed in expected-diff.txt remain,
+#             1 = unexpected differences, or entries in expected-diff.txt that
+#                 no longer differ (stale; remove them), 2 = setup error.
+#
+# A migration PR is green BEFORE the migration reaches production: it lists
+# the lines its migration adds/changes as "pending" entries in
+# expected-diff.txt. Once the migration is applied to production and
+# production.txt is refreshed, those entries become stale and must be removed
+# in the same change (see supabase/README.md "How production migrations are
+# applied").
 #
 # Connection: uses $LOCAL_DB_URL with psql when psql is installed, otherwise
 # runs psql inside the local db container (supabase_db_<project_id>).
@@ -58,17 +66,23 @@ stale="$(LC_ALL=C comm -13 "$actual_diff" <(grep -E '^[<>] ' "$expected" | tr -d
 
 echo "production: $(grep -c . "$snapshot") lines, local: $(grep -c . "$local_out") lines, differences: $(grep -c . "$actual_diff" || true) (expected: $(grep -cE '^[<>] ' "$expected" || true))"
 
+status=0
 if [[ -n "$stale" ]]; then
     echo
-    echo "Listed in expected-diff.txt but no longer different (remove them):"
+    echo "STALE entries in expected-diff.txt (no longer different; remove them):"
     echo "$stale"
+    status=1
 fi
 
 if [[ -n "$unexpected" ]]; then
     echo
     echo "UNEXPECTED differences ('<' only in production, '>' only in the local replay):"
     echo "$unexpected"
-    exit 1
+    status=1
+fi
+
+if [[ $status -ne 0 ]]; then
+    exit "$status"
 fi
 
 echo "OK: the local replay matches production except for the documented differences."

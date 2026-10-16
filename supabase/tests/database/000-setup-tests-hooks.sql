@@ -156,8 +156,27 @@ $$;
 -- Reusable assertion sets (return pgTAP lines; call with select * from ...)
 -- ---------------------------------------------------------------------------
 
+-- Row count that ignores RLS (SECURITY DEFINER, owned by postgres, which has
+-- BYPASSRLS). The assertion sets below call it while acting as a client role
+-- to prove that the rows an "is empty" assertion must not see really exist,
+-- so a denial can never pass just because the table is empty.
+create function tests.rows_ignoring_rls(p_table text, p_where text default 'true')
+returns bigint
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+    v_n bigint;
+begin
+    execute format('select count(*) from public.%I where %s', p_table, p_where) into v_n;
+    return v_n;
+end;
+$$;
+
 -- Tenant-isolation matrix for one org-scoped table, run as a member of p_own.
--- Emits 9 assertions. p_vals is the VALUES list for p_cols with {org} standing
+-- Emits 10 assertions (the first is the precondition that rows of another org
+-- exist). p_vals is the VALUES list for p_cols with {org} standing
 -- for the target org id; p_set is an innocuous SET clause; p_new_where picks
 -- the row inserted by the first assertion (so the final delete never hits a
 -- fixture row that other rows reference).
@@ -176,6 +195,9 @@ declare
     v_own   text := quote_literal(p_own);
     v_other text := quote_literal(p_other);
 begin
+    return next ok(
+        tests.rows_ignoring_rls(p_table, format('org_id <> %s', v_own)) > 0,
+        format('%s: precondition: rows of other orgs exist', p_table));
     return next lives_ok(
         format('insert into public.%I (%s) values (%s)', p_table, p_cols, replace(p_vals, '{org}', v_own)),
         format('%s: a member can insert a row for their own org', p_table));
@@ -210,7 +232,7 @@ $$;
 
 -- The other direction, without writes of its own: a member of p_own sees,
 -- updates and deletes nothing outside p_own (includes the seed org's rows).
--- Emits 3 assertions.
+-- Emits 4 assertions (the first is the precondition that foreign rows exist).
 create function tests.check_cross_org_blind(
     p_table text,
     p_set text,
@@ -221,6 +243,9 @@ as $$
 declare
     v_own text := quote_literal(p_own);
 begin
+    return next ok(
+        tests.rows_ignoring_rls(p_table, format('org_id <> %s', v_own)) > 0,
+        format('%s: precondition: foreign rows exist', p_table));
     return next is_empty(
         format('select 1 from public.%I where org_id <> %s', p_table, v_own),
         format('%s: a member of another org reads no foreign row', p_table));
@@ -234,7 +259,8 @@ end;
 $$;
 
 -- No row access at all for the current role (anon everywhere; authenticated on
--- the service-role-only tables). Emits 4 assertions.
+-- the service-role-only tables). Emits 5 assertions (the first is the
+-- precondition that the table is not empty).
 create function tests.check_no_access(
     p_table text,
     p_cols text,
@@ -245,6 +271,9 @@ create function tests.check_no_access(
 language plpgsql
 as $$
 begin
+    return next ok(
+        tests.rows_ignoring_rls(p_table) > 0,
+        format('%s: precondition: the table has rows', p_table));
     return next is_empty(
         format('select 1 from public.%I', p_table),
         format('%s: %s reads no rows', p_table, p_who));

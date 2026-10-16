@@ -11,9 +11,9 @@
 --
 -- Ordering: version 00010 runs after 0000_init_schema (which creates
 -- documents, products and match_*) and before 0002. Its position relative to
--- 0001_storage_policy depends on the CLI (the current CLI sorts by version
--- string: 0001 < 00010; the legacy Go CLI sorted by file name: 00010_ <
--- 0001_). Both orders are valid: 0001 only adds storage policies that do not
+-- 0001_storage_policy depends on the CLI version (2.121.0, pinned in CI,
+-- sorts by version string: 0001 < 00010; some CLI versions sort by file
+-- name: 00010_ < 0001_). Both orders are valid: 0001 only adds storage policies that do not
 -- reference anything created here. See supabase/README.md "Naming".
 --
 -- Sources (cross-checked 2026-10-16 against the production catalog with

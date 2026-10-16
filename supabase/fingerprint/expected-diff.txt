@@ -1,4 +1,17 @@
 # Documented, explainable differences between production (production.txt)
 # and a fresh local replay of supabase/migrations. compare.sh fails on any
 # difference that is not listed here ('<' = only in production, '>' = only
-# in the local replay). Every entry needs a reason.
+# in the local replay). Every entry needs a reason. Entries that no longer
+# differ are stale and also fail compare.sh.
+#
+# Two kinds of entries:
+#
+# 1. Permanent: an explained difference that is meant to stay.
+#
+# 2. Pending production apply: a migration PR adds the lines compare.sh prints
+#    for its new migration (copy them verbatim, under a comment naming the
+#    migration), so CI is green before production is touched. After the
+#    migration is applied to production with apply_migration, refresh
+#    production.txt and delete these lines in the same commit.
+#
+# Currently empty: the replay matches production exactly.
