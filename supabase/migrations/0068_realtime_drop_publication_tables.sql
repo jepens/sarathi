@@ -25,6 +25,11 @@
 --
 -- Deploy order (CONTRACT: tabs running the old bundle depend on these events;
 -- its ContactList and in-tab notifications have no poll and would go silent):
+--   0. the Data API must not expose the realtime schema (realtime.subscription
+--      holds phone-number filters and JWT claims of every subscriber): an anon
+--      GET /rest/v1/subscription with "Accept-Profile: realtime" must answer
+--      406 PGRST106 (checked 2026-10-16: 406 PGRST106 "Invalid schema:
+--      realtime"). Re-check it before any rollback below.
 --   1. 0064 applied and verified (done 2026-10-16).
 --   2. build boundary: this PR ships in its OWN Easypanel build, not together
 --      with another contract (e.g. the chat-media contract 0067): rolling it
@@ -49,8 +54,9 @@
 --      on its own (the provider re-joins) — repeat the smoke test in one.
 --   6. follow-up PR: refresh fingerprint/production.txt and delete the 0068
 --      pending block of expected-diff.txt.
--- The tenant-2 gate (no second tenant with real data) stays closed until 4
--- and 5 are done.
+-- Steps 4 and 5 meet the Realtime half of the tenant-2 gate (no second tenant
+-- with real data); the gate also needs 0067 (chat-media private), see
+-- docs/SAAS_PROGRESS.md.
 --
 -- Tenant-2 rule: once a SECOND tenant has real data, NEVER roll this back by
 -- re-adding tables to supabase_realtime: every signed-in user of every org
@@ -62,7 +68,7 @@
 --
 -- Rollback — ONLY while Sailendra is the only tenant with real data, and
 -- only together with the code (after a contract, rolling FORWARD with a patch
--- build is the default):
+-- build is the default); first re-check step 0 (PGRST106):
 --   1. turn "Allow public access" back on if it was turned off;
 --   2. alter publication supabase_realtime add table public.whatsapp_chats,
 --        public.whatsapp_messages, public.labels, public.chat_labels;

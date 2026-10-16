@@ -283,12 +283,14 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
     // `.gt(0)` guard skips a needless write (and list refetch) when already 0.
     // Best-effort: a failure just leaves the badge until the next open.
     const markChatRead = useCallback(async () => {
+        if (!orgId) return;
         await supabase
             .from('whatsapp_chats')
             .update({ unread_count: 0 })
+            .eq('org_id', orgId)
             .eq('phone_number', phoneNumber)
             .gt('unread_count', 0);
-    }, [phoneNumber, supabase]);
+    }, [phoneNumber, supabase, orgId]);
 
     // Quick replies are org-global (not per-chat). Load on mount, and refresh
     // whenever the operator invokes them (see the rising-edge effect below) so

@@ -208,11 +208,17 @@ tenants; only an empty publication closes it.
   Realtime tenant starts its broadcast replication: writes in that first
   ~0.5 s were not delivered (the polls and the next RESYNC cover them).
 - **Contract 0068 runbook** (details in the migration header):
-  1. before the merge, as a team-controlled test-tenant account in
-     production: join `org:<test org>` (private) and expect SUBSCRIBED,
-     create + delete a label and expect two v1 broadcasts, join the seed
-     org's topic and expect CHANNEL_ERROR (the first production check of
-     private delivery);
+  0. the Data API must refuse the realtime schema: an anon
+     `GET /rest/v1/subscription` with `Accept-Profile: realtime` answers 406
+     PGRST106 (checked 2026-10-16); re-check it before any rollback;
+  1. before the merge, the first production check of private delivery:
+     either as a team-controlled test-tenant account (join `org:<test org>`
+     privately and expect SUBSCRIBED, create + delete a label and expect two
+     v1 broadcasts, join the seed org's topic and expect CHANNEL_ERROR), or,
+     with the owner's approval, a delivery probe: a service-role client joins
+     `org:<seed org>` privately and receives one `realtime.send` probe
+     message (no app data is written; authorization itself is covered by the
+     local end-to-end run and `150`);
   2. merge; deploy this PR in its own Easypanel build (not together with
      another contract such as the chat-media contract 0067), confirm the
      build id changed, smoke-test with two tabs (SUBSCRIBED in the console,
@@ -227,8 +233,9 @@ tenants; only an empty publication closes it.
      reloaded must recover by itself; check also that a non-private join
      with the anon key is now refused;
   6. follow-up PR: refresh `production.txt`, delete the 0068 block of
-     `expected-diff.txt`, tracker 1.9 to done. Only then may a second tenant
-     get real data.
+     `expected-diff.txt`, tracker 1.9 to done. This closes the Realtime half
+     of the tenant-2 gate; a second tenant may get real data only once 0067
+     (chat-media private) is live as well.
 - **Tenant-2 rule.** After a second tenant has real data, 0068 is never
   rolled back by re-adding tables to `supabase_realtime` (every signed-in
   user of every org would receive the other orgs' DELETE keys again): roll
