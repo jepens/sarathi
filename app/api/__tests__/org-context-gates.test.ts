@@ -26,19 +26,25 @@ const h = vi.hoisted(() => ({
     sendWhatsAppMedia: vi.fn(),
     uploadWhatsAppMedia: vi.fn(),
     revalidatePath: vi.fn(),
+    sendPaymentNotification: vi.fn(),
+    sendCancellationNotification: vi.fn(),
+    // Per-table stub rows (default: none). `single` answers maybeSingle/single,
+    // `list` answers an awaited query.
+    rows: {} as Record<string, { single?: unknown; list?: unknown[] }>,
 }));
 
-// Chainable query builder: every terminal resolves to "no row" — the
-// membership lookup therefore says "not a member", and nothing else should ever
-// be reached on the refusal paths.
-function query() {
+// Chainable query builder: unless a test seeds h.rows, every terminal resolves
+// to "no row" — the membership lookup therefore says "not a member", and
+// nothing else should ever be reached on the refusal paths.
+function query(table = '') {
     const q: Record<string, unknown> = {};
     for (const m of ['select', 'eq', 'order', 'limit', 'insert', 'update', 'upsert', 'delete', 'in', 'not', 'gte', 'lte', 'or', 'is']) {
         q[m] = () => q;
     }
-    q.maybeSingle = async () => ({ data: null, error: null });
-    q.single = async () => ({ data: null, error: null });
-    q.then = (resolve: (v: unknown) => unknown) => resolve({ data: [], error: null });
+    const seeded = h.rows[table];
+    q.maybeSingle = async () => ({ data: seeded?.single ?? null, error: null });
+    q.single = async () => ({ data: seeded?.single ?? null, error: null });
+    q.then = (resolve: (v: unknown) => unknown) => resolve({ data: seeded?.list ?? [], error: null });
     return q;
 }
 
@@ -58,7 +64,7 @@ const fakeClient = {
     },
     from: (table: string) => {
         h.tables.push(table);
-        return query();
+        return query(table);
     },
     rpc: (fn: string) => {
         h.rpcs.push(fn);
@@ -107,6 +113,10 @@ vi.mock('@/lib/utils/logger', () => ({
     whatsappLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 vi.mock('next/cache', () => ({ revalidatePath: h.revalidatePath }));
+vi.mock('@/lib/notifications/notifications', () => ({
+    sendPaymentNotification: h.sendPaymentNotification,
+    sendCancellationNotification: h.sendCancellationNotification,
+}));
 
 import { NO_ORG_MESSAGE, NOT_SIGNED_IN_MESSAGE } from '@/lib/settings/org-access';
 import { GET as leadsGET, POST as leadsPOST } from '@/app/api/leads/route';
@@ -126,7 +136,7 @@ import { POST as vendorsPOST } from '@/app/api/vendors/route';
 import { POST as pushSubscribePOST } from '@/app/api/push/subscribe/route';
 import { POST as pushUnsubscribePOST } from '@/app/api/push/unsubscribe/route';
 import { POST as searchPOST } from '@/app/api/search/route';
-import { createBooking, deleteBooking } from '@/app/dashboard/orders/actions';
+import { createBooking, deleteBooking, updateOrderStatus } from '@/app/dashboard/orders/actions';
 import { updateBusinessProfile } from '@/app/dashboard/settings/actions';
 
 function jsonReq(url: string, body: unknown, method = 'POST'): Request {
@@ -245,6 +255,8 @@ const externals = () => [
     h.sendWhatsAppMedia,
     h.uploadWhatsAppMedia,
     h.revalidatePath,
+    h.sendPaymentNotification,
+    h.sendCancellationNotification,
 ];
 
 beforeEach(() => {
@@ -255,6 +267,7 @@ beforeEach(() => {
     h.rpcs = [];
     h.storage = 0;
     h.serviceCalls = [];
+    h.rows = {};
 });
 
 describe.each(routes)('$name', ({ request, call }) => {
@@ -388,4 +401,52 @@ describe('server actions', () => {
         expect(h.tables).toEqual(['organization_members']);
         expect(h.revalidatePath).not.toHaveBeenCalled();
     });
+});
+
+describe('updateOrderStatus (customer WhatsApp via env credentials)', () => {
+    const ORDER_ID = '0b0e6c1e-1111-4222-8333-444455556666';
+
+    // A default-org member and a pending order with a customer phone, so a
+    // pending → cancelled change would notify the customer.
+    function seedDefaultOrgOrder() {
+        h.rows = {
+            organization_members: { single: { org_id: DEFAULT_ORG, role: 'owner' } },
+            orders: {
+                single: {
+                    id: ORDER_ID,
+                    status: 'pending',
+                    customer_name: 'Budi',
+                    customer_phone: '628111',
+                    items: [],
+                    total_amount: 1000,
+                    delivery_info: '',
+                    order_type: 'service',
+                },
+                list: [{ id: ORDER_ID }],
+            },
+        };
+    }
+
+    it('notifies the customer for a live session (control)', async () => {
+        seedDefaultOrgOrder();
+        await expect(updateOrderStatus(ORDER_ID, 'cancelled')).resolves.toMatchObject({ success: true });
+        expect(h.sendCancellationNotification).toHaveBeenCalledTimes(1);
+        expect(fakeClient.auth.getUser).toHaveBeenCalled();
+    });
+
+    it.each(['paid', 'cancelled'])(
+        'refuses a revoked session whose JWT still verifies locally — no %s notification, no query',
+        async (status) => {
+            seedDefaultOrgOrder();
+            h.revoked = true;
+            await expect(updateOrderStatus(ORDER_ID, status)).resolves.toEqual({
+                success: false,
+                message: NOT_SIGNED_IN_MESSAGE,
+            });
+            expect(fakeClient.auth.getUser).toHaveBeenCalled();
+            expect(h.tables).toEqual([]);
+            expect(h.sendPaymentNotification).not.toHaveBeenCalled();
+            expect(h.sendCancellationNotification).not.toHaveBeenCalled();
+        }
+    );
 });

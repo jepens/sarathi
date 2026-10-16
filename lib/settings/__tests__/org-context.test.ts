@@ -16,11 +16,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const DEFAULT_ORG = '5a11e024-0001-4000-8000-000000000001';
 const PILOT_ORG = '0b0e6c1e-1111-4222-8333-444455556666';
 
-type Session = 'none' | 'error' | 'throws' | 'retryable' | 'auth5xx' | 'user';
+type Session = 'none' | 'error' | 'throws' | 'retryable' | 'auth5xx' | 'unknown' | 'rate-limited' | 'user';
 type ServerUser = 'user' | 'revoked' | 'retryable' | 'none';
 
 const state = vi.hoisted(() => ({
-    session: 'user' as 'none' | 'error' | 'throws' | 'retryable' | 'auth5xx' | 'user',
+    session: 'user' as Session,
     serverUser: 'user' as 'user' | 'revoked' | 'retryable' | 'none',
     membership: null as { org_id: string; role: string } | null,
     membershipError: null as unknown,
@@ -44,6 +44,8 @@ const userClient = {
             if (s === 'error') return { data: null, error: { message: 'invalid JWT' } };
             if (s === 'retryable') return { data: null, error: new AuthRetryableFetchError('fetch failed', 0) };
             if (s === 'auth5xx') return { data: null, error: new AuthApiError('boom', 500, undefined) };
+            if (s === 'unknown') return { data: null, error: new AuthUnknownError('Unexpected token <', new SyntaxError('x')) };
+            if (s === 'rate-limited') return { data: null, error: new AuthApiError('Too many requests', 429, 'over_request_rate_limit') };
             if (s === 'none') return { data: null, error: null };
             return { data: { claims: { sub: 'user-1' } }, error: null };
         }),
@@ -78,7 +80,7 @@ vi.mock('@/lib/supabase/service', () => ({
     })),
 }));
 
-import { AuthApiError, AuthRetryableFetchError, AuthSessionMissingError } from '@supabase/supabase-js';
+import { AuthApiError, AuthRetryableFetchError, AuthSessionMissingError, AuthUnknownError } from '@supabase/supabase-js';
 import {
     accessDeniedResponse,
     isDefaultOrg,
@@ -120,7 +122,7 @@ describe('requireOrgContext', () => {
         }
     );
 
-    it.each(['retryable', 'auth5xx', 'throws'] as const)(
+    it.each(['retryable', 'auth5xx', 'unknown', 'rate-limited', 'throws'] as const)(
         'answers 503 (not 401) when the session cannot be verified right now (%s)',
         async (session) => {
             state.session = session;

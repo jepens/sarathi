@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { NextRequest } from 'next/server';
-import { AuthInvalidJwtError, AuthRetryableFetchError } from '@supabase/supabase-js';
+import { AuthApiError, AuthInvalidJwtError, AuthRetryableFetchError, AuthUnknownError } from '@supabase/supabase-js';
 
 // updateSession() (proxy.ts) is the UX gate in front of the pages (KEA-2). It
 // must:
@@ -11,10 +11,10 @@ import { AuthInvalidJwtError, AuthRetryableFetchError } from '@supabase/supabase
 //   - not bounce /dashboard → /login when Auth is merely unreachable (the
 //     dashboard layout then shows a retryable error page — no redirect loop).
 
-type Claims = 'user' | 'none' | 'invalid' | 'retryable' | 'throws';
+type Claims = 'user' | 'none' | 'invalid' | 'retryable' | 'unknown' | 'rate-limited' | 'throws';
 
 const s = vi.hoisted(() => ({
-    claims: 'user' as 'user' | 'none' | 'invalid' | 'retryable' | 'throws',
+    claims: 'user' as Claims,
     refresh: false,
 }));
 
@@ -36,6 +36,9 @@ vi.mock('@supabase/ssr', () => ({
                 const c: Claims = s.claims;
                 if (c === 'throws') throw new Error('boom');
                 if (c === 'retryable') return { data: null, error: new AuthRetryableFetchError('fetch failed', 0) };
+                // auth-js: a non-JSON error response (HTML 500, Cloudflare 52x).
+                if (c === 'unknown') return { data: null, error: new AuthUnknownError('Unexpected token <', new SyntaxError('x')) };
+                if (c === 'rate-limited') return { data: null, error: new AuthApiError('Too many requests', 429, 'over_request_rate_limit') };
                 if (c === 'invalid') return { data: null, error: new AuthInvalidJwtError('Invalid JWT signature') };
                 if (c === 'none') return { data: null, error: null };
                 return { data: { claims: { sub: 'user-1' } }, error: null };
@@ -84,11 +87,23 @@ describe('updateSession', () => {
         }
     });
 
-    it('keeps /login reachable when the session cannot be verified', async () => {
-        s.claims = 'retryable';
-        const res = await updateSession(req('/login'));
-        expect(res.headers.get('location')).toBeNull();
-    });
+    it.each(['retryable', 'unknown', 'rate-limited'] as const)(
+        'keeps /login reachable when the session cannot be verified (%s)',
+        async (claims) => {
+            s.claims = claims;
+            const res = await updateSession(req('/login'));
+            expect(res.headers.get('location')).toBeNull();
+        }
+    );
+
+    it.each(['retryable', 'unknown', 'rate-limited'] as const)(
+        'does not send /dashboard to /login when the session cannot be verified (%s)',
+        async (claims) => {
+            s.claims = claims;
+            const res = await updateSession(req('/dashboard'));
+            expect(res.headers.get('location')).toBeNull();
+        }
+    );
 
     it('copies refreshed cookies onto a redirect and marks it no-store', async () => {
         s.refresh = true;

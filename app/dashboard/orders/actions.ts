@@ -65,7 +65,11 @@ export async function updateOrderStatus(
             return { success: false, message: 'Status tidak valid' };
         }
 
-        const access = await requireOrgContext();
+        // Strict session check (Auth-server round trip, not the local JWT
+        // check): a status change can send customer WhatsApp messages through
+        // the env credentials, so a signed-out / banned user must be refused
+        // before their JWT expires — same rule as requireEnvIntegration.
+        const access = await requireOrgContext({ strict: true });
         if (!access.ok) return { success: false, message: access.error };
         const { supabase, orgId } = access;
 
