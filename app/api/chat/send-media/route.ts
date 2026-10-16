@@ -9,8 +9,7 @@ import {
 } from '@/lib/whatsapp/client';
 import { whatsappLogger } from '@/lib/utils/logger';
 import { accessDeniedResponse, requireEnvIntegration } from '@/lib/settings/org-context';
-
-const CHAT_MEDIA_BUCKET = 'chat-media';
+import { CHAT_MEDIA_BUCKET, CHAT_MEDIA_MAX_BYTES, storageContentType } from '@/lib/storage/chat-media';
 
 // Extension for the storage object path — keep the original where sane, else map
 // from a couple of common mimes.
@@ -84,20 +83,28 @@ export async function POST(request: Request) {
             filename: kind === 'document' ? filename : undefined,
         });
 
-        // Persist a copy so the dashboard can render it inline (Meta's media
-        // expires ~30 days). Non-fatal if it fails — the message was delivered.
+        // Persist a copy in the private chat-media bucket so the dashboard can
+        // show it through /api/chat-media/<message id> (Meta's media expires
+        // ~30 days). media_url holds the bare object key. Non-fatal if it fails
+        // — the message was delivered. A document above the bucket limit gets no
+        // copy at all (owner decision D20: not even attempted): media_url stays
+        // null and the chat shows "Salinan tidak disimpan".
         // Sanitise the (client-supplied) phone segment so nothing can inject '/'
         // or '..' into the storage object key; orgId + the random UUID are safe.
-        const safePhone = phone_number.replace(/[^a-zA-Z0-9._-]/g, '_');
-        const path = `${orgId}/${safePhone}/${crypto.randomUUID()}.${safeExt(filename, mime)}`;
-        let mediaUrl: string | null = null;
-        const { error: upErr } = await supabase.storage
-            .from(CHAT_MEDIA_BUCKET)
-            .upload(path, bytes, { contentType: mime, upsert: false });
-        if (upErr) {
-            whatsappLogger.error('chat-media storage upload failed', upErr);
+        let mediaPath: string | null = null;
+        if (file.size > CHAT_MEDIA_MAX_BYTES) {
+            whatsappLogger.info('Outbound media above the chat-media size limit: storage copy skipped (D20)');
         } else {
-            mediaUrl = supabase.storage.from(CHAT_MEDIA_BUCKET).getPublicUrl(path).data.publicUrl;
+            const safePhone = phone_number.replace(/[^a-zA-Z0-9._-]/g, '_');
+            const path = `${orgId}/${safePhone}/${crypto.randomUUID()}.${safeExt(filename, mime)}`;
+            const { error: upErr } = await supabase.storage
+                .from(CHAT_MEDIA_BUCKET)
+                .upload(path, bytes, { contentType: storageContentType(mime), upsert: false });
+            if (upErr) {
+                whatsappLogger.error('chat-media storage upload failed', upErr);
+            } else {
+                mediaPath = path;
+            }
         }
 
         const summary = captionStr ?? (kind === 'image' ? '📷 Foto' : `📎 ${filename}`);
@@ -121,7 +128,7 @@ export async function POST(request: Request) {
             role: 'assistant',
             content: captionStr ?? '',
             media_type: kind,
-            media_url: mediaUrl,
+            media_url: mediaPath,
             media_mime: mime,
             media_filename: filename,
             wa_message_id: sendResult.waMessageId,

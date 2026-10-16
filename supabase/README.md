@@ -22,7 +22,8 @@ tenant data that means at least:
   `tests.check_anon_denied` for anon) and to the fixture list there;
 - a new function: its EXECUTE grants in `050_rpc_grants.test.sql`
   (anon must not execute anything that reads or writes tenant data);
-- a new storage bucket/policy: `040_storage.test.sql`.
+- a new storage bucket/policy: `040_storage.test.sql` (bucket settings such
+  as chat-media's privacy and limits: `180_chat_media_bucket.test.sql`).
 
 **anon gets no table privileges (since 0063).** A table, view or sequence that
 `postgres` creates in `public` (migrations run as `postgres`) gives `anon`
@@ -103,13 +104,14 @@ stops the `supabase_*_sarathi` containers; never use `--all`.
   privilege (0063) apart from an RLS refusal, which has the same code.
 - Known, not-yet-fixed gaps are `todo` tests (reported as
   `Failed (TODO)` without failing the run) and start passing once fixed:
-  tracker 1.11 (chat-media bucket is public). Remove the `todo` when fixing
-  it. (1.12, the documents seed-org fallback, is fixed by 0066; its
-  production data move follows `docs/RUNBOOK_LEGACY_KB_OBJECTS.md`, and
+  none is open now. (1.12, the documents seed-org fallback, is fixed by 0066;
+  its production data move follows `docs/RUNBOOK_LEGACY_KB_OBJECTS.md`, and
   `170_documents_org_prefix.test.sql` pins the new policy and runs copies of
   the 0066 relink and guard predicates, which
   `scripts/lib/__tests__/migration-0066-parity.test.ts` keeps identical to the
-  migration, refusal condition included.)
+  migration, refusal condition included. 1.11, the public chat-media bucket,
+  is fixed by the contract 0067: its assertion in `040` is a plain test again
+  and `180_chat_media_bucket.test.sql` pins the bucket row.)
 - `150_realtime_org_broadcast.test.sql` needs the `realtime.messages`
   partition of today (UTC). `db start` / `db reset` create the partitions
   from yesterday to +3 days, and no Realtime server runs afterwards to add
@@ -367,8 +369,8 @@ by restoring what it removed. After a second tenant is onboarded, a rollback
 must never reopen a cross-tenant leak: never re-add tables to the
 `supabase_realtime` publication (contract 0068: every signed-in user of
 every org would receive the other orgs' DELETE keys again, KEA-15) and
-never make the `chat-media` bucket public again (planned contract 0067,
-KEA-4). Degrade instead: revert only the failing client build and accept
+never make the `chat-media` bucket public again (contract 0067, KEA-4).
+Degrade instead: revert only the failing client build and accept
 the reduced mode (ChatList and ChatWindow keep their polls; live updates
 elsewhere pause), or first close the tenant-2 gate again (suspend the other
 tenants' access). Expand migrations such as 0064 stay safe to roll back.
@@ -382,6 +384,55 @@ forward with a patch build; the rollback in the migration header is the
 exception (and only while Sailendra is the only tenant with real data).
 Deploying an older build is not documented for Easypanel: roll back by
 deploying a revert commit of `main`.
+
+**Contract 0067 runbook (chat-media private, tracker 1.11, KEA-4; owner
+decisions D18 / D20).** The PR moves every reader to
+`/api/chat-media/<message id>` (a 302 to a signed URL made for 600 s in the
+member's own session, cached privately for 300 s) and makes both writers
+store the bare object key `<org>/<safe phone>/<uuid>.<ext>` instead of the
+public URL; old rows keep their public URL, which the route parses. 0067
+then makes the bucket private with a 50 MiB limit and a 19-type allowlist
+(details and SQL in the migration header). Steps:
+
+1. Merge; Deploy in Easypanel in its own build (not together with another
+   contract such as the Realtime client + 0068), confirm the Next.js build id
+   changed, and that `GET /api/chat-media/<any uuid>` without a session now
+   answers the 401 JSON of the org gate (the old build has no such route).
+2. Reload every open dashboard tab: an old bundle renders `media_url`
+   directly, so after the flip it shows broken media (public URLs refused,
+   bare keys as relative links).
+3. With the bucket still public, open a chat with an old image, an old PDF
+   and the voice note: each loads through `/api/chat-media/<id>` with a 302
+   to `/storage/v1/object/sign/chat-media/...` (browser network panel; the
+   Storage logs show the `object/sign` requests), and the PDF opens inline
+   in a new tab. This also proves signing works in production.
+4. Send a new image from the dashboard and receive a new inbound image from
+   a test phone: both render, and their rows hold a bare key
+   (`media_url` starts with the org uuid, no `https://`).
+5. Run the pre-flip check of the 0067 header (read-only): both counts equal.
+6. Apply 0067 with `apply_migration` (name `0067_chat_media_private`, the LF
+   git blob). Verify `select public, file_size_limit,
+   cardinality(allowed_mime_types) from storage.buckets where id =
+   'chat-media'` returns `f`, `52428800`, `19`. Repeat steps 3 and 4.
+7. After about 1 h (D18: responses already in the CDN carry max-age=3600),
+   an anonymous request to an old public URL (taken from a pre-flip row,
+   never pasted anywhere) must be refused (HTTP 400 on the local stack).
+8. Follow-up PR: refresh `production.txt`, delete the 0067 block of
+   `expected-diff.txt`, tracker 1.11 to done. This closes the chat-media half
+   of the tenant-2 gate.
+
+D20: a file above 50 MiB (a WhatsApp document can be up to 100 MB) still
+goes to or comes from the customer, but no copy is stored (`media_url`
+null, the chat shows "Salinan tidak disimpan"); after the Pro upgrade
+(tracker 0.15) a new migration raises `file_size_limit` to 104857600
+together with the project's global upload limit and `CHAT_MEDIA_MAX_BYTES`
+(`lib/storage/chat-media.ts`). Rollback: the bucket statement in the 0067
+header restores today's public bucket, and the code of this PR works with it.
+Going back to a build before this PR first needs the rewrite of the bare
+keys written since the deploy (also in the header), because the old code
+renders `media_url` as a URL. After the flip the default is to roll forward
+with a patch build, and once a second tenant has real data the bucket is
+never made public again (above).
 
 ## Schema fingerprint (production vs replay)
 
@@ -400,9 +451,11 @@ line to `production.txt`.
   (`<` only in production, `>` only in the replay), each with a reason:
   permanent ones, or *pending* lines of a migration not yet applied to
   production (see above). Entries that no longer differ fail as stale. It
-  currently holds no entry: the replay matches production exactly
-  (re-checked 2026-10-17 after applying 0068, against a fresh read-only
-  production query: 587 lines, md5 `befcf085af6d0caeef0b34ad50bab88a`).
+  currently holds one pending block, the contract 0067 (the 2 `bucket
+  chat-media` lines; applied after the deploy of its PR). Apart from that the
+  replay matches production exactly (re-checked 2026-10-17 after applying
+  0068, against a fresh read-only production query: 587 lines, md5
+  `befcf085af6d0caeef0b34ad50bab88a`).
 - Not fingerprinted: sequence privileges, column-level privileges, MAINTAIN,
   foreign-table privileges and default privileges (`pg_default_acl`); the
   `relpriv` lines cover only `arwdDxt` on tables and views. Whenever

@@ -11,6 +11,7 @@ import { webhookSummary } from '@/lib/whatsapp/webhook-summary';
 import { logSystemMessage } from '@/lib/whatsapp/history';
 import { sendPushToOrg } from '@/lib/notifications/web-push';
 import { handleFlowReply } from '@/lib/whatsapp/flow-response';
+import { CHAT_MEDIA_BUCKET, CHAT_MEDIA_MAX_BYTES, storageContentType } from '@/lib/storage/chat-media';
 
 import { checkVerifyToken } from '@/lib/settings/app-settings';
 
@@ -122,8 +123,6 @@ async function handleUserIdUpdate(
     }
 }
 
-const CHAT_MEDIA_BUCKET = 'chat-media';
-
 type InboundMediaKind = 'image' | 'document' | 'audio' | 'video';
 
 // Storage object extension for an inbound file — keep the original where the
@@ -139,7 +138,8 @@ function inboundMediaExt(mime: string, filename: string | null): string {
         'audio/ogg': 'ogg', 'audio/mpeg': 'mp3', 'audio/mp4': 'm4a', 'audio/aac': 'aac', 'audio/amr': 'amr',
         'video/mp4': 'mp4', 'video/3gpp': '3gp',
     };
-    return map[mime] || 'bin';
+    // Without parameters: a voice note arrives as 'audio/ogg; codecs=opus'.
+    return map[mime.split(';', 1)[0].trim().toLowerCase()] || 'bin';
 }
 
 // One-line preview used for the chat-list `last_message` and the push body when
@@ -196,20 +196,28 @@ async function handleInboundMedia(params: InboundMediaParams): Promise<void> {
         const media = await downloadWhatsAppMedia(mediaId, creds);
         const mime = media.mime;
 
-        // Best-effort persist to our public bucket so the dashboard can render it
-        // inline (Meta's copy expires ~30 days). If the upload fails we still
-        // insert the row (null URL → placeholder in the UI). Sanitise the phone
-        // segment; orgId + the random UUID are safe.
+        // Best-effort copy into the private chat-media bucket so the dashboard can
+        // show it through /api/chat-media/<message id> (Meta's copy expires ~30
+        // days). media_url holds the bare object key; the content type is the
+        // bucket-allowed form of the mime (media_mime keeps Meta's original).
+        // No copy (the upload failed, or the file is above the bucket limit,
+        // owner decision D20: not even attempted) → null media_url → placeholder
+        // + "Salinan tidak disimpan" in the UI; the row is inserted either way.
+        // Sanitise the phone segment; orgId + the random UUID are safe.
         const safePhone = contactKey.replace(/[^a-zA-Z0-9._-]/g, '_');
         const path = `${orgId}/${safePhone}/${crypto.randomUUID()}.${inboundMediaExt(mime, filename)}`;
-        let mediaUrl: string | null = null;
-        const { error: upErr } = await supabase.storage
-            .from(CHAT_MEDIA_BUCKET)
-            .upload(path, media.bytes, { contentType: mime, upsert: false });
-        if (upErr) {
-            whatsappLogger.error('Inbound chat-media storage upload failed', upErr);
+        let mediaPath: string | null = null;
+        if (media.size > CHAT_MEDIA_MAX_BYTES) {
+            whatsappLogger.info('Inbound media above the chat-media size limit: storage copy skipped (D20)');
         } else {
-            mediaUrl = supabase.storage.from(CHAT_MEDIA_BUCKET).getPublicUrl(path).data.publicUrl;
+            const { error: upErr } = await supabase.storage
+                .from(CHAT_MEDIA_BUCKET)
+                .upload(path, media.bytes, { contentType: storageContentType(mime), upsert: false });
+            if (upErr) {
+                whatsappLogger.error('Inbound chat-media storage upload failed', upErr);
+            } else {
+                mediaPath = path;
+            }
         }
 
         const summary = captionText || inboundMediaSummary(kind, filename, isVoice);
@@ -242,7 +250,7 @@ async function handleInboundMedia(params: InboundMediaParams): Promise<void> {
             role: 'user',
             content: captionText,
             media_type: kind,
-            media_url: mediaUrl,
+            media_url: mediaPath,
             media_mime: mime,
             media_filename: filename,
             wa_message_id: inboundWamid,
@@ -253,8 +261,8 @@ async function handleInboundMedia(params: InboundMediaParams): Promise<void> {
                 // Raced with a redelivery that inserted first — remove the orphan
                 // object we just uploaded so storage doesn't accumulate dupes.
                 whatsappLogger.info(`Duplicate inbound media ${inboundWamid} on insert — cleaning orphan storage object`);
-                if (mediaUrl) {
-                    try { await supabase.storage.from(CHAT_MEDIA_BUCKET).remove([path]); } catch { /* best-effort */ }
+                if (mediaPath) {
+                    try { await supabase.storage.from(CHAT_MEDIA_BUCKET).remove([mediaPath]); } catch { /* best-effort */ }
                 }
                 return;
             }

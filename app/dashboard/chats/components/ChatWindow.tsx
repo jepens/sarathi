@@ -39,6 +39,7 @@ import {
     filterQuickReplies,
     type QuickReply,
 } from '@/lib/quick-replies';
+import { chatMediaHref } from '@/lib/storage/chat-media';
 
 const STAGE_LABELS: Record<string, string> = {
     new: 'Baru',
@@ -147,6 +148,13 @@ function MessagesSkeleton() {
             ))}
         </div>
     );
+}
+
+// Under a media placeholder: the file reached (or came from) the customer, but
+// the dashboard has no copy — the upload failed, or the file is above the
+// chat-media bucket limit (owner decision D20).
+function NoCopyNote() {
+    return <span className="block text-xs">Salinan tidak disimpan</span>;
 }
 
 export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
@@ -1003,7 +1011,7 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
                                                     type="button"
                                                     onClick={() =>
                                                         setLightbox({
-                                                            url: msg.media_url!,
+                                                            url: chatMediaHref(msg.id),
                                                             name: msg.media_filename || 'Gambar',
                                                         })
                                                     }
@@ -1011,7 +1019,7 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
                                                 >
                                                     {/* eslint-disable-next-line @next/next/no-img-element */}
                                                     <img
-                                                        src={msg.media_url}
+                                                        src={chatMediaHref(msg.id)}
                                                         alt={msg.media_filename || 'Gambar'}
                                                         loading="lazy"
                                                         className="max-h-64 w-auto max-w-full rounded-md object-cover"
@@ -1022,8 +1030,11 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
                                                 // placeholder so the bubble isn't blank (mirrors the doc card).
                                                 <div className="mb-1 flex items-center gap-2 rounded-md bg-black/5 p-2 opacity-70 dark:bg-white/10">
                                                     <ImageOff className="h-8 w-8 shrink-0 text-[var(--wa-header-icon)]" />
-                                                    <span className="min-w-0 flex-1 truncate text-sm">
-                                                        {msg.media_filename || 'Foto'} — pratinjau tidak tersedia
+                                                    <span className="min-w-0 flex-1 text-sm">
+                                                        <span className="block truncate">
+                                                            {msg.media_filename || 'Foto'} — pratinjau tidak tersedia
+                                                        </span>
+                                                        <NoCopyNote />
                                                     </span>
                                                 </div>
                                             ))}
@@ -1032,14 +1043,15 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
                                                 <audio
                                                     controls
                                                     preload="none"
-                                                    src={msg.media_url}
+                                                    src={chatMediaHref(msg.id)}
                                                     className="mb-1 h-10 w-56 max-w-full"
                                                 />
                                             ) : (
                                                 <div className="mb-1 flex items-center gap-2 rounded-md bg-black/5 p-2 opacity-70 dark:bg-white/10">
                                                     <Mic className="h-8 w-8 shrink-0 text-[var(--wa-header-icon)]" />
-                                                    <span className="min-w-0 flex-1 truncate text-sm">
-                                                        Pesan suara — tidak tersedia
+                                                    <span className="min-w-0 flex-1 text-sm">
+                                                        <span className="block truncate">Pesan suara — tidak tersedia</span>
+                                                        <NoCopyNote />
                                                     </span>
                                                 </div>
                                             ))}
@@ -1048,20 +1060,21 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
                                                 <video
                                                     controls
                                                     preload="metadata"
-                                                    src={msg.media_url}
+                                                    src={chatMediaHref(msg.id)}
                                                     className="mb-1 max-h-64 w-auto max-w-full rounded-md"
                                                 />
                                             ) : (
                                                 <div className="mb-1 flex items-center gap-2 rounded-md bg-black/5 p-2 opacity-70 dark:bg-white/10">
                                                     <Film className="h-8 w-8 shrink-0 text-[var(--wa-header-icon)]" />
-                                                    <span className="min-w-0 flex-1 truncate text-sm">
-                                                        Video — tidak tersedia
+                                                    <span className="min-w-0 flex-1 text-sm">
+                                                        <span className="block truncate">Video — tidak tersedia</span>
+                                                        <NoCopyNote />
                                                     </span>
                                                 </div>
                                             ))}
                                         {msg.media_type === 'document' && (
                                             <a
-                                                href={msg.media_url ?? undefined}
+                                                href={msg.media_url ? chatMediaHref(msg.id) : undefined}
                                                 target="_blank"
                                                 rel="noopener noreferrer"
                                                 className={cn(
@@ -1070,8 +1083,9 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
                                                 )}
                                             >
                                                 <FileText className="h-8 w-8 shrink-0 text-[var(--wa-header-icon)]" />
-                                                <span className="min-w-0 flex-1 truncate text-sm">
-                                                    {msg.media_filename || 'Dokumen'}
+                                                <span className="min-w-0 flex-1 text-sm">
+                                                    <span className="block truncate">{msg.media_filename || 'Dokumen'}</span>
+                                                    {!msg.media_url && <NoCopyNote />}
                                                 </span>
                                                 {msg.media_url && <Download className="h-4 w-4 shrink-0" />}
                                             </a>
