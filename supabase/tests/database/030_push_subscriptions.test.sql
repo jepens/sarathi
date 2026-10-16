@@ -65,8 +65,11 @@ select results_eq(
     array['https://push.invalid/b1'],
     'the other org sees only its own device');
 
+-- anon holds no privilege on the table (0063): refused before RLS.
 select tests.authenticate_as_anon();
-select is_empty($$ select 1 from public.push_subscriptions $$, 'anon reads no device');
+select throws_ok($$ select 1 from public.push_subscriptions $$,
+    '42501', 'permission denied for table push_subscriptions',
+    'anon cannot read devices (no table privilege)');
 
 select tests.clear_authentication();
 select results_eq(

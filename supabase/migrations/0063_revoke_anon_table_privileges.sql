@@ -1,0 +1,99 @@
+-- Fase 1 — anon holds no table privilege in schema public (tracker 1.9 step 0,
+-- 1.14 and the table half of 5.5; audit KEA-15, KEA-28 rec. 1, KUA-13).
+--
+-- Why (KEA-15). realtime.apply_rls skips the RLS check for DELETE events and
+-- sends every subscriber of the table an old_record made of the primary-key
+-- columns its role may SELECT (has_column_privilege). Until now anon held
+-- arwdDxtm on 20 of the 21 public tables (the platform's default privileges
+-- of role postgres in schema public; platform_settings has none since 0061;
+-- read-only production check 2026-10-16). A client holding only the public
+-- anon key could therefore open a postgres_changes channel and receive every
+-- org's deletes on the 4 published tables: whatsapp_chats (org_id,
+-- phone_number), chat_labels (org_id, phone_number, label_id),
+-- whatsapp_messages (id) and labels (id). Without SELECT an anon subscriber
+-- gets 'Error 401: Unauthorized' for INSERT/UPDATE, DELETE events without any
+-- column value, and no filtered subscription at all
+-- (realtime.subscription_check_filters requires SELECT on the filter column;
+-- same source in production). Only the anon-key variant is closed here: a
+-- signed-in member of ANOTHER org still receives the DELETE keys until the org
+-- Realtime bus replaces the publication (rest of 1.9).
+-- It also ends anon's table access through PostgREST. RLS already admitted
+-- anon nowhere (the only anon policies, "service_role only" on message_queue
+-- and rate_limits, are USING/WITH CHECK false), so the anon key got empty
+-- results; it now gets 42501 'permission denied for table ...'. TRUNCATE,
+-- REFERENCES, TRIGGER and MAINTAIN, which RLS never checks, go too.
+--
+--   1. revoke every privilege on every table and sequence in public from anon
+--      (public has no sequence today, in production or in the replay; the
+--      sequence revoke keeps the migration complete);
+--   2. remove anon from the default privileges of role postgres in schema
+--      public for tables and sequences: whatever a migration creates there
+--      from now on gives anon nothing, while authenticated and service_role
+--      keep their automatic grants (Supabase docs guides/api/securing-your-api).
+--      Granting anon becomes an explicit, reviewed migration step
+--      (070_catalog_guards guard 11 fails otherwise).
+--
+-- Deploy order: independent of the app deploy and of every other migration;
+-- apply it whenever it is approved (apply_migration with the LF git blob of
+-- this file). No app path reads or writes tables as anon:
+--   * browser queries and Realtime joins carry the signed-in user's JWT
+--     (lib/supabase/client.ts; supabase-js 2.86 sends the session token),
+--     and every app/api handler is gated
+--     (app/api/__tests__/route-auth-coverage.test.ts);
+--   * the anon-key fallbacks on the server (app/api/webhook/whatsapp/route.ts,
+--     app/api/queue/process/route.ts, lib/supabase/service.ts) apply only
+--     without SUPABASE_SERVICE_ROLE_KEY and already fail today (RLS shows
+--     anon no row and refuses its writes); they now fail with 42501 earlier;
+--   * production edge logs over 24 h (2026-10-15 11:50Z to 2026-10-16 11:50Z):
+--     30,735 /rest/v1 requests, all with an authenticated (28,853) or
+--     service_role (1,667) JWT, except 214 role-less ones, all browser CORS
+--     preflights (OPTIONS), and one anon curl GET of the OpenAPI root
+--     /rest/v1/ (no table; already answered 401).
+--
+-- NOT covered:
+--   * the default-ACL entry of role supabase_admin in schema public, which
+--     also grants anon (arwdDxtm on tables, rwU on sequences, X on functions):
+--     ALTER DEFAULT PRIVILEGES FOR ROLE supabase_admin requires membership in
+--     that role, and postgres is not a member. An object supabase_admin
+--     creates in public (e.g. an extension installed there) still grants
+--     anon: guard 11 catches it in the replay, and its query run on
+--     production at every fingerprint refresh (supabase/README.md) catches
+--     it there. Create objects in public through migrations only.
+--   * functions: their default privileges are unchanged, and anon can still
+--     EXECUTE 6 SECURITY INVOKER functions (cleanup_old_queue_entries,
+--     cleanup_old_rate_limits and 4 trigger functions); without table
+--     privileges they cannot touch data (42501). Left for tracker 5.5
+--     (KEA-28 rec. 2).
+--   * USAGE on schema public stays (PostgREST's schema and RPC surface).
+--
+-- Rollback: restores exactly what production held on 2026-10-16 (read-only
+-- catalog check): anon=arwdDxtm/postgres on the 20 tables listed below,
+-- nothing on platform_settings, no sequence in public (so no sequence grant
+-- to restore), and anon=arwdDxtm (tables) / anon=rwU (sequences) in the
+-- default ACL of postgres in public; ALL is exactly these on PostgreSQL 17.
+-- The tables are named one by one so platform_settings and any table created
+-- after this migration stay without anon:
+--   grant all on table
+--       public.app_settings, public.business_profiles, public.chat_labels,
+--       public.documents, public.kb_sources, public.labels,
+--       public.message_queue, public.orders, public.organization_members,
+--       public.organizations, public.products, public.proposals,
+--       public.push_subscriptions, public.quick_replies, public.rate_limits,
+--       public.system_message, public.vendors, public.whatsapp_chats,
+--       public.whatsapp_integrations, public.whatsapp_messages
+--     to anon;
+--   alter default privileges for role postgres in schema public
+--     grant all on tables to anon;
+--   alter default privileges for role postgres in schema public
+--     grant all on sequences to anon;
+-- Then refresh fingerprint/production.txt. No code rollback is needed.
+--
+-- No explicit begin/commit: the migration runner wraps the file in a transaction.
+
+revoke all on all tables in schema public from anon;
+revoke all on all sequences in schema public from anon;
+
+alter default privileges for role postgres in schema public
+    revoke all on tables from anon;
+alter default privileges for role postgres in schema public
+    revoke all on sequences from anon;

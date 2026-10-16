@@ -3,9 +3,10 @@
 -- Two tenant orgs (A, B) + the seed org. For each table a member of org A can
 -- read / insert / update / delete its own org's rows and can NOT read, insert,
 -- update, delete or re-home rows of any other org; a member of org B sees
--- nothing outside org B; anon has no row access at all. message_queue and
--- rate_limits are service-role only. organizations / organization_members are
--- read-only for members (no self-service membership or role escalation).
+-- nothing outside org B; anon holds no table privilege at all (0063), so every
+-- statement is refused before RLS. message_queue and rate_limits are
+-- service-role only. organizations / organization_members are read-only for
+-- members (no self-service membership or role escalation).
 -- chat_labels and push_subscriptions have their own files (extra rules).
 begin;
 select plan(321);
@@ -211,55 +212,57 @@ select * from tests.check_cross_org_blind('business_profiles', $$ website = 'diu
 select * from tests.check_cross_org_blind('whatsapp_integrations', $$ display_phone = 'diubah' $$, tests.org_b());
 
 -- ---------------------------------------------------------------------------
--- 3. anon: no row access on any app table (20 x 5)
+-- 3. anon: no privilege on any app table (0063), every statement refused with
+--    42501 before RLS is consulted (20 x 5)
 -- ---------------------------------------------------------------------------
 select tests.authenticate_as_anon();
 select is(current_user::text, 'anon', 'acting as anon: role is anon');
 
-select * from tests.check_no_access('whatsapp_chats',
-    'org_id, phone_number', $$ tests.org_a(), 'anon' $$, $$ notes = 'x' $$, 'anon');
-select * from tests.check_no_access('whatsapp_messages',
-    'org_id, phone_number, role, content', $$ tests.org_a(), '628111', 'user', 'x' $$, $$ content = 'x' $$, 'anon');
-select * from tests.check_no_access('orders',
-    'org_id, customer_name', $$ tests.org_a(), 'x' $$, $$ venue = 'x' $$, 'anon');
-select * from tests.check_no_access('proposals',
-    'org_id, lead_phone, source, proposal_ref', $$ tests.org_a(), '628111', 'generated', 'x' $$, $$ intro_note = 'x' $$, 'anon');
-select * from tests.check_no_access('vendors',
-    'org_id, name, category', $$ tests.org_a(), 'x', 'other' $$, $$ notes = 'x' $$, 'anon');
-select * from tests.check_no_access('documents',
-    'org_id, content', $$ tests.org_a(), 'x' $$, $$ content = 'x' $$, 'anon');
-select * from tests.check_no_access('kb_sources',
-    'org_id, title, content', $$ tests.org_a(), 'anon-x', 'x' $$, $$ content = 'x' $$, 'anon');
-select * from tests.check_no_access('products',
-    'org_id, name, price', $$ tests.org_a(), 'x', 1 $$, $$ description = 'x' $$, 'anon');
-select * from tests.check_no_access('system_message',
-    'org_id, name, content', $$ tests.org_a(), 'anon-x', 'x' $$, $$ description = 'x' $$, 'anon');
-select * from tests.check_no_access('app_settings',
-    'org_id, key, value', $$ tests.org_a(), 'anon-x', 'x' $$, $$ description = 'x' $$, 'anon');
-select * from tests.check_no_access('labels',
-    'org_id, name', $$ tests.org_a(), 'anon-x' $$, $$ color = 'red' $$, 'anon');
-select * from tests.check_no_access('chat_labels',
-    'org_id, phone_number, label_id',
-    $$ tests.org_a(), '628111', (select id from public.labels limit 1) $$,
-    $$ created_at = now() $$, 'anon');
-select * from tests.check_no_access('quick_replies',
-    'org_id, shortcut, content', $$ tests.org_a(), 'anon-x', 'x' $$, $$ content = 'x' $$, 'anon');
-select * from tests.check_no_access('push_subscriptions',
+select * from tests.check_anon_denied('whatsapp_chats',
+    'org_id, phone_number', $$ tests.org_a(), 'anon' $$, $$ notes = 'x' $$);
+select * from tests.check_anon_denied('whatsapp_messages',
+    'org_id, phone_number, role, content', $$ tests.org_a(), '628111', 'user', 'x' $$, $$ content = 'x' $$);
+select * from tests.check_anon_denied('orders',
+    'org_id, customer_name', $$ tests.org_a(), 'x' $$, $$ venue = 'x' $$);
+select * from tests.check_anon_denied('proposals',
+    'org_id, lead_phone, source, proposal_ref', $$ tests.org_a(), '628111', 'generated', 'x' $$, $$ intro_note = 'x' $$);
+select * from tests.check_anon_denied('vendors',
+    'org_id, name, category', $$ tests.org_a(), 'x', 'other' $$, $$ notes = 'x' $$);
+select * from tests.check_anon_denied('documents',
+    'org_id, content', $$ tests.org_a(), 'x' $$, $$ content = 'x' $$);
+select * from tests.check_anon_denied('kb_sources',
+    'org_id, title, content', $$ tests.org_a(), 'anon-x', 'x' $$, $$ content = 'x' $$);
+select * from tests.check_anon_denied('products',
+    'org_id, name, price', $$ tests.org_a(), 'x', 1 $$, $$ description = 'x' $$);
+select * from tests.check_anon_denied('system_message',
+    'org_id, name, content', $$ tests.org_a(), 'anon-x', 'x' $$, $$ description = 'x' $$);
+select * from tests.check_anon_denied('app_settings',
+    'org_id, key, value', $$ tests.org_a(), 'anon-x', 'x' $$, $$ description = 'x' $$);
+select * from tests.check_anon_denied('labels',
+    'org_id, name', $$ tests.org_a(), 'anon-x' $$, $$ color = 'red' $$);
+-- label_id is a literal uuid: anon may not read labels either, and the
+-- refusal must be about chat_labels itself.
+select * from tests.check_anon_denied('chat_labels',
+    'org_id, phone_number, label_id', $$ tests.org_a(), '628111', gen_random_uuid() $$,
+    $$ created_at = now() $$);
+select * from tests.check_anon_denied('quick_replies',
+    'org_id, shortcut, content', $$ tests.org_a(), 'anon-x', 'x' $$, $$ content = 'x' $$);
+select * from tests.check_anon_denied('push_subscriptions',
     'org_id, endpoint, p256dh, auth, user_id',
     $$ tests.org_a(), 'https://push.invalid/anon', 'k', 'a', tests.user_a1() $$,
-    $$ user_agent = 'x' $$, 'anon');
-select * from tests.check_no_access('business_profiles',
-    'org_id, business_name', $$ tests.org_a(), 'x' $$, $$ website = 'x' $$, 'anon');
-select * from tests.check_no_access('whatsapp_integrations',
-    'org_id, phone_number_id, access_token', $$ tests.org_a(), 'anon-x', 'x' $$, $$ display_phone = 'x' $$, 'anon');
-select * from tests.check_no_access('message_queue',
-    'org_id, phone_number, message_text', $$ tests.org_a(), '628111', 'x' $$, $$ status = 'failed' $$, 'anon');
-select * from tests.check_no_access('rate_limits',
-    'identifier', $$ 'anon-x' $$, $$ request_count = 99 $$, 'anon');
-select * from tests.check_no_access('organizations',
-    'name', $$ 'anon org' $$, $$ name = 'x' $$, 'anon');
-select * from tests.check_no_access('organization_members',
-    'org_id, user_id, role', $$ tests.org_a(), tests.user_b1(), 'owner' $$, $$ role = 'owner' $$, 'anon');
+    $$ user_agent = 'x' $$);
+select * from tests.check_anon_denied('business_profiles',
+    'org_id, business_name', $$ tests.org_a(), 'x' $$, $$ website = 'x' $$);
+select * from tests.check_anon_denied('whatsapp_integrations',
+    'org_id, phone_number_id, access_token', $$ tests.org_a(), 'anon-x', 'x' $$, $$ display_phone = 'x' $$);
+select * from tests.check_anon_denied('message_queue',
+    'org_id, phone_number, message_text', $$ tests.org_a(), '628111', 'x' $$, $$ status = 'failed' $$);
+select * from tests.check_anon_denied('rate_limits',
+    'identifier', $$ 'anon-x' $$, $$ request_count = 99 $$);
+select * from tests.check_anon_denied('organizations',
+    'name', $$ 'anon org' $$, $$ name = 'x' $$);
+select * from tests.check_anon_denied('organization_members',
+    'org_id, user_id, role', $$ tests.org_a(), tests.user_b1(), 'owner' $$, $$ role = 'owner' $$);
 
 -- ---------------------------------------------------------------------------
 -- 4. Denied writes left the other org's fixtures intact
