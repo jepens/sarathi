@@ -23,13 +23,18 @@ Objek storage **tidak pernah** dipindah atau diganti nama lewat SQL.
   `manifest.json` (nama objek, id baris, sha256, awal masa tunggu) dan
   `backup/` (byte file). Isinya dokumen bisnis (UU PDP): jangan dibagikan.
 - **Simpan salinan kedua `manifest.json` saja** (tanpa `backup/`) di lokasi
-  privat lain sejak langkah 2 sampai langkah 8, dan **perbarui** salinan itu
-  setiap kali sebuah fase menulis manifest (`copy`, `verify` yang mencatat
-  awal masa tunggu, `delete-originals`, `restore`, `remove-copies`). Manifest
+  privat lain sejak langkah 2 sampai langkah 9 (sampai `--out` dihapus), dan
+  **perbarui** salinan itu setiap kali skrip menutup dengan `manifest.json was
+  updated by this run`. Itu terjadi pada `copy`, `delete-originals`, `restore`
+  dan `remove-copies` dengan `--confirm`, pada `verify` yang mencatat awal
+  masa tunggu, dan pada fase apa pun (juga *dry-run*) yang mencatat masa
+  tunggu terputus. Ganti salinan itu setelah `plan --allow-replan`. Manifest
   adalah satu-satunya catatan baris mana milik objek mana (deteksi "dihapus
-  user") dan id baris untuk SQL rollback.
+  user"), id baris untuk SQL revert, dan tanda D16. Setelah langkah 9 tidak
+  ada lagi rollback lewat skrip.
 - **Jangan pernah `plan` ulang** setelah langkah 2: skrip menolak bucket yang
-  sudah disalin. Kalau manifest hilang, pulihkan dari salinan kedua.
+  sudah disalin, dan setelah langkah 7 menolak karena tidak ada lagi objek
+  root. Kalau manifest hilang, pulihkan dari salinan kedua.
   `--allow-replan` hanya dipakai atas keputusan manusia; dalam mode itu,
   objek tanpa salinan setelah 0066 dicatat sebagai "dihapus user" dan tidak
   pernah disalin lagi.
@@ -43,11 +48,12 @@ Perintah dasar (dari checkout branch PR, `<out>` dan `<ref>` diisi):
 
 ```bash
 node --env-file=D:/bedul/apk/AI/sarathi/.env.local scripts/migrate-legacy-kb-objects.mjs \
-    --phase=<plan|copy|verify|delete-originals|restore|remove-copies> --expect-ref=<ref> --out=<out> [--confirm]
+    --phase=<plan|copy|verify|delete-originals|restore|remove-copies|revert-sql> --expect-ref=<ref> --out=<out> [--confirm]
 ```
 
 Tanpa `--confirm`, fase yang menulis hanya *dry-run*. Log hanya memuat nomor
-urut, id objek, ukuran, dan awalan sha256, **tanpa nama file**.
+urut, id objek, ukuran, dan awalan sha256, **tanpa nama file**. `revert-sql`
+hanya mencetak SQL rollback dari manifest (id baris, tanpa nama file).
 
 ## Langkah
 
@@ -77,7 +83,8 @@ Kalau angkanya berbeda (ada objek atau baris baru, atau `blocking > 0`):
 masalah. Plan kedua (sebelum langkah 2) harus memakai `--out` baru. Setelah
 langkah 2, plan menolak (lihat Prasyarat); dengan `--allow-replan`, ia mencetak
 tahap salinan (`copy stage`) dan jumlah baris yang sudah di-relink, dan tetap
-mengenali baris itu sebagai milik objeknya.
+mengenali baris itu sebagai milik objeknya. Setelah langkah 7 plan selalu
+menolak, karena tidak ada lagi objek root.
 
 ### 2. Copy
 
@@ -186,7 +193,9 @@ dengan sha256 di manifest, dan hanya kalau tidak ada baris yang menunjuk
 salinan itu. Entri tersebut ditandai `d16_deleted_at`, sehingga `verify`,
 `copy`, dan `restore` tidak menyentuhnya lagi (backup-nya tetap disimpan
 sampai langkah 9). Kalau prosesnya terputus, jalankan ulang: entri yang
-penghapusannya sudah dimulai hanya ditandai.
+penghapusannya sudah dimulai hanya ditandai. Sampai itu selesai, `copy` dan
+`restore` menolak entri tersebut, jadi duplikat D16 tidak pernah kembali dari
+`backup/`.
 
 Setelah langkah 8 dan 8b, tracker 1.12 → ✅.
 
@@ -197,41 +206,86 @@ diterapkan, jadi file-nya tidak boleh diubah). Setiap tulis saat rollback:
 *dry-run* dulu, lalu persetujuan pemilik sebelum `--confirm` atau
 `apply_migration`.
 
-`--phase=remove-copies` hanya menghapus kunci `dest` di manifest yang masih
-sama dengan sha256 manifest:
+`--phase=remove-copies` menghapus, per entri manifest:
 
-- **entri hidup:** salinannya dihapus hanya selama objek aslinya (objek di
-  manifest) masih ada dan tidak ada baris yang menunjuk salinan itu; objek
-  aslinya tidak pernah disentuh;
-- **entri yang dihapus user:** sisa entri itu dihapus semua, baik salinan
-  maupun objek aslinya;
+- **entri hidup:** salinannya (kunci `dest`), hanya kalau masih sama dengan
+  sha256 manifest, objek aslinya (objek di manifest, dikenali dari id-nya)
+  masih ada, dan tidak ada baris yang menunjuk salinan itu. Objek aslinya
+  tidak pernah disentuh;
+- **entri yang dihapus user:** sisanya, yaitu salinan (kalau masih sama dengan
+  manifest) dan objek aslinya (objek di manifest, dikenali dari id-nya);
 - **entri D16:** tidak disentuh.
 
-Satu penolakan menghentikan seluruh proses sebelum ada yang ditulis. Setelah
-`--confirm`, awal masa tunggu yang tercatat dihapus, sehingga penyalinan ulang
-nanti memulai masa tunggu dari awal.
+*Dry-run* menyebut kunci mana yang akan dihapus per entri. Satu penolakan
+menghentikan seluruh proses sebelum ada yang ditulis, termasuk kalau baris
+manifest tidak menunjuk salinan maupun objek aslinya. Setelah `--confirm`,
+awal masa tunggu yang tercatat dihapus. Setiap fase yang melihat baris
+berbasis file kembali menunjuk objek root (0066 di-revert) juga menghapusnya,
+jadi kalau 0066 diterapkan lagi, `delete-originals` menunggu 72 jam penuh.
 
 - **Setelah langkah 2–3 (sebelum 0066):** `--phase=remove-copies` (*dry-run*,
   lalu `--confirm`). Tidak ada hal lain yang berubah.
 - **Setelah langkah 4–6 (masa tunggu):**
-  1. **Jeda KB** sejak langkah ini sampai migrasi revert diterapkan.
+  1. **Jeda KB** sejak langkah ini sampai `remove-copies --confirm`
+     (langkah 5) selesai.
   2. `--phase=delete-originals --only-user-deleted` (*dry-run*, lalu
      `--confirm`): objek asli entri yang dihapus user dihapus dulu, supaya
      file itu tidak terbaca lagi saat fallback 0038 kembali. Mode ini tidak
      terhalang oleh salinan rusak milik entri lain.
-  3. Migrasi lanjutan yang mengembalikan teks policy 0038 dan me-relink balik
-     **hanya** id baris di manifest (SQL ada di header 0066).
-  4. `--phase=delete-originals --only-user-deleted` **sekali lagi**, untuk
-     entri yang terhapus di antara langkah 2 dan 3.
-  5. `--phase=remove-copies` (*dry-run*, lalu `--confirm`). Awal masa tunggu
-     yang tercatat ikut dihapus.
+  3. **Revert.** `--phase=revert-sql` mencetak SQL-nya dari manifest: teks
+     policy 0038, lalu **hanya** baris manifest yang masih menunjuk salinannya
+     dikembalikan ke nama root. SQL ini aman dijalankan dua kali. Jangan pakai
+     SQL di header 0066: kalau dijalankan dua kali, ia memotong sumber baris
+     sekali lagi. Coba dulu di dalam `begin; … rollback;`, lalu terapkan
+     **sekali** sebagai migrasi berikutnya (`apply_migration`, persetujuan
+     D1). Kalau hasilnya tidak jelas (misalnya timeout), periksa
+     `supabase_migrations.schema_migrations` sebelum mengulang. Setelah itu
+     jalankan `--phase=verify`: harus `elsewhere 0`, dan semua baris manifest
+     yang masih ada menunjuk root (`relinked 0`). Verify ini juga mencatat
+     bahwa masa tunggu terputus.
+     Di repo: commit SQL itu sebagai migrasi bernomor berikutnya, dengan blok
+     fingerprint *pending* atau refresh `production.txt`. Sesuaikan `170`
+     (policy kembali memuat fallback org seed) beserta `plan`-nya, dan
+     kembalikan pelacak 1.12 ke 🔄.
+  4. `--phase=delete-originals --only-user-deleted` **sekali lagi**. Ini
+     menghapus objek asli entri yang terhapus di antara langkah 2 dan 3, dan
+     salinan entri yang terhapus setelah revert.
+  5. `--phase=remove-copies` (*dry-run*, lalu `--confirm`). Setelah selesai,
+     jeda KB boleh diakhiri.
 - **Setelah langkah 7:** jeda KB (langkah 1 di atas), lalu
   `--phase=restore` (*dry-run*, lalu `--confirm`): objek asli dikembalikan
-  dari salinan, atau dari `backup/` kalau salinannya juga hilang; entri yang
-  dihapus user dan entri D16 tidak dipulihkan. Lalu langkah 2–5 di atas.
-  Langkah 2 dan 4 di sini hanya menghapus objek asli entri yang dihapus user
-  **setelah** restore (biasanya tidak ada), dan tidak terhalang oleh salinan
-  yang hilang.
+  dari salinan, atau dari `backup/` kalau salinannya hilang atau tidak sama
+  dengan manifest; entri yang dihapus user dan entri D16 tidak dipulihkan.
+  Lalu langkah 2–5 di atas. Langkah 2 dan 4 di sini hanya menghapus sisa
+  entri yang dihapus user **setelah** restore (biasanya tidak ada), dan tidak
+  terhalang oleh salinan yang hilang.
+- **Setelah langkah 9:** `--out` dan salinan kedua manifest sudah dihapus,
+  jadi tidak ada lagi rollback lewat skrip.
+
+### Kalau sebuah langkah menolak
+
+- **`restore` berhenti di tengah** (misalnya timeout saat verifikasi): jalankan
+  `restore` lagi. Objek yang sudah ditulis tetapi belum tercatat
+  (`original=changed`) dicatat (`adopt`) kalau ukuran, tipe, dan sha256-nya
+  sama dengan manifest; kalau tidak sama, manusia memeriksa.
+  `delete-originals` dan `remove-copies` menolak objek seperti itu sampai
+  `restore` mencatatnya.
+- **D16 terputus:** jalankan `remove-copies --unreferenced-only` lagi sampai
+  selesai. Sampai saat itu `copy` dan `restore` menolak entri tersebut.
+- **Salinan tidak sama dengan manifest** (`copy=different`): `remove-copies`
+  dan `copy` menolak seluruh run. Jalankan dulu `delete-originals
+  --only-user-deleted` (tidak terhalang) untuk sisa entri yang dihapus user.
+  Lalu pemilik memeriksa kunci itu di dashboard Storage dan memutuskan
+  (persetujuan). Kalau isinya tidak dibutuhkan siapa pun, hapus kunci itu
+  lewat dashboard, lalu ulangi langkah yang menolak. Dalam alur maju, kalau
+  `delete-originals` berhenti karena pengecekan ulang salinan gagal: hapus
+  salinan yang rusak (persetujuan), jalankan `copy` lagi, lalu `verify`, lalu
+  `delete-originals`.
+- **Baris manifest tidak menunjuk salinan maupun objek aslinya** (`elsewhere`,
+  misalnya SQL header 0066 dijalankan dua kali): `verify` gagal, dan `copy`
+  serta `remove-copies` menolak. Pulihkan `metadata.source` baris itu ke nama
+  root di `row_old_source` manifest lewat SQL yang disetujui pemilik. SQL itu
+  memuat nama file, jadi jangan di-commit. Lalu jalankan `verify` lagi.
 
 ## Catatan produksi (2026-10-16)
 
@@ -248,7 +302,8 @@ nanti memulai masa tunggu dari awal.
   0`; **awal masa tunggu `2026-10-16T16:02:21Z`**, jadi `delete-originals`
   paling cepat **2026-10-19T16:02:21Z** (Senin, 23.02 WIB). Salinan kedua
   manifest sudah disimpan setelah verify itu.
-- Berikutnya: uji asap oleh pemilik (5.4), merge PR, lalu langkah 6–9.
+- Berikutnya: uji asap oleh pemilik (5.4), akhiri jeda KB (5.5), merge PR,
+  lalu langkah 6–9.
 
 ## Latihan (2026-10-16, stack lokal terpisah `sarathi-docs`, port 588xx)
 
@@ -303,3 +358,31 @@ TODO: 1.11). SQL revert yang dipakai persis teks rollback di header 0066.
    `--only-user-deleted` (0), lalu `remove-copies` (2 dihapus, 13 entri D16
    dilewati). Kondisi akhir: root 2, folder seed 0, 8 baris unggahan kembali
    menunjuk root, 7 baris editor, dan anggota membaca root lewat fallback 0038.
+
+### Latihan putaran 3 (2026-10-17, skrip versi akhir PR ini, stack yang sama)
+
+Maju sampai langkah 7 (`delete-originals --soak-hours=0`), lalu rollback
+dengan gangguan yang disengaja:
+
+1. `plan` setelah langkah 7 ditolak ("no root-level object"), tanpa membuat
+   direktori.
+2. D16 terputus (satu entri ditandai mulai, salinannya hilang): `restore` dan
+   `copy` menolak entri itu sebelum menulis apa pun. `remove-copies
+   --unreferenced-only` menyelesaikannya (12 dihapus, 1 ditandai).
+3. Restore yang terputus disimulasikan (salinan satu entri disalin balik ke
+   root tanpa dicatat): `delete-originals` menolak dan menyebut jalan
+   keluarnya. `restore` mencatat objek itu (`adopt`) dan memulihkan entri
+   lain dari salinan. Dijalankan ulang, tidak ada yang berubah.
+4. Keluaran `--phase=revert-sql` diterapkan apa adanya (`UPDATE 8`, tanpa nama
+   file). *Dry-run* `delete-originals --only-user-deleted` sudah menghapus awal
+   masa tunggu. `verify`: `relinked 0, still root 8, elsewhere 0`. SQL yang
+   sama dijalankan lagi: `UPDATE 0`.
+5. SQL header 0066 dijalankan di atasnya (revert ganda): `verify` gagal
+   (`ELSEWHERE 8`), dan `remove-copies` serta `copy` berhenti sebelum menulis.
+   Setelah sumber baris dipulihkan dari `row_old_source`, `verify` lulus lagi.
+6. `remove-copies --confirm`: 2 salinan dihapus, 13 entri D16 dilewati.
+   Kondisi akhir: root 2, folder seed 0, 8 baris unggahan di root, 7 baris
+   editor.
+
+Setiap run yang mengubah manifest ditutup dengan pengingat untuk memperbarui
+salinan keduanya.

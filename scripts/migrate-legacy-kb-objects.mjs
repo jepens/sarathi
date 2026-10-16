@@ -38,6 +38,14 @@
 //   ... --phase=remove-copies --unreferenced-only [--confirm]
 //                                      D16 (after delete-originals): remove the
 //                                      copies of objects no row had at plan time
+//   ... --phase=revert-sql             print the SQL of rollback step 3 (0038
+//                                      policy + the manifest rows pointed back,
+//                                      idempotent); read-only
+//
+// Every phase that sees file-backed rows name root-level objects again (0066
+// reverted) clears the recorded soak start, so a later 0066 gets a full soak.
+// Whenever a run changes manifest.json it says so at the end: refresh the
+// second copy of the manifest then (runbook).
 //
 // Safety rails: refuses when the project ref of NEXT_PUBLIC_SUPABASE_URL is
 // not --expect-ref, when the key is not a service-role key, and when --out is
@@ -85,6 +93,8 @@ import {
     removeCopyDecision,
     replanCheck,
     restoreDecision,
+    revertSql,
+    rowSources,
     rowState,
     sha256Hex,
     soakHoursProblem,
@@ -99,7 +109,7 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 const PAGE = 1000;
 const USAGE =
     'Usage: node --env-file=.env.local scripts/migrate-legacy-kb-objects.mjs ' +
-    '--phase=<plan|copy|verify|delete-originals|restore|remove-copies> --expect-ref=<project ref> ' +
+    '--phase=<plan|copy|verify|delete-originals|restore|remove-copies|revert-sql> --expect-ref=<project ref> ' +
     '--out=<dir outside the repo> [--confirm] [--soak-hours=<n>] [--allow-short-soak] [--only-user-deleted] ' +
     '[--unreferenced-only] [--allow-replan]';
 
@@ -296,17 +306,39 @@ function loadManifest(ctx) {
     return m;
 }
 
+/** Whether this run has rewritten manifest.json (the exit message asks to refresh its second copy). */
+let manifestChanged = false;
+
 /** Atomic rewrite, so an interrupted run never leaves half a manifest. @param {Ctx} ctx @param {any} m */
 function saveManifest(ctx, m) {
     const p = manifestPath(ctx);
     const tmp = `${p}.tmp`;
     fs.writeFileSync(tmp, `${JSON.stringify(m, null, 2)}\n`, { mode: 0o600 });
     fs.renameSync(tmp, p);
+    manifestChanged = true;
 }
 
 /** @param {any} m @param {Record<string, unknown>} entry */
 function addLog(m, entry) {
     m.log = [...(m.log ?? []), { at: nowIso(), ...entry }];
+}
+
+/**
+ * Any phase that sees file-backed rows name root-level objects again while a
+ * soak start is recorded: 0066 is not in effect (a rollback reverted it), so
+ * the originals are needed again and the start is cleared. If 0066 comes
+ * back, the next verify records a new start and delete-originals waits a
+ * full soak. Runs before the phase decides anything, also in a dry-run and
+ * when the phase later refuses.
+ * @param {Ctx} ctx @param {any} m @param {import('./lib/legacy-kb.mjs').DocRow[]} rows
+ */
+function noteSoakInterruption(ctx, m, rows) {
+    if (!soakInterrupted({ soakStartedAt: m.soak_started_at, rows })) return;
+    console.log(`soak interrupted: file-backed rows name root-level objects again (it had started at ${m.soak_started_at}); ` +
+        'the recorded start is cleared.');
+    addLog(m, { phase: ctx.phase, soak_interrupted: m.soak_started_at });
+    m.soak_started_at = null;
+    saveManifest(ctx, m);
 }
 
 /** @param {Ctx} ctx @param {ManifestObject} o */
@@ -355,6 +387,12 @@ async function phasePlan(ctx) {
     }
     const snap = await snapshot(ctx);
     const names = [...snap.root.files.keys()].sort();
+    if (!names.length) {
+        // Also the state after delete-originals: a plan then would be empty
+        // and useless; the manifest can only come from its second copy.
+        stop(2, 'there is no root-level object to plan; nothing was written. After delete-originals, recover ' +
+            'manifest.json from its second copy instead (runbook).');
+    }
     redact = makeRedactor(names);
     const total = names.length;
     const { byName, rowsAtRoot, rowsOnCopy, counts } = analyseRows(snap.rows, new Set(names));
@@ -495,6 +533,7 @@ async function phaseCopy(ctx) {
     const m = loadManifest(ctx);
     const total = m.objects.length;
     const snap = await snapshot(ctx);
+    noteSoakInterruption(ctx, m, snap.rows);
     const known = new Set(m.objects.map((/** @type {ManifestObject} */ o) => o.name));
     const unknown = [...snap.root.files.keys()].filter((n) => !known.has(n)).length;
     if (unknown) {
@@ -503,6 +542,7 @@ async function phaseCopy(ctx) {
     }
 
     // Decide every object before the first write.
+    const rowsById = new Map(snap.rows.map((r) => [r.id, r]));
     /** @type {{ o: ManifestObject, action: string, reason?: string }[]} */
     const decisions = [];
     for (const o of /** @type {ManifestObject[]} */ (m.objects)) {
@@ -510,7 +550,10 @@ async function phaseCopy(ctx) {
         const dest = await copyState(ctx, o, snap.seed.files);
         const original = originalState(o, snap.root.files);
         const d = copyDecision({
-            rows, userDeleted: Boolean(o.user_deleted_at), d16Deleted: Boolean(o.d16_deleted_at), dest, original,
+            rows, userDeleted: Boolean(o.user_deleted_at), d16Deleted: Boolean(o.d16_deleted_at),
+            d16Started: Boolean(o.d16_delete_started_at),
+            rowsElsewhere: rowSources(o.row_ids, rowsById, o.name, o.dest).elsewhere,
+            dest, original,
         });
         decisions.push({ o, ...d });
         console.log(logLine(o, total, `rows=${rows} dest=${dest} original=${original} -> ${d.action}${d.reason ? ` (${d.reason})` : ''}`));
@@ -570,34 +613,26 @@ async function runVerify(ctx, m, snap) {
     const byId = new Map(snap.rows.map((r) => [r.id, r]));
     const res = {
         ok: 0, userDeleted: 0, d16Deleted: 0, failures: 0, failuresUserDeleted: 0, originals: 0,
-        rowsLive: 0, rowsRelinked: 0, rowsRoot: 0,
+        rowsLive: 0, rowsRelinked: 0, rowsRoot: 0, rowsElsewhere: 0,
     };
     for (const o of /** @type {ManifestObject[]} */ (m.objects)) {
         const rows = rowState(o.row_ids, snap.live);
         const userDeleted = Boolean(o.user_deleted_at) || rows === 'user-deleted';
         const d16Deleted = Boolean(o.d16_deleted_at);
+        const src = rowSources(o.row_ids, byId, o.name, o.dest);
         const copy = userDeleted || d16Deleted
             ? (snap.seed.files.has(o.name) ? 'present' : 'absent')
             : await copyState(ctx, o, snap.seed.files);
         const status = verifyStatus({
             rows, userDeleted, d16Deleted, d16Started: Boolean(o.d16_delete_started_at),
+            rowsElsewhere: src.elsewhere,
             copy: copy === 'present' ? 'identical' : copy,
         });
         const original = originalState(o, snap.root.files);
-        let live = 0;
-        let relinked = 0;
-        let root = 0;
-        for (const id of o.row_ids) {
-            const row = byId.get(id);
-            if (!row) continue;
-            live++;
-            const src = metadataText(row.metadata, 'source');
-            if (src === o.dest) relinked++;
-            else if (src === o.name) root++;
-        }
-        res.rowsLive += live;
-        res.rowsRelinked += relinked;
-        res.rowsRoot += root;
+        res.rowsLive += src.live;
+        res.rowsRelinked += src.relinked;
+        res.rowsRoot += src.root;
+        res.rowsElsewhere += src.elsewhere;
         if (original !== 'absent') res.originals++;
         if (status === 'ok') res.ok++;
         else if (status === 'user-deleted') res.userDeleted++;
@@ -606,12 +641,12 @@ async function runVerify(ctx, m, snap) {
             res.failures++;
             if (userDeleted) res.failuresUserDeleted++;
         }
-        console.log(logLine(o, total, `copy=${copy} original=${original} rows=${live}/${o.row_ids.length} ` +
-            `(relinked ${relinked}, root ${root}) -> ${status}`));
+        console.log(logLine(o, total, `copy=${copy} original=${original} rows=${src.live}/${o.row_ids.length} ` +
+            `(relinked ${src.relinked}, root ${src.root}${src.elsewhere ? `, ELSEWHERE ${src.elsewhere}` : ''}) -> ${status}`));
     }
     console.log(`\ncopies ok ${res.ok}, deleted by the user ${res.userDeleted}, removed under D16 ${res.d16Deleted}, ` +
         `failed ${res.failures}; originals still present ${res.originals}; manifest rows live ${res.rowsLive} ` +
-        `(relinked ${res.rowsRelinked}, still root ${res.rowsRoot})`);
+        `(relinked ${res.rowsRelinked}, still root ${res.rowsRoot}, elsewhere ${res.rowsElsewhere})`);
     return res;
 }
 
@@ -625,15 +660,9 @@ async function runVerify(ctx, m, snap) {
 async function phaseVerify(ctx) {
     const m = loadManifest(ctx);
     const snap = await snapshot(ctx);
+    noteSoakInterruption(ctx, m, snap.rows);
     const res = await runVerify(ctx, m, snap);
-    // 0066 no longer in effect (a rollback reverted the relink): the originals
-    // are needed again, so the soak starts over once 0066 is back.
-    if (soakInterrupted({ soakStartedAt: m.soak_started_at, rows: snap.rows })) {
-        console.log(`soak interrupted: file-backed rows name root-level objects again (it had started at ${m.soak_started_at}).`);
-        addLog(m, { phase: 'verify', soak_interrupted: m.soak_started_at });
-        m.soak_started_at = null;
-        saveManifest(ctx, m);
-    } else if (!m.soak_started_at && soakStartReady({ rows: snap.rows, objects: m.objects, verifyFailures: res.failures })) {
+    if (!m.soak_started_at && soakStartReady({ rows: snap.rows, objects: m.objects, verifyFailures: res.failures })) {
         m.soak_started_at = nowIso();
         addLog(m, { phase: 'verify', soak_started: true });
         saveManifest(ctx, m);
@@ -649,6 +678,7 @@ async function phaseDeleteOriginals(ctx) {
     const m = loadManifest(ctx);
     const total = m.objects.length;
     const snap = await snapshot(ctx);
+    noteSoakInterruption(ctx, m, snap.rows);
     const v = await runVerify(ctx, m, snap);
     const blockers = deleteOriginalsBlockers({
         rows: snap.rows,
@@ -750,11 +780,13 @@ async function phaseRemoveCopies(ctx) {
     const m = loadManifest(ctx);
     const total = m.objects.length;
     const snap = await snapshot(ctx);
+    noteSoakInterruption(ctx, m, snap.rows);
     const byDest = new Map();
     for (const r of snap.rows) {
         const src = metadataText(r.metadata, 'source');
         if (src) byDest.set(src, (byDest.get(src) ?? 0) + 1);
     }
+    const rowsById = new Map(snap.rows.map((r) => [r.id, r]));
     if (ctx.unreferencedOnly) console.log('--unreferenced-only (D16): only copies of objects no documents row had at plan time.');
     /** @type {{ o: ManifestObject, action: string, reason?: string, removeCopy?: boolean, removeOriginal?: boolean, userDeleted: boolean }[]} */
     const decisions = [];
@@ -768,9 +800,17 @@ async function phaseRemoveCopies(ctx) {
                 rowIds: o.row_ids.length, userDeleted, d16Deleted: Boolean(o.d16_deleted_at),
                 d16Started: Boolean(o.d16_delete_started_at), original, copy, rowsPointAtCopy,
             })
-            : removeCopyDecision({ userDeleted, d16Deleted: Boolean(o.d16_deleted_at), original, copy, rowsPointAtCopy });
+            : removeCopyDecision({
+                userDeleted, d16Deleted: Boolean(o.d16_deleted_at), original, copy, rowsPointAtCopy,
+                rowsElsewhere: rowSources(o.row_ids, rowsById, o.name, o.dest).elsewhere,
+            });
         decisions.push({ o, userDeleted, ...d });
-        console.log(logLine(o, total, `copy=${copy} original=${original} -> ${d.action}${d.reason ? ` (${d.reason})` : ''}`));
+        // Which keys go, as delete-originals prints it.
+        const keys = 'removeCopy' in d
+            ? [d.removeCopy && 'copy', d.removeOriginal && 'original'].filter(Boolean).join(' + ')
+            : d.action === 'remove' ? 'copy' : '';
+        console.log(logLine(o, total, `copy=${copy} original=${original} -> ${d.action}${keys ? ` (${keys})` : ''}` +
+            `${d.reason ? ` (${d.reason})` : ''}`));
     }
     const count = (/** @type {string} */ a) => decisions.filter((d) => d.action === a).length;
     console.log(`\nto remove ${count('remove')}, to mark ${count('mark')}, skipped ${decisions.length - count('remove') - count('mark') - count('abort')}, ` +
@@ -821,28 +861,55 @@ async function phaseRemoveCopies(ctx) {
     console.log('\nremove-copies done.');
 }
 
+/**
+ * revert-sql: read-only. Prints the SQL of rollback step 3 from the manifest
+ * (revertSql): the 0038 policy text, and the manifest's rows pointed back at
+ * their root-level name, idempotent. Only row ids, never an object name.
+ * @param {Ctx} ctx
+ */
+async function phaseRevertSql(ctx) {
+    const m = loadManifest(ctx);
+    const rowIds = m.objects.flatMap((/** @type {ManifestObject} */ o) => o.row_ids);
+    /** @type {string} */
+    let sql;
+    try {
+        sql = revertSql({ seedOrgId: m.seed_org_id, rowIds, projectRef: m.project_ref, plannedAt: m.planned_at });
+    } catch (e) {
+        stop(1, `revert-sql: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    console.log(sql);
+    console.log('-- After applying it: --phase=verify must show "elsewhere 0" and every live manifest row at the root.');
+}
+
 /** restore: Storage writes with --confirm; never writes the database. @param {Ctx} ctx */
 async function phaseRestore(ctx) {
     const m = loadManifest(ctx);
     const total = m.objects.length;
     const snap = await snapshot(ctx);
-    /** @type {{ o: ManifestObject, action: string, reason?: string, userDeleted: boolean }[]} */
+    noteSoakInterruption(ctx, m, snap.rows);
+    /** @type {{ o: ManifestObject, action: string, reason?: string, userDeleted: boolean, adoptId?: string }[]} */
     const decisions = [];
     for (const o of /** @type {ManifestObject[]} */ (m.objects)) {
         const rows = rowState(o.row_ids, snap.live);
         const userDeleted = Boolean(o.user_deleted_at) || rows === 'user-deleted';
         const d16Deleted = Boolean(o.d16_deleted_at);
+        const d16Started = Boolean(o.d16_delete_started_at);
         const original = originalState(o, snap.root.files);
-        const skipCopyCheck = userDeleted || d16Deleted || original !== 'absent';
+        const settled = userDeleted || d16Deleted || d16Started;
+        // A root-level object the manifest does not know: an earlier restore
+        // wrote it and stopped before recording it? Adopt it if it matches.
+        const originalMatches = !settled && original === 'changed' && (await checkStored(ctx.sb, o.name, o)).ok;
+        const skipCopyCheck = settled || original !== 'absent';
         const copy = skipCopyCheck ? 'absent' : await copyState(ctx, o, snap.seed.files);
         const backupOk = !skipCopyCheck && readBackup(ctx, o) !== null;
-        const d = restoreDecision({ rows, userDeleted, d16Deleted, original, copy, backupOk });
-        decisions.push({ o, userDeleted, ...d });
+        const d = restoreDecision({ rows, userDeleted, d16Deleted, d16Started, original, originalMatches, copy, backupOk });
+        decisions.push({ o, userDeleted, ...d, adoptId: d.action === 'adopt' ? snap.root.files.get(o.name)?.id : undefined });
         console.log(logLine(o, total, `original=${original} -> ${d.action}${d.reason ? ` (${d.reason})` : ''}`));
     }
     const count = (/** @type {string} */ a) => decisions.filter((d) => d.action === a).length;
     console.log(`\nfrom the copy ${count('from-copy')}, from the backup ${count('from-backup')}, ` +
-        `present ${count('skip-present')}, deleted by the user (never restored) ${count('skip-user-deleted')}, ` +
+        `written by an earlier run (to record) ${count('adopt')}, present ${count('skip-present')}, ` +
+        `deleted by the user (never restored) ${count('skip-user-deleted')}, ` +
         `removed under D16 (never restored) ${count('skip-d16-deleted')}, impossible ${count('abort')}`);
     if (count('abort')) stop(1, 'restore stopped before any write: see the objects marked abort above');
     if (!ctx.confirm) {
@@ -857,6 +924,13 @@ async function phaseRestore(ctx) {
                 o.user_deleted_at = nowIso();
                 saveManifest(ctx, m);
             }
+            continue;
+        }
+        if (d.action === 'adopt') {
+            o.restored = [...(o.restored ?? []), { at: nowIso(), from: 'earlier run', id: d.adoptId ?? null }];
+            o.original_deleted_at = null;
+            saveManifest(ctx, m);
+            console.log(logLine(o, total, 'the original an earlier restore wrote matches the manifest; recorded'));
             continue;
         }
         if (d.action !== 'from-copy' && d.action !== 'from-backup') continue;
@@ -879,7 +953,7 @@ async function phaseRestore(ctx) {
         saveManifest(ctx, m);
         console.log(logLine(o, total, `original restored ${d.action === 'from-copy' ? 'from the copy' : 'from the backup'}; size, content type and sha256 verified`));
     }
-    addLog(m, { phase: 'restore', from_copy: count('from-copy'), from_backup: count('from-backup') });
+    addLog(m, { phase: 'restore', from_copy: count('from-copy'), from_backup: count('from-backup'), adopted: count('adopt') });
     saveManifest(ctx, m);
     console.log('\nrestore done.');
 }
@@ -932,11 +1006,12 @@ async function main() {
         stop(2, `--out refused: ${problem}. The backup holds business documents (UU PDP); keep it outside every repository.`);
     }
     if (fs.existsSync(out) && !fs.statSync(out).isDirectory()) stop(2, '--out exists and is not a directory');
-    if (opts.phase === 'plan') fs.mkdirSync(out, { recursive: true, mode: 0o700 });
 
     const mode = opts.confirm ? 'CONFIRM (writes)' : WRITE_PHASES.has(opts.phase) ? 'dry-run (no writes)' : 'read-only';
-    console.log(`migrate-legacy-kb-objects: phase=${opts.phase} mode=${mode} project=${ref} bucket=${BUCKET} seed=${SEED_ORG_ID}`);
-    console.log(`out=${out}\n`);
+    // revert-sql prints SQL only: its header lines are SQL comments, so the whole output can be applied as is.
+    const header = opts.phase === 'revert-sql' ? '-- ' : '';
+    console.log(`${header}migrate-legacy-kb-objects: phase=${opts.phase} mode=${mode} project=${ref} bucket=${BUCKET} seed=${SEED_ORG_ID}`);
+    console.log(`${header}out=${out}\n`);
 
     const sb = createClient(/** @type {string} */ (url), /** @type {string} */ (key), {
         auth: { persistSession: false, autoRefreshToken: false },
@@ -953,18 +1028,31 @@ async function main() {
         'delete-originals': phaseDeleteOriginals,
         restore: phaseRestore,
         'remove-copies': phaseRemoveCopies,
+        'revert-sql': phaseRevertSql,
     };
     await phases[/** @type {keyof typeof phases} */ (opts.phase)](ctx);
 }
 
+/** After any run that rewrote manifest.json, also a stopped one. */
+function remindManifestCopy() {
+    if (manifestChanged) {
+        console.log('\nmanifest.json was updated by this run: refresh its second copy now (runbook, prerequisites).');
+    }
+}
+
 main().then(
-    () => process.exit(0),
+    () => {
+        remindManifestCopy();
+        process.exit(0);
+    },
     (e) => {
         if (e instanceof Stop) {
             console.error(`\n${e.code === 2 ? 'REFUSED' : 'STOPPED'}: ${redact(e.message)}`);
+            remindManifestCopy();
             process.exit(e.code);
         }
         console.error(`\nSTOPPED: ${redact(e?.name ?? 'Error')}: ${redact(e?.message ?? e)}`);
+        remindManifestCopy();
         process.exit(1);
     }
 );

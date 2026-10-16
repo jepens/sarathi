@@ -22,16 +22,41 @@ const pgtap = readFileSync(
     'utf8'
 ).replace(/\r\n/g, '\n');
 
-/** Comment-, case- and whitespace-insensitive SQL text (no spaces around parentheses). */
+/**
+ * SQL text without comments, with keywords and identifiers lower-cased and
+ * whitespace collapsed (no spaces around parentheses). String literals stay
+ * exactly as written: their case and spacing matter ('documents', '{source}',
+ * the seed prefix).
+ */
 function norm(sql: string): string {
-    return sql
-        .replace(/\/\*[\s\S]*?\*\//g, ' ')
-        .replace(/--[^\n]*/g, '')
-        .toLowerCase()
-        .replace(/\s+/g, ' ')
-        .replace(/\s*\(\s*/g, '(')
-        .replace(/\s*\)\s*/g, ')')
-        .trim();
+    let out = '';
+    let code = '';
+    const flush = () => {
+        out += code.toLowerCase().replace(/\s+/g, ' ').replace(/\s*\(\s*/g, '(').replace(/\s*\)\s*/g, ')');
+        code = '';
+    };
+    let i = 0;
+    while (i < sql.length) {
+        if (sql.startsWith('--', i)) {
+            const nl = sql.indexOf('\n', i);
+            i = nl < 0 ? sql.length : nl;
+            code += ' ';
+        } else if (sql.startsWith('/*', i)) {
+            const end = sql.indexOf('*/', i + 2);
+            i = end < 0 ? sql.length : end + 2;
+            code += ' ';
+        } else if (sql[i] === "'") {
+            let j = i + 1;
+            while (j < sql.length && !(sql[j] === "'" && sql[j + 1] !== "'")) j += sql[j] === "'" ? 2 : 1;
+            flush();
+            out += sql.slice(i, j + 1);
+            i = j + 1;
+        } else {
+            code += sql[i++];
+        }
+    }
+    flush();
+    return out.trim();
 }
 
 function capture(text: string, re: RegExp, label: string): string {
@@ -49,21 +74,22 @@ function section(startMarker: string, endMarkers: string[]): string {
     return ends.length ? rest.slice(0, Math.min(...ends)) : rest;
 }
 
+/** Every $$-quoted query of a 170 section, normalised; expected-value lists (`values ...`) left out. */
+function queries(text: string): string[] {
+    return [...text.matchAll(/\$\$([\s\S]*?)\$\$/g)].map((m) => norm(m[1])).filter((q) => !q.startsWith('values'));
+}
+
 /**
- * Every query of a guard section: the WHERE clause after `selectHead`, without
- * the fixture filter that restricts it to this file's fixtures.
+ * Each query of a guard section must be, in full: one of the select heads,
+ * the 0066 predicate, exactly the fixture filter that limits it to this
+ * file's fixtures, and at most an `order by 1`. Nothing can be added or
+ * changed anywhere, and a copy spelled another way does not slip past.
  */
-function predicateCopies(text: string, selectHead: string, fixtureFilter: RegExp): string[] {
-    const copies: string[] = [];
-    let at = text.indexOf(selectHead);
-    while (at >= 0) {
-        const rest = text.slice(at + selectHead.length);
-        const end = fixtureFilter.exec(rest);
-        if (!end) throw new Error(`170: a "${selectHead}" query without its fixture filter`);
-        copies.push(rest.slice(0, end.index));
-        at = text.indexOf(selectHead, at + selectHead.length);
-    }
-    return copies;
+function expectGuardCopies(sectionText: string, heads: string[], predicate: string, filter: string, expected: number) {
+    const allowed = heads.flatMap((h) => [norm(`${h} ${predicate} ${filter}`), norm(`${h} ${predicate} ${filter} order by 1`)]);
+    const found = queries(sectionText);
+    expect(found).toHaveLength(expected);
+    for (const q of found) expect(allowed).toContain(q);
 }
 
 const GUARD_MARKERS = ['-- Guard predicate 1', '-- Guard predicate 2', '-- Guard predicate 3', '-- The relink is idempotent'];
@@ -73,39 +99,43 @@ describe('migration 0066 vs its copies in 170_documents_org_prefix.test.sql', ()
         expect(createHash('sha256').update(migration, 'utf8').digest('hex')).toBe(APPLIED_SHA256);
     });
 
+    it('norm() keeps string literals exactly, and ignores comments, case and layout elsewhere', () => {
+        expect(norm("WHERE  o.bucket_id = 'documents' -- note\n  AND ( x )")).toBe("where o.bucket_id = 'documents' and(x)");
+        expect(norm("where o.bucket_id = 'Documents'")).not.toBe(norm("where o.bucket_id = 'documents'"));
+        expect(norm("where x = 'it''s -- not a comment'")).toBe("where x = 'it''s -- not a comment'");
+        expect(norm("coalesce(d.metadata->>'origin', '') <> 'editor'")).toBe("coalesce(d.metadata->>'origin', '')<> 'editor'");
+    });
+
     it('both copies of the relink statement are verbatim', () => {
         const fromMigration = capture(migration, /(update public\.documents d[\s\S]*?\n\s*\);)/, '0066 relink');
         const first = capture(pgtap, /-- 0066 \(a\), verbatim\.\n(update public\.documents d[\s\S]*?\n\s*\);)/, '170 relink');
         expect(norm(first)).toBe(norm(fromMigration));
-        // The idempotence check re-runs it with the fixture filter and RETURNING.
-        const again = section('-- The relink is idempotent', ['\n-- ']);
-        const body = capture(again, /\$\$ (update public\.documents d[\s\S]*?)\s+and d\.id::text like 'd0000000/, '170 relink (idempotent)');
-        expect(norm(`${body};`)).toBe(norm(fromMigration));
+        // The idempotence check re-runs it, limited to the fixtures, with RETURNING: exactly that, nothing else.
+        const again = queries(section('-- The relink is idempotent', ['\n-- ']));
+        expect(again).toEqual([
+            norm(`${fromMigration.replace(/;\s*$/, '')} and d.id::text like 'd0000000-0000-4000-8000-%' returning d.id`),
+        ]);
     });
 
     it('all 3 copies of guard predicate 1 (file-backed rows outside their org folder) are verbatim', () => {
-        const fromMigration = norm(capture(migration, /into v_rows_outside\s+from public\.documents d\s+(where[\s\S]*?);/, '0066 predicate 1'));
-        const copies = predicateCopies(section('-- Guard predicate 1', GUARD_MARKERS.slice(1)),
-            'from public.documents d', /\s+and d\.id::text like 'd0000000/);
-        expect(copies).toHaveLength(3);
-        for (const c of copies) expect(norm(c)).toBe(fromMigration);
+        const predicate = capture(migration, /into v_rows_outside\s+from public\.documents d\s+(where[\s\S]*?);/, '0066 predicate 1');
+        expectGuardCopies(section('-- Guard predicate 1', GUARD_MARKERS.slice(1)),
+            ['select d.id::text from public.documents d', 'select d.id from public.documents d'],
+            predicate, "and d.id::text like 'd0000000-0000-4000-8000-%'", 3);
     });
 
     it('both copies of guard predicate 2 (root-level objects without a same-size copy) are verbatim', () => {
-        const fromMigration = norm(capture(migration, /into v_missing_copies\s+from storage\.objects o\s+(where[\s\S]*?\));/, '0066 predicate 2'));
-        expect(fromMigration).toContain("c.metadata->>'size' = o.metadata->>'size'");
-        const copies = predicateCopies(section('-- Guard predicate 2', GUARD_MARKERS.slice(2)),
-            'select o.name from storage.objects o', /\s+and o\.name like '1700000000%'/);
-        expect(copies).toHaveLength(2);
-        for (const c of copies) expect(norm(c)).toBe(fromMigration);
+        const predicate = capture(migration, /into v_missing_copies\s+from storage\.objects o\s+(where[\s\S]*?\));/, '0066 predicate 2');
+        expect(norm(predicate)).toContain("c.metadata->>'size' = o.metadata->>'size'");
+        expectGuardCopies(section('-- Guard predicate 2', GUARD_MARKERS.slice(2)),
+            ['select o.name from storage.objects o'], predicate, "and o.name like '1700000000%'", 2);
     });
 
     it('both copies of guard predicate 3 (objects in a non-uuid first folder) are verbatim', () => {
-        const fromMigration = norm(capture(migration, /into v_bad_folders\s+from storage\.objects o\s+(where[\s\S]*?);/, '0066 predicate 3'));
-        const copies = predicateCopies(section('-- Guard predicate 3', GUARD_MARKERS.slice(3)),
-            'select o.name from storage.objects o', /\s+and \(o\.name like '%1700000000%'/);
-        expect(copies).toHaveLength(2);
-        for (const c of copies) expect(norm(c)).toBe(fromMigration);
+        const predicate = capture(migration, /into v_bad_folders\s+from storage\.objects o\s+(where[\s\S]*?);/, '0066 predicate 3');
+        expectGuardCopies(section('-- Guard predicate 3', GUARD_MARKERS.slice(3)),
+            ['select o.name from storage.objects o'], predicate,
+            "and (o.name like '%1700000000%' or o.name like 'bukan-uuid/%' or o.name like '/%')", 2);
     });
 
     it('the guard refuses when ANY predicate finds a row', () => {

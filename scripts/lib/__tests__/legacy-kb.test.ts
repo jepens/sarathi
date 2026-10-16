@@ -2,6 +2,8 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { isOrgScopedObjectPath as appIsOrgScopedObjectPath } from '@/lib/storage/object-paths';
 import {
+    CHANGED_ORIGINAL,
+    D16_UNFINISHED,
     SEED_ORG_ID,
     analyseRows,
     backupFileFor,
@@ -26,6 +28,8 @@ import {
     removeCopyDecision,
     replanCheck,
     restoreDecision,
+    revertSql,
+    rowSources,
     rowState,
     sha256Hex,
     soakHoursProblem,
@@ -192,9 +196,11 @@ describe('documents rows', () => {
     });
 
     it('finds the seed rows 0066 relinks and the rows it cannot fix', () => {
-        const { byName, counts } = analyseRows(rows, new Set([NAME, 'unused.pdf']));
+        const { byName, rowsAtRoot, rowsOnCopy, counts } = analyseRows(rows, new Set([NAME, 'unused.pdf']));
         expect(byName.get(NAME)).toEqual(['r1', 'r2']);
         expect(byName.has('unused.pdf')).toBe(false);
+        expect(rowsAtRoot.get(NAME)).toBe(2);
+        expect(rowsOnCopy.has(NAME)).toBe(false);
         expect(counts).toMatchObject({
             total: 9,
             fileBacked: 6,
@@ -218,9 +224,35 @@ describe('documents rows', () => {
             { id: 'p1', org_id: SEED, metadata: { source: `${SEED}/1700_baru.txt` } },
             { id: 'b1', org_id: ORG_B, metadata: { source: `${ORG_B}/${NAME}` } },
         ];
-        const { byName, counts } = analyseRows(after, new Set([NAME]));
+        const { byName, rowsAtRoot, rowsOnCopy, counts } = analyseRows(after, new Set([NAME]));
         expect(byName.get(NAME)).toEqual(['r1', 'r2']);
+        expect(rowsOnCopy.get(NAME)).toBe(2);
+        expect(rowsAtRoot.has(NAME)).toBe(false);
         expect(counts).toMatchObject({ fileBacked: 4, relinked: 2, prefixed: 2, rootSource: 0, blocking: 0, referencedObjects: 1 });
+        // End to end: rows that name a copy which is gone refuse the re-plan;
+        // they never mark the live entry as deleted by a user.
+        const stage = replanCheck({ relinked: counts.relinked, rootSource: counts.rootSource, identicalCopies: 0, allowReplan: true }).stage;
+        expect(stage).toBe('after-0066');
+        expect(planDisposition({
+            stage, destState: 'absent', rowsAtRoot: rowsAtRoot.get(NAME) ?? 0, rowsOnCopy: rowsOnCopy.get(NAME) ?? 0,
+        })).toBe('copy-missing');
+        const before = analyseRows(rows, new Set([NAME]));
+        expect(planDisposition({
+            stage: 'before-0066', destState: 'absent',
+            rowsAtRoot: before.rowsAtRoot.get(NAME) ?? 0, rowsOnCopy: before.rowsOnCopy.get(NAME) ?? 0,
+        })).toBe('plan');
+    });
+
+    it('rowSources: where the live rows of one entry point', () => {
+        const dest = `${SEED}/${NAME}`;
+        const byId = new Map([
+            ['r1', { id: 'r1', org_id: SEED, metadata: { source: dest } }],
+            ['r2', { id: 'r2', org_id: SEED, metadata: { source: NAME } }],
+            ['r3', { id: 'r3', org_id: SEED, metadata: { source: NAME.slice(37) } }],
+            ['r4', { id: 'r4', org_id: SEED, metadata: { source: '' } }],
+        ]);
+        expect(rowSources(['r1', 'r2', 'r3', 'r4', 'gone'], byId, NAME, dest)).toEqual({ live: 4, relinked: 1, root: 1, elsewhere: 2 });
+        expect(rowSources([], byId, NAME, dest)).toEqual({ live: 0, relinked: 0, root: 0, elsewhere: 0 });
     });
 });
 
@@ -241,8 +273,16 @@ describe('user-deleted detection (no resurrection)', () => {
         expect(copyDecision({ ...base, dest: 'identical', original: 'absent' }).action).toBe('skip-identical');
         expect(copyDecision({ ...base, dest: 'different' }).action).toBe('abort');
         expect(copyDecision({ ...base, original: 'absent' }).action).toBe('abort');
-        expect(copyDecision({ ...base, original: 'changed' }).action).toBe('abort');
+        expect(copyDecision({ ...base, original: 'changed' })).toEqual({ action: 'abort', reason: CHANGED_ORIGINAL });
         expect(copyDecision({ ...base, rows: 'rows-partial' }).action).toBe('abort');
+    });
+
+    it('copy: waits for an unfinished D16 removal and refuses rows that name neither copy nor original', () => {
+        const base = { rows: 'unreferenced', userDeleted: false, dest: 'identical', original: 'absent' } as const;
+        expect(copyDecision({ ...base, d16Started: true })).toEqual({ action: 'abort', reason: D16_UNFINISHED });
+        expect(copyDecision({ ...base, d16Started: true, d16Deleted: true }).action).toBe('skip-d16-deleted');
+        expect(copyDecision({ ...base, rows: 'referenced', rowsElsewhere: 2 }).reason).toMatch(/2 of its documents row\(s\) name neither/);
+        expect(copyDecision({ ...base, rows: 'referenced', rowsElsewhere: 0 }).action).toBe('skip-identical');
     });
 
     it('verify: a user-deleted object is not a failure, a missing copy of a live one is', () => {
@@ -253,14 +293,38 @@ describe('user-deleted detection (no resurrection)', () => {
         expect(verifyStatus({ rows: 'rows-partial', userDeleted: false, copy: 'identical' })).toMatch(/^fail/);
     });
 
+    it('verify: rows that name neither the copy nor the original fail it (a revert applied twice)', () => {
+        expect(verifyStatus({ rows: 'referenced', userDeleted: false, rowsElsewhere: 4, copy: 'identical' }))
+            .toMatch(/^fail: 4 of its documents row\(s\) name neither its copy nor its original/);
+        expect(verifyStatus({ rows: 'referenced', userDeleted: false, rowsElsewhere: 0, copy: 'identical' })).toBe('ok');
+    });
+
     it('restore: puts a missing original back from the copy, else the backup, never a user-deleted one', () => {
         const base = { rows: 'referenced', userDeleted: false, original: 'absent', copy: 'identical', backupOk: true } as const;
         expect(restoreDecision(base).action).toBe('from-copy');
         expect(restoreDecision({ ...base, copy: 'absent' }).action).toBe('from-backup');
+        expect(restoreDecision({ ...base, copy: 'different' }).action).toBe('from-backup');
         expect(restoreDecision({ ...base, copy: 'different', backupOk: false }).action).toBe('abort');
         expect(restoreDecision({ ...base, original: 'present' }).action).toBe('skip-present');
         expect(restoreDecision({ ...base, rows: 'user-deleted' }).action).toBe('skip-user-deleted');
         expect(restoreDecision({ ...base, userDeleted: true }).action).toBe('skip-user-deleted');
+    });
+
+    it('restore: adopts an original an interrupted run wrote when it matches, else a human looks', () => {
+        const base = { rows: 'referenced', userDeleted: false, original: 'changed', copy: 'absent', backupOk: false } as const;
+        expect(restoreDecision({ ...base, originalMatches: true }).action).toBe('adopt');
+        expect(restoreDecision({ ...base, originalMatches: false }).action).toBe('abort');
+        expect(restoreDecision(base).action).toBe('abort');
+        // Never for an entry deleted by a user or removed under D16.
+        expect(restoreDecision({ ...base, originalMatches: true, userDeleted: true }).action).toBe('skip-user-deleted');
+        expect(restoreDecision({ ...base, originalMatches: true, d16Deleted: true }).action).toBe('skip-d16-deleted');
+    });
+
+    it('restore: refuses while a D16 removal is unfinished (never brings a D16 duplicate back)', () => {
+        const base = { rows: 'unreferenced', userDeleted: false, original: 'absent', copy: 'absent', backupOk: true } as const;
+        expect(restoreDecision({ ...base, d16Started: true })).toEqual({ action: 'abort', reason: D16_UNFINISHED });
+        expect(restoreDecision({ ...base, d16Started: true, d16Deleted: true }).action).toBe('skip-d16-deleted');
+        expect(restoreDecision(base).action).toBe('from-backup');
     });
 });
 
@@ -337,7 +401,15 @@ describe('remove-copies (rollback before delete-originals)', () => {
         expect(removeCopyDecision({ ...base, copy: 'different' }).action).toBe('abort');
         expect(removeCopyDecision({ ...base, rowsPointAtCopy: 2 }).reason).toMatch(/revert the 0066 relink first/);
         expect(removeCopyDecision({ ...base, original: 'absent' }).reason).toMatch(/restore first/);
-        expect(removeCopyDecision({ ...base, original: 'changed' }).action).toBe('abort');
+        expect(removeCopyDecision({ ...base, original: 'changed' })).toMatchObject({ action: 'abort', reason: CHANGED_ORIGINAL });
+    });
+
+    it('stops when manifest rows name neither the copy nor the original (a revert applied twice)', () => {
+        expect(removeCopyDecision({ ...base, rowsElsewhere: 4 })).toMatchObject({
+            action: 'abort', removeCopy: false, removeOriginal: false,
+        });
+        expect(removeCopyDecision({ ...base, rowsElsewhere: 4 }).reason).toMatch(/name neither its copy nor its original/);
+        expect(removeCopyDecision({ ...base, rowsElsewhere: 0 }).action).toBe('remove');
     });
 
     it('removes whatever is left of a KB entry deleted by the user: its copy and its original', () => {
@@ -407,7 +479,9 @@ describe('delete-originals per entry', () => {
         expect(deleteOriginalDecision({ ...base, d16Deleted: true }).action).toBe('skip');
         expect(deleteOriginalDecision({ ...base, onlyUserDeleted: true }).action).toBe('skip');
         expect(deleteOriginalDecision({ ...base, onlyUserDeleted: true, userDeleted: true }).action).toBe('remove');
-        expect(deleteOriginalDecision({ ...base, original: 'changed' }).action).toBe('refuse');
+        expect(deleteOriginalDecision({ ...base, original: 'changed' })).toMatchObject({ action: 'refuse', reason: CHANGED_ORIGINAL });
+        // The refusal names the way out after an interrupted restore.
+        expect(CHANGED_ORIGINAL).toMatch(/run --phase=restore again/);
     });
 });
 
@@ -523,5 +597,45 @@ describe('logging and manifest', () => {
         expect(manifestProblems(m({ ...okEntry, d16_deleted_at: '2026-10-20T10:00:00Z', user_deleted_at: null }), { ref: 'p' })).toEqual([]);
         expect(manifestProblems(m({ ...okEntry, d16_deleted_at: 'besok' }), { ref: 'p' })).toHaveLength(1);
         expect(manifestProblems(m({ ...okEntry, user_deleted_at: 42 }), { ref: 'p' })).toHaveLength(1);
+        // Row ids end up in the revert SQL: uuids only.
+        expect(manifestProblems(m({ ...okEntry, row_ids: ['d0000000-0000-4000-8000-000000000001'] }), { ref: 'p' })).toEqual([]);
+        expect(manifestProblems(m({ ...okEntry, row_ids: ["x'); drop table x; --"] }), { ref: 'p' })).toHaveLength(1);
+        expect(manifestProblems(m({ ...okEntry, row_ids: [7] }), { ref: 'p' })).toHaveLength(1);
+    });
+});
+
+describe('revert SQL (rollback step 3)', () => {
+    const ids = ['d0000000-0000-4000-8000-000000000001', 'd0000000-0000-4000-8000-000000000002'];
+    const sql = revertSql({ seedOrgId: SEED, rowIds: ids, projectRef: 'local-58821', plannedAt: '2026-10-16T15:00:00Z' });
+    const body = sql.split('\n').filter((l) => !l.startsWith('--')).join('\n');
+
+    it('recreates the 0038 policy text', () => {
+        expect(body).toContain('drop policy if exists "documents bucket org members" on storage.objects;');
+        expect(body).toContain(
+            `using (bucket_id = 'documents' and private.is_org_member(coalesce((storage.foldername(name))[1], '${SEED}')::uuid))`
+        );
+        expect(body).toContain(
+            `with check (bucket_id = 'documents' and private.is_org_member(coalesce((storage.foldername(name))[1], '${SEED}')::uuid));`
+        );
+    });
+
+    it('points back only the manifest rows, and only while they still name the copy (idempotent)', () => {
+        expect(body).toContain(`substr(metadata->>'source', ${SEED.length + 2})`);
+        expect(SEED.length + 2).toBe(38);
+        expect(body).toContain(`where id = any (array['${ids[0]}', '${ids[1]}']::uuid[])`);
+        expect(body).toContain(`and starts_with(metadata->>'source', '${SEED}/');`);
+        // The statements are the only non-comment lines.
+        expect(body.match(/;/g)).toHaveLength(3);
+    });
+
+    it('refuses ids that are not uuids and an empty row list', () => {
+        expect(() => revertSql({ seedOrgId: SEED, rowIds: ["x') or true --"], projectRef: 'p', plannedAt: 't' })).toThrow(/not a uuid/);
+        expect(() => revertSql({ seedOrgId: SEED, rowIds: [], projectRef: 'p', plannedAt: 't' })).toThrow(/no documents row/);
+        expect(() => revertSql({ seedOrgId: 'seed', rowIds: ids, projectRef: 'p', plannedAt: 't' })).toThrow(/seed org id/);
+    });
+
+    it('is a read-only phase', () => {
+        expect(parseArgs(['--phase=revert-sql', '--expect-ref=a', '--out=/x']).errors).toEqual([]);
+        expect(parseArgs(['--phase=revert-sql', '--expect-ref=a', '--out=/x', '--confirm']).errors).toHaveLength(1);
     });
 });

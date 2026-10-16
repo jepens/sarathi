@@ -12,12 +12,23 @@ export const BUCKET = 'documents';
 export const SEED_ORG_ID = '5a11e024-0001-4000-8000-000000000001';
 /** Same pattern as the CASE guard of the storage policies (0058 / 0066). */
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-export const PHASES = ['plan', 'copy', 'verify', 'delete-originals', 'restore', 'remove-copies'];
+export const PHASES = ['plan', 'copy', 'verify', 'delete-originals', 'restore', 'remove-copies', 'revert-sql'];
 /** Phases that change Storage when run with --confirm (dry-run without it). */
 export const WRITE_PHASES = new Set(['copy', 'delete-originals', 'restore', 'remove-copies']);
 export const DEFAULT_SOAK_HOURS = 72;
 export const MANIFEST_KIND = 'sarathi-legacy-kb-objects';
 export const MANIFEST_VERSION = 1;
+/**
+ * Why a phase refuses a root-level object under a manifest name whose object
+ * id the manifest does not know. The likely cause is a restore that wrote the
+ * object but stopped before recording it; restore adopts such an object when
+ * it matches the manifest.
+ */
+export const CHANGED_ORIGINAL =
+    'the root-level object under this name is not the one in the manifest ' +
+    '(if a restore was interrupted, run --phase=restore again: it records a matching object)';
+/** Why copy and restore refuse an entry whose D16 removal did not finish. */
+export const D16_UNFINISHED = 'its D16 removal was interrupted: run --phase=remove-copies --unreferenced-only again first';
 
 /**
  * Command line: --phase=<p> --expect-ref=<ref> --out=<dir> [--confirm]
@@ -448,19 +459,54 @@ export function rowState(manifestRowIds, liveRowIds) {
 }
 
 /**
+ * Where the live documents rows of one manifest entry point: at its copy
+ * (relinked by 0066), at its original (the root-level name: before 0066, or
+ * after a revert), or anywhere else. 'elsewhere' should never happen; it
+ * means the rows were changed outside this procedure (for example a revert
+ * applied twice cut their source), and every phase that relies on the rows
+ * refuses while it is not 0.
+ * @param {string[]} rowIds the entry's manifest row ids
+ * @param {Map<string, DocRow>} rowsById live documents rows
+ * @param {string} name the entry's root-level name
+ * @param {string} dest the entry's copy
+ */
+export function rowSources(rowIds, rowsById, name, dest) {
+    const res = { live: 0, relinked: 0, root: 0, elsewhere: 0 };
+    for (const id of rowIds) {
+        const row = rowsById.get(id);
+        if (!row) continue;
+        res.live++;
+        const src = metadataText(row.metadata, 'source');
+        if (src === dest) res.relinked++;
+        else if (src === name) res.root++;
+        else res.elsewhere++;
+    }
+    return res;
+}
+
+/** @param {number} n */
+const rowsElsewhereReason = (n) =>
+    `${n} of its documents row(s) name neither its copy nor its original (changed outside this procedure, ` +
+    'for example a revert applied twice); a human looks';
+
+/**
  * copy phase, per object. An entry deleted by a user or removed under D16
- * (owner decision, remove-copies --unreferenced-only) is never copied again.
- * @param {{ rows: string, userDeleted: boolean, d16Deleted?: boolean, dest: 'absent'|'identical'|'different',
+ * (owner decision, remove-copies --unreferenced-only) is never copied again,
+ * and an entry whose D16 removal did not finish waits for it.
+ * @param {{ rows: string, userDeleted: boolean, d16Deleted?: boolean, d16Started?: boolean,
+ *           rowsElsewhere?: number, dest: 'absent'|'identical'|'different',
  *           original: 'present'|'absent'|'changed' }} s
  * @returns {{ action: 'copy'|'skip-identical'|'skip-user-deleted'|'skip-d16-deleted'|'abort', reason?: string }}
  */
 export function copyDecision(s) {
     if (s.userDeleted || s.rows === 'user-deleted') return { action: 'skip-user-deleted' };
     if (s.d16Deleted) return { action: 'skip-d16-deleted' };
+    if (s.d16Started) return { action: 'abort', reason: D16_UNFINISHED };
     if (s.rows === 'rows-partial') return { action: 'abort', reason: 'only some of its documents rows still exist' };
+    if ((s.rowsElsewhere ?? 0) > 0) return { action: 'abort', reason: rowsElsewhereReason(/** @type {number} */ (s.rowsElsewhere)) };
     if (s.dest === 'different') return { action: 'abort', reason: 'the destination exists with different content' };
     if (s.dest === 'identical') return { action: 'skip-identical' };
-    if (s.original === 'changed') return { action: 'abort', reason: 'the original was replaced since the plan' };
+    if (s.original === 'changed') return { action: 'abort', reason: CHANGED_ORIGINAL };
     if (s.original === 'absent') return { action: 'abort', reason: 'the original is missing (run --phase=restore first)' };
     return { action: 'copy' };
 }
@@ -469,12 +515,13 @@ export function copyDecision(s) {
  * verify phase, per object. Neither an entry deleted by a user nor one removed
  * under D16 needs its copy, so neither is a failure.
  * @param {{ rows: string, userDeleted: boolean, d16Deleted?: boolean, d16Started?: boolean,
- *           copy: 'identical'|'absent'|'different' }} s
+ *           rowsElsewhere?: number, copy: 'identical'|'absent'|'different' }} s
  */
 export function verifyStatus(s) {
     if (s.userDeleted || s.rows === 'user-deleted') return 'user-deleted';
     if (s.d16Deleted) return 'd16-deleted';
     if (s.rows === 'rows-partial') return 'fail: only some of its documents rows still exist';
+    if ((s.rowsElsewhere ?? 0) > 0) return `fail: ${rowsElsewhereReason(/** @type {number} */ (s.rowsElsewhere))}`;
     if (s.copy === 'absent') {
         return s.d16Started
             ? 'fail: the copy is missing (a D16 removal was interrupted: run remove-copies --unreferenced-only again)'
@@ -486,15 +533,30 @@ export function verifyStatus(s) {
 
 /**
  * restore phase, per object: puts a missing original back, from the copy
- * when it is intact, else from the byte backup. Never for an entry deleted by
- * a user or removed under D16.
- * @param {{ rows: string, userDeleted: boolean, d16Deleted?: boolean, original: 'present'|'absent'|'changed',
+ * when it is intact (identical to the manifest), else from the byte backup.
+ * Never for an entry deleted by a user or removed under D16, and not while a
+ * D16 removal is unfinished.
+ * A root-level object under the name that the manifest does not know
+ * ('changed') is most likely one an earlier restore wrote but did not record
+ * (it stopped in between): it is adopted (its id recorded) when it matches
+ * the manifest's size, content type and sha256 (originalMatches), else a
+ * human looks.
+ * @param {{ rows: string, userDeleted: boolean, d16Deleted?: boolean, d16Started?: boolean,
+ *           original: 'present'|'absent'|'changed', originalMatches?: boolean,
  *           copy: 'identical'|'absent'|'different', backupOk: boolean }} s
+ * @returns {{ action: 'from-copy'|'from-backup'|'adopt'|'skip-present'|'skip-user-deleted'|'skip-d16-deleted'|'abort',
+ *             reason?: string }}
  */
 export function restoreDecision(s) {
     if (s.userDeleted || s.rows === 'user-deleted') return { action: 'skip-user-deleted' };
     if (s.d16Deleted) return { action: 'skip-d16-deleted' };
-    if (s.original !== 'absent') return { action: 'skip-present' };
+    if (s.d16Started) return { action: 'abort', reason: D16_UNFINISHED };
+    if (s.original === 'changed') {
+        return s.originalMatches
+            ? { action: 'adopt' }
+            : { action: 'abort', reason: 'the root-level object under this name is not the one in the manifest and does not match it; a human looks' };
+    }
+    if (s.original === 'present') return { action: 'skip-present' };
     if (s.copy === 'identical') return { action: 'from-copy' };
     if (s.backupOk) return { action: 'from-backup' };
     return { action: 'abort', reason: 'neither an intact copy nor an intact backup is left' };
@@ -640,9 +702,7 @@ export function deleteOriginalDecision(s) {
     const none = { removeOriginal: false, removeCopy: false, recheckCopy: false };
     if (s.d16Deleted) return { action: 'skip', ...none, reason: 'removed under D16' };
     if (s.onlyUserDeleted && !s.userDeleted) return { action: 'skip', ...none, reason: 'not deleted by a user' };
-    if (s.original === 'changed') {
-        return { action: 'refuse', ...none, reason: 'the root-level object under this name is not the one in the manifest' };
-    }
+    if (s.original === 'changed') return { action: 'refuse', ...none, reason: CHANGED_ORIGINAL };
     const removeOriginal = s.original === 'present';
     return {
         action: 'remove',
@@ -662,9 +722,11 @@ export function deleteOriginalDecision(s) {
  *   original, so it ends with neither (the original would be readable again
  *   once the 0038 fallback returns);
  * - entry removed under D16: never touched.
- * Any abort stops the whole run before the first write.
+ * Any abort stops the whole run before the first write: a copy that no longer
+ * matches the manifest, rows that still point at the copy, or manifest rows
+ * that name neither the copy nor the original (rowsElsewhere).
  * @param {{ userDeleted: boolean, d16Deleted?: boolean, original: 'present'|'absent'|'changed',
- *           copy: 'identical'|'absent'|'different', rowsPointAtCopy: number }} s
+ *           copy: 'identical'|'absent'|'different', rowsPointAtCopy: number, rowsElsewhere?: number }} s
  * @returns {{ action: 'remove'|'skip-absent'|'skip-d16-deleted'|'abort', removeCopy: boolean,
  *             removeOriginal: boolean, reason?: string }}
  */
@@ -673,18 +735,21 @@ export function removeCopyDecision(s) {
     /** @param {string} reason */
     const abort = (reason) => ({ action: /** @type {const} */ ('abort'), ...none, reason });
     if (s.d16Deleted) return { action: 'skip-d16-deleted', ...none };
-    if (s.copy === 'different') return abort('the copy no longer matches the manifest');
+    if ((s.rowsElsewhere ?? 0) > 0) return abort(rowsElsewhereReason(/** @type {number} */ (s.rowsElsewhere)));
+    if (s.copy === 'different') {
+        return abort('the copy no longer matches the manifest (a human inspects it: runbook, when a step refuses)');
+    }
     if (s.copy === 'identical' && s.rowsPointAtCopy > 0) {
         return abort(`${s.rowsPointAtCopy} documents row(s) still point at the copy (revert the 0066 relink first)`);
     }
     if (s.userDeleted) {
-        if (s.original === 'changed') return abort('the root-level object under this name is not the one in the manifest');
+        if (s.original === 'changed') return abort(CHANGED_ORIGINAL);
         const removeCopy = s.copy === 'identical';
         const removeOriginal = s.original === 'present';
         return removeCopy || removeOriginal ? { action: 'remove', removeCopy, removeOriginal } : { action: 'skip-absent', ...none };
     }
     if (s.copy === 'absent') return { action: 'skip-absent', ...none };
-    if (s.original === 'changed') return abort('the root-level object under this name is not the one in the manifest');
+    if (s.original === 'changed') return abort(CHANGED_ORIGINAL);
     if (s.original !== 'present') return abort('the original is not in place (run --phase=restore first)');
     return { action: 'remove', removeCopy: true, removeOriginal: false };
 }
@@ -707,9 +772,7 @@ export function d16Decision(s) {
     if (s.rowIds > 0) return { action: 'skip-referenced' };
     if (s.userDeleted) return { action: 'skip-user-deleted' };
     if (s.d16Deleted) return { action: 'skip-done' };
-    if (s.original === 'changed') {
-        return { action: 'abort', reason: 'the root-level object under this name is not the one in the manifest' };
-    }
+    if (s.original === 'changed') return { action: 'abort', reason: CHANGED_ORIGINAL };
     if (s.original === 'present') {
         return { action: 'abort', reason: 'the original is still in place (D16 comes after delete-originals)' };
     }
@@ -719,6 +782,44 @@ export function d16Decision(s) {
     }
     if (s.rowsPointAtCopy > 0) return { action: 'abort', reason: `${s.rowsPointAtCopy} documents row(s) name the copy` };
     return { action: 'remove' };
+}
+
+/**
+ * The SQL of rollback step 3 (runbook, "Rollback per tahap"), from the
+ * manifest: it recreates the 0038 policy text and points the manifest's
+ * documents rows back at their root-level name. It replaces the rollback
+ * text in the 0066 header (that file is applied and never changes): its
+ * UPDATE only touches a row whose source still starts with '<seed org>/', so
+ * a second run changes nothing, where the header's version cuts 37 more
+ * characters off every source. Holds row ids, never an object name.
+ * @param {{ seedOrgId: string, rowIds: string[], projectRef: string, plannedAt: string }} s
+ */
+export function revertSql(s) {
+    if (!UUID_RE.test(s.seedOrgId)) throw new Error('the seed org id is not a uuid');
+    if (!s.rowIds.length) throw new Error('the manifest has no documents row to point back');
+    for (const id of s.rowIds) {
+        if (!UUID_RE.test(id)) throw new Error('a manifest row id is not a uuid');
+    }
+    const prefix = `${s.seedOrgId}/`;
+    const fallback = `coalesce((storage.foldername(name))[1], '${s.seedOrgId}')::uuid`;
+    return [
+        `-- Revert of migration 0066 for project ${s.projectRef} (manifest planned ${s.plannedAt}),`,
+        '-- generated by scripts/migrate-legacy-kb-objects.mjs --phase=revert-sql (runbook docs/RUNBOOK_LEGACY_KB_OBJECTS.md,',
+        '-- "Rollback per tahap", step 3). It recreates the 0038 policy text and points ONLY the manifest\'s',
+        `-- ${s.rowIds.length} documents rows back at their root-level name. Idempotent: a second run changes nothing.`,
+        '-- Try it first inside begin; ... rollback; then apply it once as the next migration. After an unclear',
+        '-- result, look in supabase_migrations.schema_migrations before any retry. Check it with --phase=verify.',
+        'drop policy if exists "documents bucket org members" on storage.objects;',
+        'create policy "documents bucket org members" on storage.objects',
+        '  for all to authenticated',
+        `  using (bucket_id = 'documents' and private.is_org_member(${fallback}))`,
+        `  with check (bucket_id = 'documents' and private.is_org_member(${fallback}));`,
+        'update public.documents',
+        `   set metadata = jsonb_set(metadata, '{source}', to_jsonb(substr(metadata->>'source', ${prefix.length + 1})))`,
+        ` where id = any (array[${s.rowIds.map((id) => `'${id}'`).join(', ')}]::uuid[])`,
+        `   and starts_with(metadata->>'source', '${prefix}');`,
+        '',
+    ].join('\n');
 }
 
 /** @param {Uint8Array} buf */
@@ -785,6 +886,7 @@ export function manifestProblems(m, expected) {
             typeof o.sha256 === 'string' &&
             /^[0-9a-f]{64}$/.test(o.sha256) &&
             Array.isArray(o.row_ids) &&
+            o.row_ids.every((/** @type {unknown} */ id) => typeof id === 'string' && UUID_RE.test(id)) &&
             // Exactly the form the plan writes: a manifest entry can never point
             // restore at a file outside --out/backup.
             o.backup_file === backupFileFor(i + 1, o.id) &&
