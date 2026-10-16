@@ -33,25 +33,28 @@
 --        fallback of 0061 is gone; the code fallback was removed in the same
 --        PR, lib/settings/platform-settings.ts).
 --
--- Deploy order (production auto-deploys the app from `main`,
--- docs/VPS_DEPLOYMENT.md, so "deploy the code" means "merge the PR"):
+-- Deploy order (a merge to `main` does NOT deploy: the app service is
+-- redeployed manually in Easypanel):
 --   1. apply 0061_tenant_schema_expand with apply_migration, using the LF git
 --      blob of the file (.gitattributes forces LF for supabase/**/*.sql), so
 --      body_md5 matches expected-diff.txt. 0061 is compatible with the code
---      on main.
+--      on main. (Done 2026-10-16.)
 --   2. in the PR: refresh fingerprint/production.txt, delete the 0061 pending
 --      block of expected-diff.txt and un-comment the two prepared '<' fn lines
 --      (sync_vendor_from_contact, verify_webhook_token) in the 0062 block;
---      compare.sh must pass with only the 0062 block left.
---   3. merge the PR: the merge auto-deploys the code. Confirm that every
---      instance (the app AND the cron caller container) runs the new build.
+--      compare.sh must pass with only the 0062 block left. (Done 2026-10-16.)
+--   3. merge the PR, redeploy the app service in Easypanel and confirm the new
+--      build is live (the Next.js build id in the page payload changes). The
+--      cron service (deploy/cron) only curls /api/queue/process and runs no
+--      app code: no redeploy needed.
 --   4. only then apply THIS migration (0062) with apply_migration (LF blob).
 --   5. follow-up PR: refresh production.txt and delete the 0062 pending block.
--- NEVER apply 0062 while `main` (the live code) lacks commit bd72dac
--- ("tenant schema contract", the explicit-org_id sweep) and its follow-ups:
--- the old code is NOT compatible with it (lib/proposals/send.ts inserts
--- proposals without org_id -> 23502; the digest upserts app_settings with
--- onConflict 'key' after app_settings_key_key is gone -> 42P10).
+-- NEVER apply 0062 while the live build lacks PR #41 (squash-merged; branch
+-- commits bd72dac "tenant schema contract", the explicit-org_id sweep, and
+-- its follow-ups): the old code is NOT compatible with it
+-- (lib/proposals/send.ts inserts proposals without org_id -> 23502; the
+-- digest upserts app_settings with onConflict 'key' after
+-- app_settings_key_key is gone -> 42P10).
 --
 -- Rollback (only together with rolling the code back to main, schema first):
 --   alter table public.<each of the 13 tables> alter column org_id
