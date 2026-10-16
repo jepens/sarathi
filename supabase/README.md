@@ -45,7 +45,8 @@ function is executable by anon or is new to the reviewed list for
 any privilege on a table, view or sequence in `public` (guard 11), a
 `realtime.messages` policy is more than "members receive their joined org
 topic" (guard 12, see "Realtime org bus" below) or a unique key on an org_id
-table leaves out `org_id` (guard 13), so a forgotten test is often caught
+table, primary keys included unless made only of surrogate columns, leaves
+`org_id` out of its key columns (guard 13), so a forgotten test is often caught
 anyway. Guard 13 has two reviewed global keys: `push_subscriptions_endpoint_key`
 (one row per browser endpoint: the device follows whoever is signed in on it
 now, owner decision D19; `register_push_subscription`, 0065, moves it) and
@@ -109,6 +110,9 @@ stops the `supabase_*_sarathi` containers; never use `--all`.
   fails (it never skips): run `npx supabase db reset`.
   `tests.realtime_join_as(user, topic)` simulates Realtime's join check
   (the user's role and claims plus `realtime.topic`; a null user = anon key).
+  Its behaviour block tells messages apart by id, not by `inserted_at`
+  (production's default is `now()`, newer Realtime images use
+  `clock_timestamp()`).
 
 ## Realtime org bus (0064)
 
@@ -127,7 +131,10 @@ filters chosen by the client do not isolate tenants.
   topic under this policy. The topic equality is required: `realtime.send`
   runs `SET LOCAL realtime.topic`, so the setting stays for the rest of a
   writer's transaction. No INSERT/UPDATE/DELETE policy exists, so clients
-  cannot send.
+  cannot send. Realtime caches this check per channel until the client sends
+  a new JWT (at most `jwt_expiry`, 3600 s): a member removed from the org
+  keeps receiving id/count signals until then; row data still flows only
+  through PostgREST under RLS.
 - **Who sends.** `private.broadcast_org_changes()`, from 15 statement-level
   triggers (`trg_org_broadcast_ins` / `_upd` / `_del`) on `whatsapp_chats`,
   `whatsapp_messages`, `labels`, `chat_labels` and `orders`: one
@@ -154,6 +161,13 @@ filters chosen by the client do not isolate tenants.
   row in the trigger check of `150`; never add it to the `supabase_realtime`
   publication (the contract migration 0068, after the client deploy,
   empties it).
+- **Verify after applying 0064** (read-only): 15 rows in `pg_trigger` with
+  `tgname like 'trg_org_broadcast_%'`; exactly one policy on
+  `realtime.messages`; `private.broadcast_org_changes` is SECURITY DEFINER
+  and executable by no API role. After the next inbound WhatsApp message,
+  `select count(*), count(distinct topic) from realtime.messages where topic
+  like 'org:%' and inserted_at > now() - interval '15 minutes'` returns rows
+  on one topic, and the queue jobs still complete (writes unaffected).
 
 ## Migration naming and ordering
 

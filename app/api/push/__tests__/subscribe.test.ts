@@ -110,9 +110,18 @@ describe('POST /api/push/subscribe', () => {
         expect(await res.json()).toEqual({ error: NO_ORG_MESSAGE });
     });
 
+    it('answers 400 when the RPC refuses the input (22023)', async () => {
+        h.rpc.mockResolvedValue({ data: null, error: { code: '22023', message: 'invalid push subscription' } });
+
+        const res = await POST(req(subscription));
+
+        expect(res.status).toBe(400);
+        expect(await res.json()).toEqual({ error: 'Missing subscription fields' });
+    });
+
     it('keeps 500 for any other RPC error', async () => {
         const log = vi.spyOn(console, 'error').mockImplementation(() => {});
-        h.rpc.mockResolvedValue({ data: null, error: { code: '22023', message: 'invalid push subscription' } });
+        h.rpc.mockResolvedValue({ data: null, error: { code: 'XX000', message: 'internal error' } });
 
         const res = await POST(req(subscription));
 

@@ -100,10 +100,26 @@ select ok(tests.realtime_partition_ready(),
 -- 3. Behaviour
 -- ---------------------------------------------------------------------------
 
--- The messages sent on the two fixture orgs' topics since p_mark (inserted_at
--- is UTC clock time), one sorted line each: '<A|B> <event> <op> n=<n> ids=<k>'.
--- Call as postgres (BYPASSRLS).
-create function tests._150_sent_since(p_mark timestamp) returns text[]
+-- Messages are told apart by id, not by time: realtime.send leaves
+-- inserted_at to the column default, which is now() (the transaction start)
+-- in production and clock_timestamp() only in newer Realtime images, so a
+-- time window inside this one transaction would depend on the image.
+-- The ids of the messages on the two fixture orgs' topics so far. SECURITY
+-- DEFINER (owner postgres, BYPASSRLS): it is called while a member is
+-- authenticated, and RLS would hide the earlier messages from that member.
+create function tests._150_seen() returns text[]
+language sql
+security definer
+set search_path = ''
+as $$
+    select coalesce(array_agg(m.id::text), '{}')
+    from realtime.messages m
+    where m.topic in ('org:' || tests.org_a()::text, 'org:' || tests.org_b()::text);
+$$;
+
+-- The messages on those topics that are not in p_seen, one sorted line each:
+-- '<A|B> <event> <op> n=<n> ids=<k>'. Call as postgres (BYPASSRLS).
+create function tests._150_sent_after(p_seen text[]) returns text[]
 language sql
 as $$
     select coalesce(array_agg(line order by line), '{}')
@@ -113,7 +129,7 @@ as $$
                       m.event, m.payload ->> 'op', m.payload ->> 'n',
                       jsonb_array_length(m.payload -> 'ids')) as line
         from realtime.messages m
-        where m.inserted_at >= p_mark
+        where not (m.id::text = any (p_seen))
           and m.topic in ('org:' || tests.org_a()::text, 'org:' || tests.org_b()::text)
     ) s;
 $$;
@@ -126,7 +142,7 @@ as $$
 declare
     v_a     text := 'org:' || tests.org_a()::text;
     v_b     text := 'org:' || tests.org_b()::text;
-    v_mark  timestamp;
+    v_seen  text[];
     v_ids   text[];
     v_msg   realtime.messages;
     v_n     integer;
@@ -139,7 +155,7 @@ begin
 
     -- A. A member's 2-row insert: ONE message, on the writer's org topic.
     perform tests.authenticate_as(tests.user_a1());
-    v_mark := timezone('utc', clock_timestamp());
+    v_seen := tests._150_seen();
     with ins as (
         insert into public.whatsapp_messages (org_id, phone_number, role, content)
         values (tests.org_a(), '628111', 'user', 'satu'),
@@ -149,10 +165,10 @@ begin
     select array_agg(id::text order by id::text) into v_ids from ins;
     perform tests.clear_authentication();
 
-    return next is(tests._150_sent_since(v_mark), array['A whatsapp_messages INSERT n=2 ids=2'],
+    return next is(tests._150_sent_after(v_seen), array['A whatsapp_messages INSERT n=2 ids=2'],
         'a member''s 2-row insert sends ONE message, on its own org''s topic (none on org B)');
     select m.* into v_msg from realtime.messages m
-    where m.inserted_at >= v_mark and m.topic = v_a;
+    where not (m.id::text = any (v_seen)) and m.topic = v_a;
     return next ok(v_msg.extension = 'broadcast' and v_msg.private,
         'it is a private broadcast message');
     return next is(array(select jsonb_object_keys(v_msg.payload) order by 1),
@@ -166,84 +182,84 @@ begin
 
     -- B. Updates: no row, no message; one row, one message without the phone.
     perform tests.authenticate_as(tests.user_a1());
-    v_mark := timezone('utc', clock_timestamp());
+    v_seen := tests._150_seen();
     update public.whatsapp_chats set unread_count = 0 where unread_count > 0;
     perform tests.clear_authentication();
-    return next is(tests._150_sent_since(v_mark), '{}'::text[],
+    return next is(tests._150_sent_after(v_seen), '{}'::text[],
         'an UPDATE that matches no row (markChatRead on a read chat) sends nothing');
 
     perform tests.authenticate_as(tests.user_a1());
-    v_mark := timezone('utc', clock_timestamp());
+    v_seen := tests._150_seen();
     update public.whatsapp_chats set notes = 'catatan' where phone_number = '628111';
     perform tests.clear_authentication();
-    return next is(tests._150_sent_since(v_mark), array['A whatsapp_chats UPDATE n=1 ids=0'],
+    return next is(tests._150_sent_after(v_seen), array['A whatsapp_chats UPDATE n=1 ids=0'],
         'a member''s 1-row update sends one message; whatsapp_chats ids are [] (its key holds the phone)');
     select m.* into v_msg from realtime.messages m
-    where m.inserted_at >= v_mark and m.topic = v_a;
+    where not (m.id::text = any (v_seen)) and m.topic = v_a;
     return next ok(strpos(v_msg.payload::text, '628111') = 0,
         'the payload does not carry the phone number');
 
     -- C. One statement touching two orgs: one message per org.
     perform tests.authenticate_as_service_role();
-    v_mark := timezone('utc', clock_timestamp());
+    v_seen := tests._150_seen();
     update public.whatsapp_chats set notes = 'semua' where phone_number = '628111';
     perform tests.clear_authentication();
-    return next is(tests._150_sent_since(v_mark),
+    return next is(tests._150_sent_after(v_seen),
         array['A whatsapp_chats UPDATE n=1 ids=0', 'B whatsapp_chats UPDATE n=1 ids=0'],
         'a statement that touches two orgs sends one message to each org');
 
     -- D. Labels: a chat_labels insert, then a label delete that cascades.
     perform tests.authenticate_as(tests.user_a1());
-    v_mark := timezone('utc', clock_timestamp());
+    v_seen := tests._150_seen();
     insert into public.chat_labels (org_id, phone_number, label_id)
     values (tests.org_a(), '628111', 'aaaaaaaa-1abe-4000-8000-00000000000a');
     perform tests.clear_authentication();
-    return next is(tests._150_sent_since(v_mark), array['A chat_labels INSERT n=1 ids=0'],
+    return next is(tests._150_sent_after(v_seen), array['A chat_labels INSERT n=1 ids=0'],
         'assigning a label sends one chat_labels message');
 
     perform tests.authenticate_as(tests.user_a1());
-    v_mark := timezone('utc', clock_timestamp());
+    v_seen := tests._150_seen();
     delete from public.labels where id = 'aaaaaaaa-1abe-4000-8000-00000000000a';
     perform tests.clear_authentication();
-    return next is(tests._150_sent_since(v_mark),
+    return next is(tests._150_sent_after(v_seen),
         array['A chat_labels DELETE n=1 ids=0', 'A labels DELETE n=1 ids=1'],
         'deleting a label sends a labels DELETE and, for the FK cascade, one chat_labels DELETE');
 
     -- E. delete_contact_cascade (0047, SECURITY DEFINER): one message per table.
     perform tests.authenticate_as(tests.user_a1());
-    v_mark := timezone('utc', clock_timestamp());
+    v_seen := tests._150_seen();
     perform public.delete_contact_cascade(tests.org_a(), '628111');
     perform tests.clear_authentication();
-    return next is(tests._150_sent_since(v_mark),
+    return next is(tests._150_sent_after(v_seen),
         array['A whatsapp_chats DELETE n=1 ids=0', 'A whatsapp_messages DELETE n=2 ids=2'],
         'delete_contact_cascade sends one whatsapp_messages DELETE and one whatsapp_chats DELETE');
 
     -- F. Service-role writers (webhook, queue, AI tools) broadcast too.
     perform tests.authenticate_as_service_role();
-    v_mark := timezone('utc', clock_timestamp());
+    v_seen := tests._150_seen();
     insert into public.whatsapp_chats (org_id, phone_number) values (tests.org_b(), '628222');
     insert into public.orders (org_id, customer_phone, customer_name)
     values (tests.org_b(), '628222', 'Pelanggan B');
     perform tests.clear_authentication();
-    return next is(tests._150_sent_since(v_mark),
+    return next is(tests._150_sent_after(v_seen),
         array['B orders INSERT n=1 ids=1', 'B whatsapp_chats INSERT n=1 ids=0'],
         'service-role inserts into whatsapp_chats and orders each send one message on the row''s org');
 
     perform tests.authenticate_as_service_role();
-    v_mark := timezone('utc', clock_timestamp());
+    v_seen := tests._150_seen();
     insert into public.whatsapp_chats (org_id, phone_number, contact_name)
     values (tests.org_b(), '628222', 'Budi')
     on conflict (org_id, phone_number) do update set contact_name = excluded.contact_name;
     perform tests.clear_authentication();
-    return next is(tests._150_sent_since(v_mark), array['B whatsapp_chats UPDATE n=1 ids=0'],
+    return next is(tests._150_sent_after(v_seen), array['B whatsapp_chats UPDATE n=1 ids=0'],
         'an upsert sends exactly one message (only one of its two statement triggers has rows)');
 
     perform tests.authenticate_as_service_role();
-    v_mark := timezone('utc', clock_timestamp());
+    v_seen := tests._150_seen();
     insert into public.whatsapp_messages (org_id, phone_number, role, content)
     select tests.org_b(), '628222', 'user', 'pesan ' || g from generate_series(1, 51) g;
     perform tests.clear_authentication();
-    return next is(tests._150_sent_since(v_mark), array['B whatsapp_messages INSERT n=51 ids=50'],
+    return next is(tests._150_sent_after(v_seen), array['B whatsapp_messages INSERT n=51 ids=50'],
         'a 51-row statement sends n = 51 with at most 50 ids');
 
     -- G. Cross-org read: realtime.send left realtime.topic = the writer's org.

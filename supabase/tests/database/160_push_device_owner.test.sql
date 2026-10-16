@@ -26,10 +26,12 @@ select results_eq(
        where endpoint = 'https://push.invalid/perangkat' $$,
     $$ values (tests.org_a(), tests.user_a1(), 'p-a1', 'a-a1', 'Browser A') $$,
     'the row is stamped with a1''s org and user');
-select ok(set_config('tests.device_id',
-              (select id::text from public.push_subscriptions
-               where endpoint = 'https://push.invalid/perangkat'), true) is not null,
+select isnt((select id::text from public.push_subscriptions
+             where endpoint = 'https://push.invalid/perangkat'), null::text,
     'precondition: a1''s device row exists (its id is kept to check the move)');
+select set_config('tests.device_id',
+    (select id::text from public.push_subscriptions
+     where endpoint = 'https://push.invalid/perangkat'), true);
 
 -- ---------------------------------------------------------------------------
 -- 2. b1 (org B) signs in on the same browser
@@ -73,7 +75,7 @@ select throws_ok(
     '42501', 'not authorized to register push devices for this org',
     'a signed-in user without a membership cannot register a device');
 
--- The same input rules as lib/notifications/push-targets.ts.
+-- The RPC's own input checks (https scheme + host character, length limits, keys set).
 select tests.authenticate_as(tests.user_a1());
 select throws_ok(
     format('select public.register_push_subscription(%L, %L, %L, %L)', tests.org_a(), v.endpoint, v.p256dh, v.auth),

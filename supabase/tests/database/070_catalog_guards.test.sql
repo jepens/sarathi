@@ -141,8 +141,11 @@ select is_empty(
                   and coalesce(qual, '') like '%private.is_org_member(private.realtime_topic_org_id(%') $$,
     'every realtime.messages policy is SELECT for authenticated, bound to the joined topic and org-scoped');
 
--- 13. Unique keys are per org (KUA-5): a non-primary unique index on a public
---     table with org_id includes org_id, except these reviewed global keys:
+-- 13. Unique keys are per org (KUA-5): every unique index on a public table
+--     with org_id, primary keys included, has org_id among its KEY columns
+--     (INCLUDE columns do not count). Exempt: a primary key made only of
+--     surrogate columns (a default such as gen_random_uuid(), or an identity),
+--     and these reviewed global keys:
 --       push_subscriptions_endpoint_key: one row per browser endpoint, owned
 --         by whoever is signed in on it now (D19, register_push_subscription,
 --         0065);
@@ -154,12 +157,20 @@ select results_eq(
        join pg_class c on c.oid = i.indrelid
        join pg_class ic on ic.oid = i.indexrelid
        where c.relnamespace = 'public'::regnamespace
-         and i.indisunique and not i.indisprimary
+         and i.indisunique
          and exists (select 1 from pg_attribute a
                      where a.attrelid = c.oid and a.attname = 'org_id' and not a.attisdropped)
+         -- org_id is not one of the key columns (the first indnkeyatts of indkey)
          and not exists (select 1 from pg_attribute a
                          where a.attrelid = c.oid and a.attname = 'org_id'
-                           and a.attnum = any (i.indkey))
+                           and a.attnum = any ((i.indkey::int2[])[0:i.indnkeyatts - 1]))
+         -- a primary key of surrogate columns only (e.g. id uuid default
+         -- gen_random_uuid()) is not a natural key that needs org_id
+         and not (i.indisprimary
+                  and not exists (select 1 from pg_attribute a
+                                  where a.attrelid = c.oid
+                                    and a.attnum = any ((i.indkey::int2[])[0:i.indnkeyatts - 1])
+                                    and not a.atthasdef and a.attidentity = ''))
        order by 1 $$,
     array['push_subscriptions_endpoint_key', 'whatsapp_integrations_phone_number_id_key'],
     'the only unique keys without org_id on org_id tables are the reviewed global ones');

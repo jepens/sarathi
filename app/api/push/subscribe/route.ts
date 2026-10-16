@@ -55,6 +55,11 @@ export async function POST(request: Request) {
         if (error.code === '42501') {
             return NextResponse.json({ error: NO_ORG_MESSAGE }, { status: 403 });
         }
+        // 22023: the RPC's own input checks refused an endpoint the URL parser
+        // accepted (edge forms only; real endpoints are canonical).
+        if (error.code === '22023') {
+            return NextResponse.json({ error: 'Missing subscription fields' }, { status: 400 });
+        }
         console.error('push subscribe failed', error);
         return NextResponse.json({ error: 'Gagal menyimpan langganan notifikasi' }, { status: 500 });
     }

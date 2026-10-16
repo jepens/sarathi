@@ -29,7 +29,11 @@
 --      org's broadcast rows in that transaction. is_org_member(null) is false,
 --      so a missing or malformed topic gets nothing. There is deliberately NO
 --      insert/update/delete policy: clients can never send on these topics
---      (Realtime checks write access with an INSERT under RLS);
+--      (Realtime checks write access with an INSERT under RLS). Realtime
+--      caches this decision per channel until the client sends a new JWT (at
+--      most jwt_expiry, 3600 s): a member removed from the org keeps receiving
+--      id/count signals until then, while row data still flows only through
+--      PostgREST under RLS;
 --   3. private.broadcast_org_changes(): statement-level trigger function, one
 --      realtime.send per org touched by the statement;
 --   4. 15 triggers trg_org_broadcast_ins / _upd / _del (AFTER INSERT / UPDATE /
@@ -52,8 +56,15 @@
 --     a label delete (cascades to chat_labels) and markChatRead change many
 --     rows in one statement and would otherwise send one message per row.
 --     PostgreSQL refuses transition tables on multi-event triggers, hence one
---     trigger per event. An UPDATE that matches no row sends nothing; an
---     upsert fires both statement triggers, but only one of them has rows.
+--     trigger per event. An UPDATE that matches no row sends nothing. A
+--     single-row upsert sends one message (only one of its two statement
+--     triggers has rows); a multi-row upsert that inserts some rows and
+--     updates others sends one INSERT and one UPDATE message per org.
+--   * the 50-id cap bounds the payload, not the work: every transition row is
+--     serialized once (to_jsonb) and all its ids are aggregated before the
+--     slice. Negligible for the webhook/dashboard statements (one or a few
+--     rows); keep it in mind for maintenance-scale statements (a backfill
+--     UPDATE over a whole table also sends one message per org).
 --   * no phone number and no message text in the payload: realtime.messages
 --     keeps rows for about 3 days and delete_contact_cascade cannot purge it.
 --
@@ -85,8 +96,8 @@
 -- policies on realtime.messages.
 --
 -- Rollback (safe at any time: before the client PR is live nothing reads
--- these topics; afterwards the dashboard falls back to its polls and resyncs
--- until the triggers are back):
+-- these topics; afterwards only ChatList and ChatWindow keep polling, the
+-- other live views and the in-tab alerts pause until the triggers are back):
 --   for t in whatsapp_chats, whatsapp_messages, labels, chat_labels, orders:
 --     drop trigger trg_org_broadcast_ins on public.<t>;
 --     drop trigger trg_org_broadcast_upd on public.<t>;

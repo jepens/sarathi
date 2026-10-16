@@ -18,10 +18,14 @@
 -- database, so the route can call it with the user's own session (auth.uid()
 -- stays the actor; lib/supabase/service.ts):
 --   * 42501 unless the caller is signed in (auth.uid()) and a member of p_org;
---   * 22023 unless the input is what lib/notifications/push-targets.ts
---     accepts: an https endpoint with a host, at most 2048 characters, and
---     non-empty keys of at most 256 characters. The function is reachable
---     directly through PostgREST, so it validates on its own;
+--   * 22023 unless the input passes its own cheap checks: an endpoint that
+--     starts with https:// (any letter case) followed by a host character,
+--     at most 2048 characters, and non-empty keys of at most 256 characters.
+--     The function is reachable directly through PostgREST, so it validates
+--     on its own. This is close to, not identical with, the URL parsing of
+--     lib/notifications/push-targets.ts, which the route applies first (real
+--     PushSubscription endpoints are canonical https URLs, so both accept
+--     them); the route answers 400 for a 22023;
 --   * upsert ON CONFLICT (endpoint): org_id and user_id always come from the
 --     caller (p_org checked above, auth.uid()), never from another row; keys,
 --     user agent (first 400 characters) and last_used_at are refreshed.
@@ -63,8 +67,8 @@ begin
             using errcode = '42501';
     end if;
 
-    -- Same rules as parsePushSubscriptionBody (lib/notifications/push-targets.ts);
-    -- the scheme is compared case-insensitively, like the URL parser does.
+    -- Cheap checks close to parsePushSubscriptionBody (push-targets.ts): an
+    -- https scheme (any case) and a host character, length limits, keys set.
     if coalesce(p_endpoint, '') !~* '^https://[^/?#[:space:]]'
        or length(p_endpoint) > 2048
        or coalesce(p_p256dh, '') = '' or length(p_p256dh) > 256

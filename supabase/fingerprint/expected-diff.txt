@@ -20,7 +20,8 @@
 # org, EXPAND phase: topic helper, receive-only policy on realtime.messages,
 # the SECURITY DEFINER broadcaster and its 15 statement-level triggers).
 # Apply BEFORE deploying the client PR that joins the org topics (the code on
-# main never joins them), then refresh production.txt and delete this block.
+# main never joins them), then refresh production.txt, delete this block and
+# update the expected-diff sentence in supabase/README.md.
 # The pol line exists because schema_fingerprint.sql now also lists the
 # policies on realtime.messages; production had none on 2026-10-16
 # (read-only check), so that query change alone adds no line.
@@ -54,7 +55,8 @@
 # signed-in user through register_push_subscription;
 # push_subscriptions_endpoint_key stays global). Additive: apply BEFORE
 # deploying the subscribe route change (the route on main needs no function),
-# then refresh production.txt and delete this block.
+# then refresh production.txt, delete this block and update the
+# expected-diff sentence in supabase/README.md.
 > fn public.register_push_subscription(p_org uuid, p_endpoint text, p_p256dh text, p_auth text, p_user_agent text) returns=void lang=plpgsql volatile=v secdef=t config=search_path="" owner=postgres body_md5=fe3633363525bfd60a040159363f1ce7
 > fnexec public.register_push_subscription(p_org uuid, p_endpoint text, p_p256dh text, p_auth text, p_user_agent text) anon=f
 > fnexec public.register_push_subscription(p_org uuid, p_endpoint text, p_p256dh text, p_auth text, p_user_agent text) authenticated=t
