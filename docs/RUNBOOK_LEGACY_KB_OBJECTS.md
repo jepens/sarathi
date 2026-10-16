@@ -302,8 +302,15 @@ jadi kalau 0066 diterapkan lagi, `delete-originals` menunggu 72 jam penuh.
   0`; **awal masa tunggu `2026-10-16T16:02:21Z`**, jadi `delete-originals`
   paling cepat **2026-10-19T16:02:21Z** (Senin, 23.02 WIB). Salinan kedua
   manifest sudah disimpan setelah verify itu.
-- Berikutnya: uji asap oleh pemilik (5.4), akhiri jeda KB (5.5), merge PR,
-  lalu langkah 6–9.
+- Langkah 5.4 (2026-10-16 19:19–19:20 UTC): uji asap pemilik lulus. File
+  berisi teks diunggah, di-*ingest* (1 baris), lalu dihapus; baris dan objeknya
+  hilang. Unggahan pertama adalah file kosong (0 byte): *ingest*-nya
+  menghasilkan 0 potongan, jadi tidak tampil di dashboard dan objeknya
+  tertinggal (celah aplikasi lama, pelacak 3.9). Objek itu dihapus lewat
+  Storage API atas persetujuan pemilik (dicocokkan dengan id, ukuran 0, dan
+  waktu dibuat). Cek sesudahnya: folder seed 15, root 15, 0 sumber
+  menggantung. Langkah 5.5: jeda KB berakhir.
+- Berikutnya: merge PR, lalu langkah 6–9.
 
 ## Latihan (2026-10-16, stack lokal terpisah `sarathi-docs`, port 588xx)
 
