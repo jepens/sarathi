@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "target": "ES2022",
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "incremental": false,
+    "types": ["node"]
+  },
+  "include": ["scripts/migrate-legacy-kb-objects.mjs", "scripts/lib/legacy-kb.mjs"]
+}

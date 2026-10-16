@@ -1,4 +1,5 @@
--- Storage policies per org prefix (tracker 1.2 / 1.14, audit KUA-13 / KEA-4).
+-- Storage policies per org prefix (tracker 1.2 / 1.12 / 1.14, audit KUA-13 /
+-- KEA-4).
 --
 -- Objects live under "<org_id>/..." in the chat-media, proposals and documents
 -- buckets; only members of that org may read or write them. These tests run
@@ -7,13 +8,15 @@
 -- by a storage trigger unless storage.allow_delete_query is set, so the delete
 -- checks set it (it only lifts that guard, not RLS).
 --
--- Known gaps tracked elsewhere, recorded as TODO tests (they report "not ok #
--- TODO" without failing the run and start passing once fixed):
+-- Since 0066 all three buckets share the uuid CASE guard: a root-level name or
+-- a non-uuid folder is refused, also for the seed org (no more COALESCE
+-- fallback; details in 170_documents_org_prefix.test.sql).
+--
+-- Known gap tracked elsewhere, recorded as a TODO test (it reports "not ok #
+-- TODO" without failing the run and starts passing once fixed):
 --   * 1.11: chat-media is still a PUBLIC bucket — public URLs bypass RLS.
---   * 1.12: documents objects without an "<org_id>/" folder fall back to the
---           seed org (COALESCE in the 0038 policy).
 begin;
-select plan(44);
+select plan(45);
 
 select tests.create_two_orgs();
 
@@ -28,6 +31,7 @@ insert into storage.objects (bucket_id, name) values
     ('proposals',  tests.org_b() || '/fixture.pdf'),
     ('documents',  tests.org_a() || '/fixture.pdf'),
     ('documents',  tests.org_b() || '/fixture.pdf'),
+    ('documents',  tests.seed_org() || '/fixture.pdf'),
     ('documents',  'legacy-root.pdf');
 
 -- ---------------------------------------------------------------------------
@@ -73,27 +77,17 @@ select isnt_empty(
     b || ': a member deletes their own object')
 from unnest(array['chat-media', 'proposals', 'documents']) b;
 
--- Paths without a well-formed org folder are refused (chat-media, proposals).
+-- Paths without a well-formed org folder are refused in every bucket (3 x 2).
 select throws_ok(
     format($$ insert into storage.objects (bucket_id, name) values (%L, %L) $$, b, p),
     '42501', null,
     format('%s: an object at %s (no org folder) is refused', b, p))
-from unnest(array['chat-media', 'proposals']) b,
+from unnest(array['chat-media', 'proposals', 'documents']) b,
      unnest(array['root.bin', 'bukan-uuid/x.bin']) p;
 
--- documents: root objects resolve to the seed org, so a tenant member is
--- refused there; a non-uuid folder errors out (cast) instead of being denied.
-select throws_ok(
-    $$ insert into storage.objects (bucket_id, name) values ('documents', 'root-baru.pdf') $$,
-    '42501', null,
-    'documents: a tenant member cannot upload a root-level (legacy) object');
 select is_empty(
     $$ select 1 from storage.objects where bucket_id = 'documents' and name = 'legacy-root.pdf' $$,
     'documents: a tenant member cannot read legacy root-level objects');
-select throws_ok(
-    $$ insert into storage.objects (bucket_id, name) values ('documents', 'bukan-uuid/x.pdf') $$,
-    null, null,
-    'documents: a non-uuid folder is refused');
 
 -- ---------------------------------------------------------------------------
 -- Member of org B: blind to org A's objects (3)
@@ -119,15 +113,20 @@ select throws_ok(
 from unnest(array['chat-media', 'proposals', 'documents']) b;
 
 -- ---------------------------------------------------------------------------
--- Seed org (tenant #1) keeps its behaviour (1)
+-- Seed org (tenant #1): its own folder only, like every tenant (2)
 -- ---------------------------------------------------------------------------
 select tests.authenticate_as('5a11e024-5eed-4000-8000-0000000000aa');
-select isnt_empty(
+select is_empty(
     $$ select 1 from storage.objects where bucket_id = 'documents' and name = 'legacy-root.pdf' $$,
-    'documents: seed-org members still reach legacy root-level KB files');
+    'documents: seed-org members no longer reach root-level objects (no seed fallback, 0066)');
+select isnt_empty(
+    format($$ select 1 from storage.objects where bucket_id = 'documents' and name = %L $$,
+           tests.seed_org() || '/fixture.pdf'),
+    'documents: seed-org members read their KB files under the seed org folder');
 
 -- ---------------------------------------------------------------------------
--- Org B's objects survived every attempt (1) + known gaps as TODO (2)
+-- Org B's objects survived every attempt (1), no seed fallback left (1),
+-- known gap as TODO (1)
 -- ---------------------------------------------------------------------------
 select tests.clear_authentication();
 select is(
@@ -135,16 +134,16 @@ select is(
       where name like tests.org_b() || '/%' and metadata is null),
     3, 'org B''s objects are intact and unchanged');
 
+select is_empty(
+    $$ select policyname from pg_policies where schemaname = 'storage' and tablename = 'objects'
+       and (coalesce(qual, '') || ' ' || coalesce(with_check, ''))
+           ~* '5a11e024-0001-4000-8000-000000000001|coalesce' $$,
+    'no storage policy falls back to the seed org (no seed org uuid, no COALESCE in USING or WITH CHECK)');
+
 select todo('tracker 1.11: chat-media is still a public bucket (public URLs bypass RLS)', 1);
 select is(
     (select public from storage.buckets where id = 'chat-media'),
     false, 'chat-media bucket is private');
-
-select todo('tracker 1.12: documents policy still falls back to the seed org for root objects', 1);
-select is_empty(
-    $$ select 1 from pg_policies where schemaname = 'storage' and tablename = 'objects'
-       and coalesce(qual, '') like '%5a11e024-0001-4000-8000-000000000001%' $$,
-    'no storage policy falls back to the seed org');
 
 select * from finish();
 rollback;
