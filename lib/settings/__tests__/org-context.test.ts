@@ -263,7 +263,7 @@ describe('requireUserContext', () => {
 });
 
 describe('isDefaultOrg', () => {
-    it('compares against the default org from app_settings', async () => {
+    it('compares against the default org from platform settings', async () => {
         await expect(isDefaultOrg(DEFAULT_ORG)).resolves.toBe(true);
         await expect(isDefaultOrg(PILOT_ORG)).resolves.toBe(false);
         await expect(isDefaultOrg(null)).resolves.toBe(false);

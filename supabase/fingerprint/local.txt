@@ -5,7 +5,7 @@ col public.app_settings.created_at type=timestamp with time zone notnull=f defau
 col public.app_settings.description type=text notnull=f default=- identity=- generated=-
 col public.app_settings.id type=uuid notnull=t default=gen_random_uuid() identity=- generated=-
 col public.app_settings.key type=text notnull=t default=- identity=- generated=-
-col public.app_settings.org_id type=uuid notnull=t default='5a11e024-0001-4000-8000-000000000001'::uuid identity=- generated=-
+col public.app_settings.org_id type=uuid notnull=t default=- identity=- generated=-
 col public.app_settings.updated_at type=timestamp with time zone notnull=f default=now() identity=- generated=-
 col public.app_settings.value type=text notnull=t default=- identity=- generated=-
 col public.business_profiles.assistant_name type=text notnull=t default=''::text identity=- generated=-
@@ -21,32 +21,32 @@ col public.business_profiles.updated_at type=timestamp with time zone notnull=t 
 col public.business_profiles.website type=text notnull=t default=''::text identity=- generated=-
 col public.chat_labels.created_at type=timestamp with time zone notnull=t default=now() identity=- generated=-
 col public.chat_labels.label_id type=uuid notnull=t default=- identity=- generated=-
-col public.chat_labels.org_id type=uuid notnull=t default='5a11e024-0001-4000-8000-000000000001'::uuid identity=- generated=-
+col public.chat_labels.org_id type=uuid notnull=t default=- identity=- generated=-
 col public.chat_labels.phone_number type=text notnull=t default=- identity=- generated=-
 col public.documents.content type=text notnull=f default=- identity=- generated=-
 col public.documents.embedding type=vector(1536) notnull=f default=- identity=- generated=-
 col public.documents.id type=uuid notnull=t default=gen_random_uuid() identity=- generated=-
 col public.documents.metadata type=jsonb notnull=f default=- identity=- generated=-
-col public.documents.org_id type=uuid notnull=t default='5a11e024-0001-4000-8000-000000000001'::uuid identity=- generated=-
+col public.documents.org_id type=uuid notnull=t default=- identity=- generated=-
 col public.kb_sources.content type=text notnull=t default=- identity=- generated=-
 col public.kb_sources.created_at type=timestamp with time zone notnull=t default=now() identity=- generated=-
 col public.kb_sources.created_by type=uuid notnull=f default=- identity=- generated=-
 col public.kb_sources.id type=uuid notnull=t default=gen_random_uuid() identity=- generated=-
-col public.kb_sources.org_id type=uuid notnull=t default='5a11e024-0001-4000-8000-000000000001'::uuid identity=- generated=-
+col public.kb_sources.org_id type=uuid notnull=t default=- identity=- generated=-
 col public.kb_sources.title type=text notnull=t default=- identity=- generated=-
 col public.kb_sources.updated_at type=timestamp with time zone notnull=t default=now() identity=- generated=-
 col public.labels.color type=text notnull=t default='slate'::text identity=- generated=-
 col public.labels.created_at type=timestamp with time zone notnull=t default=now() identity=- generated=-
 col public.labels.id type=uuid notnull=t default=gen_random_uuid() identity=- generated=-
 col public.labels.name type=text notnull=t default=- identity=- generated=-
-col public.labels.org_id type=uuid notnull=t default='5a11e024-0001-4000-8000-000000000001'::uuid identity=- generated=-
+col public.labels.org_id type=uuid notnull=t default=- identity=- generated=-
 col public.labels.updated_at type=timestamp with time zone notnull=t default=now() identity=- generated=-
 col public.message_queue.created_at type=timestamp with time zone notnull=f default=now() identity=- generated=-
 col public.message_queue.error_message type=text notnull=f default=- identity=- generated=-
 col public.message_queue.id type=uuid notnull=t default=gen_random_uuid() identity=- generated=-
 col public.message_queue.max_retries type=integer notnull=t default=3 identity=- generated=-
 col public.message_queue.message_text type=text notnull=t default=- identity=- generated=-
-col public.message_queue.org_id type=uuid notnull=t default='5a11e024-0001-4000-8000-000000000001'::uuid identity=- generated=-
+col public.message_queue.org_id type=uuid notnull=t default=- identity=- generated=-
 col public.message_queue.phone_number type=text notnull=t default=- identity=- generated=-
 col public.message_queue.processed_at type=timestamp with time zone notnull=f default=- identity=- generated=-
 col public.message_queue.retries type=integer notnull=t default=0 identity=- generated=-
@@ -67,7 +67,7 @@ col public.orders.items type=jsonb notnull=t default='[]'::jsonb identity=- gene
 col public.orders.meeting_duration_min type=integer notnull=f default=- identity=- generated=-
 col public.orders.meeting_link type=text notnull=f default=- identity=- generated=-
 col public.orders.order_type type=text notnull=f default='product'::text identity=- generated=-
-col public.orders.org_id type=uuid notnull=t default='5a11e024-0001-4000-8000-000000000001'::uuid identity=- generated=-
+col public.orders.org_id type=uuid notnull=t default=- identity=- generated=-
 col public.orders.pelunasan_amount type=numeric notnull=f default=0 identity=- generated=-
 col public.orders.pelunasan_paid_at type=timestamp with time zone notnull=f default=- identity=- generated=-
 col public.orders.status type=text notnull=f default='pending'::text identity=- generated=-
@@ -82,13 +82,16 @@ col public.organizations.created_at type=timestamp with time zone notnull=t defa
 col public.organizations.id type=uuid notnull=t default=gen_random_uuid() identity=- generated=-
 col public.organizations.name type=text notnull=t default=- identity=- generated=-
 col public.organizations.slug type=text notnull=f default=- identity=- generated=-
+col public.platform_settings.key type=text notnull=t default=- identity=- generated=-
+col public.platform_settings.updated_at type=timestamp with time zone notnull=t default=now() identity=- generated=-
+col public.platform_settings.value type=text notnull=t default=- identity=- generated=-
 col public.products.created_at type=timestamp with time zone notnull=f default=now() identity=- generated=-
 col public.products.description type=text notnull=f default=- identity=- generated=-
 col public.products.embedding type=vector(1536) notnull=f default=- identity=- generated=-
 col public.products.id type=uuid notnull=t default=gen_random_uuid() identity=- generated=-
 col public.products.metadata type=jsonb notnull=f default=- identity=- generated=-
 col public.products.name type=text notnull=t default=- identity=- generated=-
-col public.products.org_id type=uuid notnull=t default='5a11e024-0001-4000-8000-000000000001'::uuid identity=- generated=-
+col public.products.org_id type=uuid notnull=t default=- identity=- generated=-
 col public.products.price type=numeric(10,2) notnull=t default=- identity=- generated=-
 col public.products.stock type=integer notnull=f default=0 identity=- generated=-
 col public.products.type type=text notnull=f default='product'::text identity=- generated=-
@@ -101,7 +104,7 @@ col public.proposals.fna_snapshot type=jsonb notnull=f default=- identity=- gene
 col public.proposals.id type=uuid notnull=t default=gen_random_uuid() identity=- generated=-
 col public.proposals.intro_note type=text notnull=f default=- identity=- generated=-
 col public.proposals.lead_phone type=text notnull=t default=- identity=- generated=-
-col public.proposals.org_id type=uuid notnull=t default='5a11e024-0001-4000-8000-000000000001'::uuid identity=- generated=-
+col public.proposals.org_id type=uuid notnull=t default=- identity=- generated=-
 col public.proposals.proposal_ref type=text notnull=t default=- identity=- generated=-
 col public.proposals.sent_at type=timestamp with time zone notnull=f default=- identity=- generated=-
 col public.proposals.sent_to_email type=text notnull=f default=- identity=- generated=-
@@ -112,14 +115,14 @@ col public.push_subscriptions.created_at type=timestamp with time zone notnull=t
 col public.push_subscriptions.endpoint type=text notnull=t default=- identity=- generated=-
 col public.push_subscriptions.id type=uuid notnull=t default=gen_random_uuid() identity=- generated=-
 col public.push_subscriptions.last_used_at type=timestamp with time zone notnull=f default=- identity=- generated=-
-col public.push_subscriptions.org_id type=uuid notnull=t default='5a11e024-0001-4000-8000-000000000001'::uuid identity=- generated=-
+col public.push_subscriptions.org_id type=uuid notnull=t default=- identity=- generated=-
 col public.push_subscriptions.p256dh type=text notnull=t default=- identity=- generated=-
 col public.push_subscriptions.user_agent type=text notnull=f default=- identity=- generated=-
 col public.push_subscriptions.user_id type=uuid notnull=t default=auth.uid() identity=- generated=-
 col public.quick_replies.content type=text notnull=t default=- identity=- generated=-
 col public.quick_replies.created_at type=timestamp with time zone notnull=t default=now() identity=- generated=-
 col public.quick_replies.id type=uuid notnull=t default=gen_random_uuid() identity=- generated=-
-col public.quick_replies.org_id type=uuid notnull=t default='5a11e024-0001-4000-8000-000000000001'::uuid identity=- generated=-
+col public.quick_replies.org_id type=uuid notnull=t default=- identity=- generated=-
 col public.quick_replies.shortcut type=text notnull=t default=- identity=- generated=-
 col public.quick_replies.updated_at type=timestamp with time zone notnull=t default=now() identity=- generated=-
 col public.rate_limits.created_at type=timestamp with time zone notnull=f default=now() identity=- generated=-
@@ -134,7 +137,7 @@ col public.system_message.description type=text notnull=f default=- identity=- g
 col public.system_message.id type=uuid notnull=t default=gen_random_uuid() identity=- generated=-
 col public.system_message.is_active type=boolean notnull=f default=false identity=- generated=-
 col public.system_message.name type=character varying(100) notnull=t default=- identity=- generated=-
-col public.system_message.org_id type=uuid notnull=t default='5a11e024-0001-4000-8000-000000000001'::uuid identity=- generated=-
+col public.system_message.org_id type=uuid notnull=t default=- identity=- generated=-
 col public.system_message.updated_at type=timestamp with time zone notnull=f default=now() identity=- generated=-
 col public.vendors.address type=text notnull=f default=- identity=- generated=-
 col public.vendors.category type=text notnull=t default=- identity=- generated=-
@@ -146,7 +149,7 @@ col public.vendors.email type=text notnull=f default=- identity=- generated=-
 col public.vendors.id type=uuid notnull=t default=gen_random_uuid() identity=- generated=-
 col public.vendors.name type=text notnull=t default=- identity=- generated=-
 col public.vendors.notes type=text notnull=f default=- identity=- generated=-
-col public.vendors.org_id type=uuid notnull=t default='5a11e024-0001-4000-8000-000000000001'::uuid identity=- generated=-
+col public.vendors.org_id type=uuid notnull=t default=- identity=- generated=-
 col public.vendors.phone type=text notnull=f default=- identity=- generated=-
 col public.vendors.updated_at type=timestamp with time zone notnull=t default=now() identity=- generated=-
 col public.vendors.verified type=boolean notnull=t default=false identity=- generated=-
@@ -208,22 +211,22 @@ col public.whatsapp_messages.role type=text notnull=t default=- identity=- gener
 col public.whatsapp_messages.status type=text notnull=f default=- identity=- generated=-
 col public.whatsapp_messages.status_updated_at type=timestamp with time zone notnull=f default=- identity=- generated=-
 col public.whatsapp_messages.wa_message_id type=text notnull=f default=- identity=- generated=-
-con public.app_settings app_settings_key_key UNIQUE (key)
 con public.app_settings app_settings_org_id_fkey FOREIGN KEY (org_id) REFERENCES organizations(id)
+con public.app_settings app_settings_org_key_key UNIQUE (org_id, key)
 con public.app_settings app_settings_pkey PRIMARY KEY (id)
 con public.business_profiles business_profiles_org_id_fkey FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
 con public.business_profiles business_profiles_pkey PRIMARY KEY (org_id)
 con public.chat_labels chat_labels_chat_fkey FOREIGN KEY (org_id, phone_number) REFERENCES whatsapp_chats(org_id, phone_number) ON DELETE CASCADE
-con public.chat_labels chat_labels_label_id_fkey FOREIGN KEY (label_id) REFERENCES labels(id) ON DELETE CASCADE
+con public.chat_labels chat_labels_org_label_fkey FOREIGN KEY (org_id, label_id) REFERENCES labels(org_id, id) ON DELETE CASCADE
 con public.chat_labels chat_labels_pkey PRIMARY KEY (org_id, phone_number, label_id)
 con public.documents documents_org_id_fkey FOREIGN KEY (org_id) REFERENCES organizations(id)
 con public.documents documents_pkey PRIMARY KEY (id)
 con public.kb_sources kb_sources_org_id_fkey FOREIGN KEY (org_id) REFERENCES organizations(id)
 con public.kb_sources kb_sources_org_title_key UNIQUE (org_id, title)
 con public.kb_sources kb_sources_pkey PRIMARY KEY (id)
-con public.kb_sources kb_sources_title_key UNIQUE (title)
 con public.labels labels_color_check CHECK ((color = ANY (ARRAY['slate'::text, 'red'::text, 'orange'::text, 'amber'::text, 'yellow'::text, 'green'::text, 'emerald'::text, 'teal'::text, 'sky'::text, 'blue'::text, 'violet'::text, 'pink'::text])))
 con public.labels labels_org_id_fkey FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
+con public.labels labels_org_id_id_key UNIQUE (org_id, id)
 con public.labels labels_pkey PRIMARY KEY (id)
 con public.message_queue message_queue_org_id_fkey FOREIGN KEY (org_id) REFERENCES organizations(id)
 con public.message_queue message_queue_pkey PRIMARY KEY (id)
@@ -235,6 +238,7 @@ con public.organization_members organization_members_pkey PRIMARY KEY (org_id, u
 con public.organization_members organization_members_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE
 con public.organizations organizations_pkey PRIMARY KEY (id)
 con public.organizations organizations_slug_key UNIQUE (slug)
+con public.platform_settings platform_settings_pkey PRIMARY KEY (key)
 con public.products products_org_id_fkey FOREIGN KEY (org_id) REFERENCES organizations(id)
 con public.products products_pkey PRIMARY KEY (id)
 con public.products products_type_check CHECK ((type = ANY (ARRAY['product'::text, 'service'::text])))
@@ -251,8 +255,8 @@ con public.quick_replies quick_replies_org_id_fkey FOREIGN KEY (org_id) REFERENC
 con public.quick_replies quick_replies_pkey PRIMARY KEY (id)
 con public.rate_limits rate_limits_identifier_key UNIQUE (identifier)
 con public.rate_limits rate_limits_pkey PRIMARY KEY (id)
-con public.system_message system_message_name_key UNIQUE (name)
 con public.system_message system_message_org_id_fkey FOREIGN KEY (org_id) REFERENCES organizations(id)
+con public.system_message system_message_org_name_key UNIQUE (org_id, name)
 con public.system_message system_message_pkey PRIMARY KEY (id)
 con public.vendors vendors_category_check CHECK ((category = ANY (ARRAY['catering'::text, 'venue'::text, 'transport'::text, 'entertainment'::text, 'photography'::text, 'decoration'::text, 'mc'::text, 'other'::text])))
 con public.vendors vendors_org_chat_phone_fkey FOREIGN KEY (org_id, chat_phone) REFERENCES whatsapp_chats(org_id, phone_number) ON DELETE SET NULL (chat_phone)
@@ -285,18 +289,18 @@ fn public.bump_unread(p_org uuid, p_phone text) returns=void lang=sql volatile=v
 fn public.claim_queue_jobs(p_limit integer, p_stale_seconds integer, p_debounce_seconds integer) returns=SETOF message_queue lang=plpgsql volatile=v secdef=t config=search_path="" owner=postgres body_md5=99a6fdfaf148a6f605bdb985f5f6585d
 fn public.cleanup_old_queue_entries() returns=void lang=plpgsql volatile=v secdef=f config=search_path=public owner=postgres body_md5=a7d64dbb496e09e97c364d3192821b7d
 fn public.cleanup_old_rate_limits() returns=void lang=plpgsql volatile=v secdef=f config=search_path=public owner=postgres body_md5=a6d1df4122575a9aa573d126891a17ea
-fn public.cleanup_vendor_on_untag() returns=trigger lang=plpgsql volatile=v secdef=t config=search_path="" owner=postgres body_md5=c1871aec26dba1c644f3002ad24372f0
+fn public.cleanup_vendor_on_untag() returns=trigger lang=plpgsql volatile=v secdef=t config=search_path="" owner=postgres body_md5=e7fd5cbdf2d558909f82057d3fdd1f2b
 fn public.delete_contact_cascade(p_org uuid, p_phone text) returns=jsonb lang=plpgsql volatile=v secdef=t config=search_path=public, pg_temp owner=postgres body_md5=614c7885561f9b3121e9ba3ae76849c4
-fn public.ensure_single_active_system_message() returns=trigger lang=plpgsql volatile=v secdef=f config=search_path=public owner=postgres body_md5=39c2ae02f0f7fcfceb9530d45956458a
+fn public.ensure_single_active_system_message() returns=trigger lang=plpgsql volatile=v secdef=f config=search_path=public owner=postgres body_md5=055ccac38a30ae861e3f5b5f98c6d7da
 fn public.handle_new_user() returns=trigger lang=plpgsql volatile=v secdef=t config=search_path="" owner=postgres body_md5=b09dd3c8c92319801607b91dbb9d03d2
-fn public.match_documents(query_embedding vector, match_threshold double precision, match_count integer, filter_org_id uuid) returns=TABLE(id uuid, content text, metadata jsonb, similarity double precision) lang=plpgsql volatile=v secdef=f config=search_path=public, extensions owner=postgres body_md5=76ff3eb89791edf6f54cf5f7bb00eaab
-fn public.match_products(query_embedding vector, match_threshold double precision, match_count integer, filter_org_id uuid) returns=TABLE(id uuid, name text, description text, price numeric, stock integer, metadata jsonb, similarity double precision) lang=plpgsql volatile=v secdef=f config=search_path=public, extensions owner=postgres body_md5=dc078b41eea734d564ec48c9e04e5e7e
+fn public.match_documents(query_embedding vector, match_threshold double precision, match_count integer, filter_org_id uuid) returns=TABLE(id uuid, content text, metadata jsonb, similarity double precision) lang=plpgsql volatile=v secdef=f config=search_path=public, extensions owner=postgres body_md5=e6b8121f246611c4b4ea2327176e2239
+fn public.match_products(query_embedding vector, match_threshold double precision, match_count integer, filter_org_id uuid) returns=TABLE(id uuid, name text, description text, price numeric, stock integer, metadata jsonb, similarity double precision) lang=plpgsql volatile=v secdef=f config=search_path=public, extensions owner=postgres body_md5=18b748b4bbb39612ada111b85dd24f8a
 fn public.reserve_meeting_slot(p_org uuid, p_phone text, p_name text, p_event_date timestamp with time zone, p_delivery_info text, p_day_start timestamp with time zone, p_day_end timestamp with time zone, p_max integer, p_duration_min integer, p_buffer_min integer) returns=jsonb lang=plpgsql volatile=v secdef=t config=search_path=public, pg_temp owner=postgres body_md5=506c0bc682440670f92e8733bde148c2
 fn public.set_updated_at() returns=trigger lang=plpgsql volatile=v secdef=f config=search_path="" owner=postgres body_md5=077bb7aa35a4fed76f447b242607c205
-fn public.sync_vendor_from_contact() returns=trigger lang=plpgsql volatile=v secdef=t config=search_path="" owner=postgres body_md5=accaeb44d95028d56fafa9b295e7ec9c
+fn public.sync_vendor_from_contact() returns=trigger lang=plpgsql volatile=v secdef=t config=search_path="" owner=postgres body_md5=b32ebe06cbd605aa4506229b99041075
 fn public.update_app_settings_updated_at() returns=trigger lang=plpgsql volatile=v secdef=f config=search_path=public owner=postgres body_md5=8d0d99f0f246f51e6e468e02e03e428b
 fn public.update_updated_at_column() returns=trigger lang=plpgsql volatile=v secdef=f config=search_path=public owner=postgres body_md5=8d0d99f0f246f51e6e468e02e03e428b
-fn public.verify_webhook_token(input_token text) returns=boolean lang=plpgsql volatile=v secdef=t config=search_path=public owner=postgres body_md5=aaba165ec3ad79a42a9b582ee13f6a59
+fn public.verify_webhook_token(input_token text) returns=boolean lang=plpgsql volatile=v secdef=t config=search_path=public owner=postgres body_md5=005b92d092eca6b499b70cad6952f3ef
 fnexec private.is_org_member(check_org uuid) anon=f
 fnexec private.is_org_member(check_org uuid) authenticated=t
 fnexec private.is_org_member(check_org uuid) service_role=f
@@ -350,17 +354,17 @@ fnexec public.verify_webhook_token(input_token text) authenticated=f
 fnexec public.verify_webhook_token(input_token text) service_role=t
 idx public.app_settings CREATE INDEX app_settings_org_id_idx ON public.app_settings USING btree (org_id)
 idx public.app_settings CREATE INDEX idx_app_settings_key ON public.app_settings USING btree (key)
-idx public.app_settings CREATE UNIQUE INDEX app_settings_key_key ON public.app_settings USING btree (key)
+idx public.app_settings CREATE UNIQUE INDEX app_settings_org_key_key ON public.app_settings USING btree (org_id, key)
 idx public.app_settings CREATE UNIQUE INDEX app_settings_pkey ON public.app_settings USING btree (id)
 idx public.business_profiles CREATE UNIQUE INDEX business_profiles_pkey ON public.business_profiles USING btree (org_id)
-idx public.chat_labels CREATE INDEX chat_labels_label_idx ON public.chat_labels USING btree (label_id)
+idx public.chat_labels CREATE INDEX chat_labels_org_label_idx ON public.chat_labels USING btree (org_id, label_id)
 idx public.chat_labels CREATE UNIQUE INDEX chat_labels_pkey ON public.chat_labels USING btree (org_id, phone_number, label_id)
 idx public.documents CREATE INDEX documents_org_id_idx ON public.documents USING btree (org_id)
 idx public.documents CREATE UNIQUE INDEX documents_pkey ON public.documents USING btree (id)
 idx public.kb_sources CREATE INDEX kb_sources_org_id_idx ON public.kb_sources USING btree (org_id)
 idx public.kb_sources CREATE UNIQUE INDEX kb_sources_org_title_key ON public.kb_sources USING btree (org_id, title)
 idx public.kb_sources CREATE UNIQUE INDEX kb_sources_pkey ON public.kb_sources USING btree (id)
-idx public.kb_sources CREATE UNIQUE INDEX kb_sources_title_key ON public.kb_sources USING btree (title)
+idx public.labels CREATE UNIQUE INDEX labels_org_id_id_key ON public.labels USING btree (org_id, id)
 idx public.labels CREATE UNIQUE INDEX labels_org_name_idx ON public.labels USING btree (org_id, lower(name))
 idx public.labels CREATE UNIQUE INDEX labels_pkey ON public.labels USING btree (id)
 idx public.message_queue CREATE INDEX idx_message_queue_created_at ON public.message_queue USING btree (created_at)
@@ -378,6 +382,7 @@ idx public.organization_members CREATE INDEX organization_members_user_id_idx ON
 idx public.organization_members CREATE UNIQUE INDEX organization_members_pkey ON public.organization_members USING btree (org_id, user_id)
 idx public.organizations CREATE UNIQUE INDEX organizations_pkey ON public.organizations USING btree (id)
 idx public.organizations CREATE UNIQUE INDEX organizations_slug_key ON public.organizations USING btree (slug)
+idx public.platform_settings CREATE UNIQUE INDEX platform_settings_pkey ON public.platform_settings USING btree (key)
 idx public.products CREATE INDEX products_name_trgm_idx ON public.products USING gin (name gin_trgm_ops)
 idx public.products CREATE INDEX products_org_id_idx ON public.products USING btree (org_id)
 idx public.products CREATE INDEX products_type_idx ON public.products USING btree (type)
@@ -399,14 +404,15 @@ idx public.rate_limits CREATE UNIQUE INDEX rate_limits_identifier_key ON public.
 idx public.rate_limits CREATE UNIQUE INDEX rate_limits_pkey ON public.rate_limits USING btree (id)
 idx public.system_message CREATE INDEX idx_system_message_active ON public.system_message USING btree (is_active) WHERE (is_active = true)
 idx public.system_message CREATE INDEX system_message_org_id_idx ON public.system_message USING btree (org_id)
-idx public.system_message CREATE UNIQUE INDEX system_message_name_key ON public.system_message USING btree (name)
+idx public.system_message CREATE UNIQUE INDEX system_message_one_active_per_org ON public.system_message USING btree (org_id) WHERE (is_active = true)
+idx public.system_message CREATE UNIQUE INDEX system_message_org_name_key ON public.system_message USING btree (org_id, name)
 idx public.system_message CREATE UNIQUE INDEX system_message_pkey ON public.system_message USING btree (id)
 idx public.vendors CREATE INDEX idx_vendors_category ON public.vendors USING btree (category)
 idx public.vendors CREATE INDEX idx_vendors_created_at ON public.vendors USING btree (created_at DESC)
 idx public.vendors CREATE INDEX idx_vendors_name ON public.vendors USING btree (name)
 idx public.vendors CREATE INDEX idx_vendors_org_chat_phone ON public.vendors USING btree (org_id, chat_phone)
 idx public.vendors CREATE INDEX vendors_org_id_idx ON public.vendors USING btree (org_id)
-idx public.vendors CREATE UNIQUE INDEX uq_vendors_chat_phone ON public.vendors USING btree (chat_phone) WHERE (chat_phone IS NOT NULL)
+idx public.vendors CREATE UNIQUE INDEX uq_vendors_org_chat_phone ON public.vendors USING btree (org_id, chat_phone) WHERE (chat_phone IS NOT NULL)
 idx public.vendors CREATE UNIQUE INDEX vendors_pkey ON public.vendors USING btree (id)
 idx public.whatsapp_chats CREATE INDEX idx_whatsapp_chats_assigned_to ON public.whatsapp_chats USING btree (assigned_to) WHERE (assigned_to IS NOT NULL)
 idx public.whatsapp_chats CREATE INDEX idx_whatsapp_chats_contact_type ON public.whatsapp_chats USING btree (contact_type) WHERE (contact_type <> 'lead'::text)
@@ -462,6 +468,7 @@ rel public.message_queue kind=r owner=postgres rls=t force_rls=f
 rel public.orders kind=r owner=postgres rls=t force_rls=f
 rel public.organization_members kind=r owner=postgres rls=t force_rls=f
 rel public.organizations kind=r owner=postgres rls=t force_rls=f
+rel public.platform_settings kind=r owner=postgres rls=t force_rls=f
 rel public.products kind=r owner=postgres rls=t force_rls=f
 rel public.proposals kind=r owner=postgres rls=t force_rls=f
 rel public.push_subscriptions kind=r owner=postgres rls=t force_rls=f
@@ -502,6 +509,9 @@ relpriv public.organization_members service_role=rawdDxt
 relpriv public.organizations anon=rawdDxt
 relpriv public.organizations authenticated=rawdDxt
 relpriv public.organizations service_role=rawdDxt
+relpriv public.platform_settings anon=
+relpriv public.platform_settings authenticated=
+relpriv public.platform_settings service_role=rawdDxt
 relpriv public.products anon=rawdDxt
 relpriv public.products authenticated=rawdDxt
 relpriv public.products service_role=rawdDxt
@@ -544,6 +554,7 @@ schema public service_role usage=t create=f
 trg auth.users CREATE TRIGGER on_auth_user_created AFTER INSERT ON auth.users FOR EACH ROW EXECUTE FUNCTION handle_new_user()
 trg public.app_settings CREATE TRIGGER app_settings_updated_at BEFORE UPDATE ON public.app_settings FOR EACH ROW EXECUTE FUNCTION update_app_settings_updated_at()
 trg public.kb_sources CREATE TRIGGER trg_kb_sources_updated_at BEFORE UPDATE ON public.kb_sources FOR EACH ROW EXECUTE FUNCTION set_updated_at()
+trg public.platform_settings CREATE TRIGGER trg_platform_settings_updated_at BEFORE UPDATE ON public.platform_settings FOR EACH ROW EXECUTE FUNCTION set_updated_at()
 trg public.system_message CREATE TRIGGER trigger_single_active_system_message BEFORE INSERT OR UPDATE ON public.system_message FOR EACH ROW WHEN ((new.is_active = true)) EXECUTE FUNCTION ensure_single_active_system_message()
 trg public.system_message CREATE TRIGGER update_system_message_updated_at BEFORE UPDATE ON public.system_message FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()
 trg public.vendors CREATE TRIGGER trg_vendors_updated_at BEFORE UPDATE ON public.vendors FOR EACH ROW EXECUTE FUNCTION set_updated_at()

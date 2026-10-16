@@ -78,18 +78,19 @@ select is(
     '{"deleted": true}'::jsonb,
     'delete_contact_cascade: a member deletes their own org''s contact');
 
--- SECURITY INVOKER + RLS: even without filter_org_id only own-org rows come back.
+-- SECURITY INVOKER + RLS, and fail closed per org since 0061 (a NULL
+-- filter_org_id returns nothing; see 120_match_fail_closed).
 select results_eq(
-    $$ select content from public.match_documents(array_fill(0.1::real, array[1536])::extensions.vector, -1, 10) $$,
+    $$ select content from public.match_documents(array_fill(0.1::real, array[1536])::extensions.vector, -1, 10, tests.org_a()) $$,
     array['dokumen A'],
-    'match_documents (no filter): a member only retrieves their own org''s documents');
+    'match_documents (filter = own org): a member only retrieves their own org''s documents');
 select is_empty(
     $$ select 1 from public.match_documents(array_fill(0.1::real, array[1536])::extensions.vector, -1, 10, tests.org_b()) $$,
     'match_documents (filter = other org): nothing comes back');
 select results_eq(
-    $$ select name from public.match_products(array_fill(0.1::real, array[1536])::extensions.vector, -1, 10) $$,
+    $$ select name from public.match_products(array_fill(0.1::real, array[1536])::extensions.vector, -1, 10, tests.org_a()) $$,
     array['produk A'],
-    'match_products (no filter): a member only retrieves their own org''s products');
+    'match_products (filter = own org): a member only retrieves their own org''s products');
 select is_empty(
     $$ select 1 from public.match_products(array_fill(0.1::real, array[1536])::extensions.vector, -1, 10, tests.org_b()) $$,
     'match_products (filter = other org): nothing comes back');

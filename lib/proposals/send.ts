@@ -251,6 +251,9 @@ export async function buildProposalPreview(
 // ── public: send (with optional uploaded source) ─────────────────────────
 
 export interface SendParams {
+    // Caller's org (requireEnvIntegration). Stamped on a new proposals row:
+    // org_id has no column DEFAULT since migration 0062.
+    orgId: string;
     phoneNumber: string;
     proposalId?: string | null;  // if present, send the uploaded PDF
     introNote?: string | null;
@@ -272,6 +275,7 @@ export async function sendProposalEmail(
         const { data, error } = await supabase
             .from('proposals')
             .select('id, lead_phone, source, file_path, intro_note, proposal_ref, sent_at')
+            .eq('org_id', params.orgId)
             .eq('id', params.proposalId)
             .maybeSingle<ProposalRow>();
         if (error) return { ok: false, error: error.message };
@@ -326,6 +330,7 @@ export async function sendProposalEmail(
             : 'SAILENDRA_FROM_EMAIL not set';
         const auditId = await upsertSentRecord({
             supabase,
+            orgId: params.orgId,
             phoneNumber: params.phoneNumber,
             proposalRow,
             proposalRef,
@@ -373,6 +378,7 @@ export async function sendProposalEmail(
 
         const auditId = await upsertSentRecord({
             supabase,
+            orgId: params.orgId,
             phoneNumber: params.phoneNumber,
             proposalRow,
             proposalRef,
@@ -401,6 +407,7 @@ export async function sendProposalEmail(
 // For generated proposals we insert a fresh row. Returns the proposal id.
 async function upsertSentRecord(args: {
     supabase: SupabaseServer;
+    orgId: string;
     phoneNumber: string;
     proposalRow: ProposalRow | null;
     proposalRef: string;
@@ -436,6 +443,7 @@ async function upsertSentRecord(args: {
     const { data, error } = await args.supabase
         .from('proposals')
         .insert({
+            org_id: args.orgId,
             lead_phone: args.phoneNumber,
             source: 'generated',
             file_path: null,

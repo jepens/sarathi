@@ -83,6 +83,7 @@ export async function POST(
     }
 
     const result = await sendProposalEmail({
+        orgId: access.orgId,
         phoneNumber: phone,
         proposalId,
         introNote,

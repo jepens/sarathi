@@ -144,6 +144,26 @@ If the PR is merged before step 2 (not recommended), main stays green with
 the pending lines; steps 2-3 then happen in a follow-up PR. Never apply a
 migration to production that has not passed step 1 and review.
 
+**Contract migrations (applied after the code deploy).** A merge to `main`
+does not deploy anything by itself: the app service is redeployed manually in
+Easypanel (the old docs, e.g. `docs/VPS_DEPLOYMENT.md`, still describe an
+auto-deploy). A migration that the live code is not compatible with (e.g.
+`0062_tenant_schema_contract`: drops column defaults and global unique keys
+the old code relies on) therefore cannot close its loop in the same PR. Its
+pending block stays in `expected-diff.txt` through the merge:
+
+1. Apply the expand migration (`0061`), refresh `production.txt` and delete
+   its pending block, in the PR. If the contract migration redefines a
+   function the expand one created, its block carries prepared, commented
+   `<` lines for the expand bodies: un-comment them in the same commit.
+2. Merge, then redeploy the app service in Easypanel and confirm the new build
+   is live (the Next.js build id in the page payload changes). The cron
+   service (`deploy/cron`) only curls `/api/queue/process` and runs no app
+   code, so it needs no redeploy.
+3. Only then apply the contract migration; never while the live build lacks
+   the code it depends on (the migration header names the PR).
+4. Follow-up PR: refresh `production.txt` and delete the contract block.
+
 ## Schema fingerprint (production vs replay)
 
 `fingerprint/schema_fingerprint.sql` prints one sorted line per app-owned
@@ -156,10 +176,14 @@ publication). It contains catalog SELECTs only.
 - `expected-diff.txt`: differences that are known and explained, one per line
   (`<` only in production, `>` only in the replay), each with a reason:
   permanent ones, or *pending* lines of a migration not yet applied to
-  production (see above). Entries that no longer differ fail as stale. It is
-  currently empty: the replay matches production exactly (re-checked
-  2026-10-16 against a fresh read-only production query: 552 lines, md5
-  `d17c90453caa0ec2b719e0ac361aa9aa`).
+  production (see above). Entries that no longer differ fail as stale. Apart
+  from the pending block `0062_tenant_schema_contract` it is empty: the
+  replay up to 0061 matches production exactly (re-checked 2026-10-16 after
+  applying 0061, against a fresh read-only production query: 570 lines, md5
+  `bbee7cd45d094803cf2140f63647b9bd`). The 0062 block stays pending until 0062
+  is applied after the deploy (see *Contract migrations*); its two `< fn`
+  lines are the 0061 bodies of `sync_vendor_from_contact` and
+  `verify_webhook_token` that production holds until then.
 
 Compare a fresh replay with the snapshot:
 

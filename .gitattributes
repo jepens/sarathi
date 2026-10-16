@@ -1,3 +1,11 @@
 # Shell scripts must keep LF endings — a CRLF entrypoint breaks `#!/bin/sh`
 # inside the Linux (Alpine) cron container with a "bad interpreter" error.
 *.sh text eol=lf
+
+# Migrations, pgTAP tests and fingerprint files are always LF in the working
+# copy (core.autocrlf=true would make them CRLF on Windows): the migration
+# text pasted into apply_migration must hash (body_md5) exactly like the
+# replay that produced expected-diff.txt, and compare.sh diffs these files
+# line by line.
+supabase/**/*.sql text eol=lf
+supabase/fingerprint/*.txt text eol=lf

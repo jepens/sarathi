@@ -1,5 +1,6 @@
 import { createClient } from '@/lib/supabase/server';
 import { SupabaseClient } from '@supabase/supabase-js';
+import { getPlatformSetting } from '@/lib/settings/platform-settings';
 
 export interface AppSetting {
     id: string;
@@ -10,15 +11,19 @@ export interface AppSetting {
     updated_at: string;
 }
 
+// Tenant settings: app_settings is keyed by (org_id, key) — the global unique
+// on key was dropped in migration 0062 — so every helper takes the org.
+
 /**
- * Get a specific setting by key
+ * Get a specific tenant setting by key
  */
-export async function getAppSetting(key: string, client?: SupabaseClient): Promise<string | null> {
+export async function getAppSetting(orgId: string, key: string, client?: SupabaseClient): Promise<string | null> {
     const supabase = client || await createClient();
 
     const { data, error } = await supabase
         .from('app_settings')
         .select('value')
+        .eq('org_id', orgId)
         .eq('key', key)
         .maybeSingle();
 
@@ -31,14 +36,15 @@ export async function getAppSetting(key: string, client?: SupabaseClient): Promi
 }
 
 /**
- * Get all settings
+ * Get all tenant settings of an org
  */
-export async function getAllSettings(client?: SupabaseClient): Promise<AppSetting[]> {
+export async function getAllSettings(orgId: string, client?: SupabaseClient): Promise<AppSetting[]> {
     const supabase = client || await createClient();
 
     const { data, error } = await supabase
         .from('app_settings')
         .select('*')
+        .eq('org_id', orgId)
         .order('key');
 
     if (error) {
@@ -50,14 +56,15 @@ export async function getAllSettings(client?: SupabaseClient): Promise<AppSettin
 }
 
 /**
- * Update a setting
+ * Update a tenant setting of an org
  */
-export async function updateAppSetting(key: string, value: string, client?: SupabaseClient): Promise<boolean> {
+export async function updateAppSetting(orgId: string, key: string, value: string, client?: SupabaseClient): Promise<boolean> {
     const supabase = client || await createClient();
 
     const { error } = await supabase
         .from('app_settings')
         .update({ value })
+        .eq('org_id', orgId)
         .eq('key', key);
 
     if (error) {
@@ -68,20 +75,30 @@ export async function updateAppSetting(key: string, value: string, client?: Supa
     return true;
 }
 
+// The webhook URL and verify token are PLATFORM settings (platform_settings,
+// service role only — tracker 1.7 / KEA-9). Pass a service-role client; without
+// one, the service-role-or-server client is used.
+async function platformClient(client?: SupabaseClient): Promise<SupabaseClient> {
+    if (client) return client;
+    const { createServiceOrServerClient } = await import('@/lib/supabase/service');
+    return createServiceOrServerClient();
+}
+
 /**
- * Get webhook URL from settings (with fallback to localhost)
+ * Get webhook URL from platform settings (with fallback to localhost)
  */
 export async function getWebhookUrl(client?: SupabaseClient): Promise<string> {
-    const url = await getAppSetting('whatsapp_webhook_url', client);
+    const url = await getPlatformSetting(await platformClient(client), 'whatsapp_webhook_url');
     return url || 'http://localhost:3000/api/webhook/whatsapp';
 }
 
 /**
- * Get verify token from settings (with fallback to env). Returns '' when none is
- * configured — never a guessable default, so verification fails closed.
+ * Get verify token from platform settings (with fallback to env). Returns ''
+ * when none is configured — never a guessable default, so verification fails
+ * closed.
  */
 export async function getVerifyToken(client?: SupabaseClient): Promise<string> {
-    const token = await getAppSetting('whatsapp_verify_token', client);
+    const token = await getPlatformSetting(await platformClient(client), 'whatsapp_verify_token');
     return token || process.env.WHATSAPP_VERIFY_TOKEN || '';
 }
 
@@ -93,11 +110,7 @@ export async function checkVerifyToken(inputToken: string, client?: SupabaseClie
     // Webhook GET (Meta token challenge) has no user session — use service
     // role so we can revoke anon+authenticated EXECUTE on the underlying
     // SECURITY DEFINER function (advisor finding).
-    let supabase = client;
-    if (!supabase) {
-        const { createServiceOrServerClient } = await import('@/lib/supabase/service');
-        supabase = await createServiceOrServerClient();
-    }
+    const supabase = await platformClient(client);
 
     // Try RPC first (secure way)
     const { data, error } = await supabase.rpc('verify_webhook_token', { input_token: inputToken });
@@ -108,7 +121,7 @@ export async function checkVerifyToken(inputToken: string, client?: SupabaseClie
 
     // Fallback for development/if RPC fails (e.g. function not created yet)
     // This might fail if RLS blocks access, but it's a backup.
-    const storedToken = await getVerifyToken(client);
+    const storedToken = await getVerifyToken(supabase);
     return storedToken !== '' && storedToken === inputToken;
 }
 
@@ -178,8 +191,8 @@ export async function getShippingApiKey(): Promise<string | null> {
 export async function isWhatsAppConfigured(client?: SupabaseClient): Promise<boolean> {
     const accessToken = process.env.WHATSAPP_ACCESS_TOKEN;
     const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
-    // Verify token is still in DB
-    const verifyToken = await getAppSetting('whatsapp_verify_token', client);
+    // Verify token is a platform setting (platform_settings)
+    const verifyToken = await getPlatformSetting(await platformClient(client), 'whatsapp_verify_token');
 
     return !!(accessToken && phoneNumberId && verifyToken);
 }
