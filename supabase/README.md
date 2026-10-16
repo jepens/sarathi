@@ -199,8 +199,10 @@ publication). It contains catalog SELECTs only.
   exactly (re-checked 2026-10-16 after applying 0062, against a fresh
   read-only production query: 563 lines, md5
   `bf9733425504e2bcbdc1a93ae91a413f`).
-- Not fingerprinted: sequence privileges and default privileges
-  (`pg_default_acl`). Whenever `production.txt` is refreshed (from 0063 on),
+- Not fingerprinted: sequence privileges, column-level privileges, MAINTAIN,
+  foreign-table privileges and default privileges (`pg_default_acl`); the
+  `relpriv` lines cover only `arwdDxt` on tables and views. Whenever
+  `production.txt` is refreshed (once 0063 is applied to production),
   also run read-only on production the query of guard 11 in
   `070_catalog_guards.test.sql` (tables, views, sequences) and the one of the
   first assertion in `140_anon_no_table_access.test.sql` (default

@@ -16,12 +16,16 @@
 #
 
 # pending production apply: 0063_revoke_anon_table_privileges
-# (tracker 1.9 step 0 / 1.14, audit KEA-15: anon loses every privilege on the
-# 20 public tables that had anon=arwdDxtm; platform_settings had none since
-# 0061). Independent of the app deploy: apply after review, then refresh
-# production.txt and delete this block. Not visible in the fingerprint: the
-# default privileges of postgres in public (pg_default_acl) and sequences
-# (public has none); verify those with the read-only SELECTs of the PR.
+# (tracker 1.9 step 0 / 1.14, audit KEA-15 / KEA-28: anon loses every
+# privilege on the 20 public tables that had anon=arwdDxtm; platform_settings
+# had none since 0061). Independent of the app deploy: apply after review, then
+# refresh production.txt, delete this block and update the expected-diff
+# sentence in supabase/README.md. Not visible in the fingerprint: the default
+# privileges of postgres in public (pg_default_acl), sequences (public has
+# none), column-level and MAINTAIN privileges; verify those with the two
+# read-only production queries named in supabase/README.md, "Schema
+# fingerprint" (guard 11 of 070 and the first assertion of 140): both must
+# return no row.
 < relpriv public.app_settings anon=rawdDxt
 < relpriv public.business_profiles anon=rawdDxt
 < relpriv public.chat_labels anon=rawdDxt

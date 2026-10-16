@@ -1,5 +1,5 @@
--- Fase 1 — anon holds no table privilege in schema public (tracker 1.9 step 0
--- and 1.14; audit KEA-15, KUA-13).
+-- Fase 1 — anon holds no table privilege in schema public (tracker 1.9 step 0,
+-- 1.14 and the table half of 5.5; audit KEA-15, KEA-28 rec. 1, KUA-13).
 --
 -- Why (KEA-15). realtime.apply_rls skips the RLS check for DELETE events and
 -- sends every subscriber of the table an old_record made of the primary-key
@@ -62,7 +62,8 @@
 --   * functions: their default privileges are unchanged, and anon can still
 --     EXECUTE 6 SECURITY INVOKER functions (cleanup_old_queue_entries,
 --     cleanup_old_rate_limits and 4 trigger functions); without table
---     privileges they cannot touch data (42501). Left for tracker 5.5.
+--     privileges they cannot touch data (42501). Left for tracker 5.5
+--     (KEA-28 rec. 2).
 --   * USAGE on schema public stays (PostgREST's schema and RPC surface).
 --
 -- Rollback: restores exactly what production held on 2026-10-16 (read-only

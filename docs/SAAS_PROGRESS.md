@@ -29,6 +29,10 @@
 | D12 · AI pasca-handoff | Tetap mati sampai operator menyalakan switch "AI aktif" (2026-10-16) |
 | D13 · Horizon meeting | AI memesan meeting maksimal 30 hari ke depan (`MAX_BOOKING_HORIZON_DAYS`) (2026-10-16) |
 | D9 · Keanggotaan org | **1 user = 1 org**. Tim Sarathi membantu tenant lewat peran platform-admin (Fase 3), bukan sebagai anggota tiap org; tanpa pemilih org (2026-10-16) |
+| D16 · File KB lama (1.12) | Ke-15 objek legacy `documents` dipindah semua ke folder Sailendra. Nasib 13 duplikat yang tidak dipakai diputuskan setelah masa tunggu 72 jam (2026-10-16) |
+| D17 · Skrip service-role (1.12) | Dijalankan Claude di mesin pemilik (`.env.local`). Hasil dry-run & verifikasi ditinjau dulu; setiap langkah yang mengubah data disetujui pemilik (2026-10-16) |
+| D18 · `chat-media` privat (1.11) | Dialihkan segera setelah deploy terverifikasi; link publik lama berhenti ±1 jam kemudian (cache CDN) (2026-10-16) |
+| D19 · Push di perangkat bersama | Perangkat mengikuti user yang sedang login; notifikasi user sebelumnya di perangkat itu berhenti (2026-10-16) |
 
 ### Menunggu keputusan
 
@@ -127,7 +131,7 @@
 | 5.2 | Skala: fairness antrean, rate limiter per tenant, RLS set-based, index ANN, higiene index | PER-6, PER-9, PER-7, PER-10, PER-11 | ⬜ | |
 | 5.3 | Siklus hidup data: retensi, ekspor/offboarding tenant, audit log | KUA-21 | ⬜ | |
 | 5.4 | Self-serve signup (org baru + CAPTCHA server-side) + Embedded Signup | — | ⬜ | |
-| 5.5 | Perapian | KEA-26, KEA-28, KUA-23, KUA-24, KUA-25, UXA-9 | ⬜ | |
+| 5.5 | Perapian | KEA-26, KEA-28, KUA-23, KUA-24, KUA-25, UXA-9 | ⬜ | KEA-28 bagian tabel + default privileges: 0063 (PR menyusul); sisa: EXECUTE anon/authenticated pada `cleanup_*` |
 
 ## Log progres
 
