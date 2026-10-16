@@ -1,4 +1,5 @@
 import { sendWhatsAppMessage } from '@/lib/whatsapp/client';
+import { redactPII } from '@/lib/utils/logger';
 
 /**
  * WhatsApp Notification Module
@@ -49,7 +50,7 @@ Terima kasih telah berbelanja! 😊`;
         // Send via WhatsApp
         await sendWhatsAppMessage(order.customer_phone, message);
 
-        console.log(`Payment notification sent to ${order.customer_phone}`);
+        console.log(`Payment notification sent to ${redactPII(order.customer_phone)}`);
     } catch (error) {
         console.error('Error sending payment notification:', error);
         // Don't throw - notification failure shouldn't break order update
@@ -73,7 +74,7 @@ Jika ada pertanyaan, silakan hubungi kami. Terima kasih! 🙏`;
 
         await sendWhatsAppMessage(order.customer_phone, message);
 
-        console.log(`Cancellation notification sent to ${order.customer_phone}`);
+        console.log(`Cancellation notification sent to ${redactPII(order.customer_phone)}`);
     } catch (error) {
         console.error('Error sending cancellation notification:', error);
     }

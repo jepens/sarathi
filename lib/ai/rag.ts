@@ -655,7 +655,8 @@ ${wrapUntrustedContext(contextText)}
                 let toolResult = '';
                 let toolOk = true;
 
-                console.log(`🛠️ Executing tool: ${functionName}`, functionArgs);
+                // Argument names only: their values carry customer data (KEA-21).
+                console.log(`🛠️ Executing tool: ${functionName} (${Object.keys(functionArgs ?? {}).join(', ') || 'no arguments'})`);
                 opts?.onToolStatus?.({ name: functionName, phase: 'executing' });
 
                 if (functionName === 'check_availability') {
