@@ -467,10 +467,6 @@ pol realtime.messages "org members receive org broadcasts" PERMISSIVE cmd=SELECT
 pol storage.objects "chat-media org members" PERMISSIVE cmd=ALL roles=authenticated using=((bucket_id = 'chat-media'::text) AND CASE WHEN ((storage.foldername(name))[1] ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'::text) THEN private.is_org_member(((storage.foldername(name))[1])::uuid) ELSE false END) check=((bucket_id = 'chat-media'::text) AND CASE WHEN ((storage.foldername(name))[1] ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'::text) THEN private.is_org_member(((storage.foldername(name))[1])::uuid) ELSE false END)
 pol storage.objects "documents bucket org members" PERMISSIVE cmd=ALL roles=authenticated using=((bucket_id = 'documents'::text) AND CASE WHEN ((storage.foldername(name))[1] ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'::text) THEN private.is_org_member(((storage.foldername(name))[1])::uuid) ELSE false END) check=((bucket_id = 'documents'::text) AND CASE WHEN ((storage.foldername(name))[1] ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'::text) THEN private.is_org_member(((storage.foldername(name))[1])::uuid) ELSE false END)
 pol storage.objects "proposals org members" PERMISSIVE cmd=ALL roles=authenticated using=((bucket_id = 'proposals'::text) AND CASE WHEN ((storage.foldername(name))[1] ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'::text) THEN private.is_org_member(((storage.foldername(name))[1])::uuid) ELSE false END) check=((bucket_id = 'proposals'::text) AND CASE WHEN ((storage.foldername(name))[1] ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'::text) THEN private.is_org_member(((storage.foldername(name))[1])::uuid) ELSE false END)
-pub supabase_realtime public.chat_labels
-pub supabase_realtime public.labels
-pub supabase_realtime public.whatsapp_chats
-pub supabase_realtime public.whatsapp_messages
 rel public.app_settings kind=r owner=postgres rls=t force_rls=f
 rel public.business_profiles kind=r owner=postgres rls=t force_rls=f
 rel public.chat_labels kind=r owner=postgres rls=t force_rls=f

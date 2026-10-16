@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isNewInbound, type ChatRealtimeRow } from '@/lib/notifications/inbound';
+import { isNewInbound, pickFreshInbound, type ChatRealtimeRow } from '@/lib/notifications/inbound';
 
 const MOUNT = Date.parse('2026-08-13T10:00:00Z');
 const T = (iso: string) => Date.parse(iso);
@@ -47,5 +47,69 @@ describe('isNewInbound', () => {
 
     it('ignores rows with no inbound timestamp', () => {
         expect(isNewInbound(row({ last_inbound_at: null }), undefined, MOUNT)).toBe(false);
+    });
+});
+
+// One read of the latest threads (the notifier re-reads after every org-bus
+// signal): the same rules, applied across reads through the `seen` map.
+describe('pickFreshInbound', () => {
+    const phones = (rows: ChatRealtimeRow[]) => rows.map((r) => r.phone_number);
+
+    it('on the first read alerts only for inbounds at/after the mount floor, and records every row', () => {
+        const seen = new Map<string, number>();
+        const fresh = pickFreshInbound(
+            [
+                row({ phone_number: 'a' }), // 10:05, after the floor
+                row({ phone_number: 'b', last_inbound_at: '2026-08-13T09:00:00Z', last_message_at: '2026-08-13T09:00:00Z' }),
+                row({ phone_number: 'c', last_inbound_at: null, last_message_at: '2026-08-13T10:07:00Z' }),
+            ],
+            seen,
+            MOUNT,
+        );
+        expect(phones(fresh)).toEqual(['a']);
+        expect(seen).toEqual(
+            new Map([
+                ['a', T('2026-08-13T10:05:00Z')],
+                ['b', T('2026-08-13T09:00:00Z')],
+            ]),
+        );
+    });
+
+    it('re-reading the same rows alerts nothing; a newer inbound alerts once', () => {
+        const seen = new Map<string, number>();
+        pickFreshInbound([row({ phone_number: 'a' })], seen, MOUNT);
+        expect(pickFreshInbound([row({ phone_number: 'a' })], seen, MOUNT)).toEqual([]);
+
+        const newer = row({
+            phone_number: 'a',
+            last_inbound_at: '2026-08-13T10:09:00Z',
+            last_message_at: '2026-08-13T10:09:00Z',
+        });
+        expect(phones(pickFreshInbound([newer], seen, MOUNT))).toEqual(['a']);
+        expect(pickFreshInbound([newer], seen, MOUNT)).toEqual([]);
+        expect(seen.get('a')).toBe(T('2026-08-13T10:09:00Z'));
+    });
+
+    it('skips a thread already replied to, and does not alert for it later either', () => {
+        const seen = new Map<string, number>();
+        const replied = row({ phone_number: 'a', last_message_at: '2026-08-13T10:06:00Z' });
+        expect(pickFreshInbound([replied], seen, MOUNT)).toEqual([]);
+        expect(seen.get('a')).toBe(T('2026-08-13T10:05:00Z'));
+        // The reply is still the latest activity; the same inbound never alerts.
+        expect(pickFreshInbound([row({ phone_number: 'a' })], seen, MOUNT)).toEqual([]);
+    });
+
+    it('a pre-mount thread alerts once the customer writes again', () => {
+        const seen = new Map<string, number>();
+        const old = row({ phone_number: 'b', last_inbound_at: '2026-08-13T09:00:00Z', last_message_at: '2026-08-13T09:00:00Z' });
+        expect(pickFreshInbound([old], seen, MOUNT)).toEqual([]);
+        const again = row({ phone_number: 'b', last_inbound_at: '2026-08-13T10:01:00Z', last_message_at: '2026-08-13T10:01:00Z' });
+        expect(phones(pickFreshInbound([again], seen, MOUNT))).toEqual(['b']);
+    });
+
+    it('nothing alerts while the mount floor is not set yet (Infinity)', () => {
+        const seen = new Map<string, number>();
+        expect(pickFreshInbound([row({ phone_number: 'a' })], seen, Number.POSITIVE_INFINITY)).toEqual([]);
+        expect(seen.has('a')).toBe(true);
     });
 });

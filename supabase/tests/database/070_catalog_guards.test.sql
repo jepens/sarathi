@@ -96,16 +96,15 @@ select is_empty(
          and not exists (select 1 from pg_depend d where d.objid = p.oid and d.deptype = 'e') $$,
     'every public/private function pins search_path');
 
--- 10. Realtime only publishes RLS-protected, org-scoped tables.
+-- 10. supabase_realtime publishes no table at all (0068; KEA-15). Postgres
+--     Changes cannot isolate tenants, RLS or not: realtime.apply_rls sends the
+--     key columns of every DELETE to every subscriber of the table, signed in
+--     to any org. Live updates go through the private org broadcast (0064)
+--     instead. No schema filter: a table of any schema brings the fan-out back.
 select is_empty(
-    $$ select pt.tablename from pg_publication_tables pt
-       join pg_class c on c.relname = pt.tablename and c.relnamespace = 'public'::regnamespace
-       where pt.pubname = 'supabase_realtime' and pt.schemaname = 'public'
-         and (not c.relrowsecurity
-              or not exists (select 1 from pg_policies p
-                             where p.schemaname = 'public' and p.tablename = pt.tablename
-                               and p.qual like '%is_org_member(%')) $$,
-    'every realtime-published table has RLS with an org-membership policy');
+    $$ select pt.schemaname || '.' || pt.tablename from pg_publication_tables pt
+       where pt.pubname = 'supabase_realtime' $$,
+    'supabase_realtime publishes no table (live updates: the private org broadcast of 0064)');
 
 -- 11. anon holds no privilege on any relation in public (0063), whoever owns
 --     it: tables, partitioned tables, views, materialized views and foreign

@@ -1,8 +1,10 @@
 'use client';
 
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
+import { useCurrentOrgId } from '@/components/current-org-provider';
+import { useOrgRefetch } from '@/components/realtime/org-realtime-provider';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -171,6 +173,7 @@ export function ContactList() {
 
     const supabase = createClient();
     const router = useRouter();
+    const orgId = useCurrentOrgId();
 
     const fetchVendorLinks = useCallback(async () => {
         try {
@@ -191,17 +194,15 @@ export function ContactList() {
         }
     }, []);
 
-    const sortByRecency = (rows: Contact[]) =>
-        [...rows].sort(
-            (a, b) =>
-                new Date(b.last_message_at ?? 0).getTime() -
-                new Date(a.last_message_at ?? 0).getTime()
-        );
-
     const fetchContacts = useCallback(async () => {
+        if (!orgId) {
+            setLoading(false);
+            return;
+        }
         const { data, error } = await supabase
             .from('whatsapp_chats')
             .select(CONTACT_COLUMNS)
+            .eq('org_id', orgId)
             // nullsFirst:false so conversation-less manual leads sort to the bottom.
             .order('last_message_at', { ascending: false, nullsFirst: false });
 
@@ -212,50 +213,19 @@ export function ContactList() {
             setContacts((data as unknown as Contact[]) || []);
         }
         setLoading(false);
-    }, [supabase]);
+    }, [supabase, orgId]);
 
     useEffect(() => {
         fetchContacts();
         fetchVendorLinks();
     }, [fetchContacts, fetchVendorLinks]);
 
-    // Realtime: the AI writes lead/vendor fields into whatsapp_chats from the
-    // WhatsApp webhook (save_lead_info). Subscribe so Contacts fills in live —
-    // no manual refresh. whatsapp_chats is in the supabase_realtime publication
-    // (migration 0010); RLS is authenticated-only so the admin receives changes.
-    const upsertFromRealtime = useCallback((row: Contact) => {
-        setContacts((prev) => {
-            const idx = prev.findIndex((c) => c.phone_number === row.phone_number);
-            const next =
-                idx === -1
-                    ? [row, ...prev]
-                    : prev.map((c) => (c.phone_number === row.phone_number ? { ...c, ...row } : c));
-            return sortByRecency(next);
-        });
-    }, []);
-
-    const upsertRef = useRef(upsertFromRealtime);
-    upsertRef.current = upsertFromRealtime;
-
-    useEffect(() => {
-        const channel = supabase
-            .channel('contacts-changes')
-            .on(
-                'postgres_changes',
-                { event: 'INSERT', schema: 'public', table: 'whatsapp_chats' },
-                (payload) => upsertRef.current(payload.new as Contact)
-            )
-            .on(
-                'postgres_changes',
-                { event: 'UPDATE', schema: 'public', table: 'whatsapp_chats' },
-                (payload) => upsertRef.current(payload.new as Contact)
-            )
-            .subscribe();
-
-        return () => {
-            supabase.removeChannel(channel);
-        };
-    }, [supabase]);
+    // Live: the AI writes lead/vendor fields into whatsapp_chats from the
+    // WhatsApp webhook (save_lead_info), so Contacts fills in without a manual
+    // refresh. The org Realtime bus only says that a chat of the org changed
+    // (no row data, tracker 1.9): refetch the list, coalesced, on every change
+    // and every RESYNC.
+    useOrgRefetch('whatsapp_chats', fetchContacts);
 
     const patchLocal = (phone: string, fields: Partial<Contact>) =>
         setContacts((prev) =>

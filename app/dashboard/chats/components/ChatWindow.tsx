@@ -1,7 +1,9 @@
 'use client';
 
-import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
+import { useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo } from 'react';
 import { createClient } from '@/lib/supabase/client';
+import { useCurrentOrgId } from '@/components/current-org-provider';
+import { useCoalesced, useOrgRealtime, useOrgRefetch } from '@/components/realtime/org-realtime-provider';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Send, MoreVertical, Check, CheckCheck, AlertCircle, FileText, Store, Clock, ChevronLeft, Trash2, Paperclip, X, Loader2, Download, ImageOff, Mic, Film, Zap, Smile, Search, ChevronUp, ChevronDown, Reply } from 'lucide-react';
@@ -105,6 +107,17 @@ interface Message {
     reply_to_wamid?: string | null;
 }
 
+// Merge rows read by id into the open thread: replace the known ids, add the
+// new ones, keep created_at order (PostgREST timestamps share one format, so
+// they compare as strings, microseconds included).
+function upsertMessages(prev: Message[], rows: Message[]): Message[] {
+    const byId = new Map(prev.map((m) => [m.id, m] as const));
+    for (const row of rows) byId.set(row.id, row);
+    return Array.from(byId.values()).sort((a, b) =>
+        a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0,
+    );
+}
+
 interface ChatWindowProps {
     phoneNumber: string;
     // Mobile master-detail: returns from the conversation to the chat list.
@@ -193,6 +206,13 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
     // to read history is never yanked back down.
     const atBottomRef = useRef(true);
     const supabase = createClient();
+    const orgId = useCurrentOrgId();
+    // The chat on screen. This component is not remounted per chat, so a read
+    // that resolves after the user switched chats must be dropped.
+    const phoneRef = useRef(phoneNumber);
+    useLayoutEffect(() => {
+        phoneRef.current = phoneNumber;
+    }, [phoneNumber]);
 
     const handleScroll = useCallback(() => {
         const el = scrollContainerRef.current;
@@ -200,13 +220,16 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
         atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
     }, []);
 
-    const fetchMessages = useCallback(async () => {
-        // Fetch contact info
+    // Contact info for the header + CRM strip.
+    const fetchHeader = useCallback(async () => {
+        if (!orgId) return;
         const { data: contactData } = await supabase
             .from('whatsapp_chats')
             .select('contact_name, contact_type, company, last_message_at, last_inbound_at, lead_stage, event_interest, participant_count, location_pref, vendor_category, vendor_offering, ai_enabled')
+            .eq('org_id', orgId)
             .eq('phone_number', phoneNumber)
             .single();
+        if (phoneRef.current !== phoneNumber) return; // another chat is open now
 
         if (contactData) {
             setContactName(contactData.contact_name);
@@ -224,12 +247,21 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
                 ai_enabled: contactData.ai_enabled ?? true,
             });
         }
+    }, [phoneNumber, supabase, orgId]);
 
+    // The whole thread.
+    const fetchMessages = useCallback(async () => {
+        if (!orgId) {
+            setLoadingMsgs(false);
+            return;
+        }
         const { data, error } = await supabase
             .from('whatsapp_messages')
             .select('*')
+            .eq('org_id', orgId)
             .eq('phone_number', phoneNumber)
             .order('created_at', { ascending: true });
+        if (phoneRef.current !== phoneNumber) return; // another chat is open now
 
         if (error) {
             console.error('Error fetching messages:', error);
@@ -238,7 +270,12 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
             setMessages(data || []);
         }
         setLoadingMsgs(false);
-    }, [phoneNumber, supabase]);
+    }, [phoneNumber, supabase, orgId]);
+
+    // Header + thread: on open, after a send and on the 10 s poll.
+    const fetchChat = useCallback(async () => {
+        await Promise.all([fetchHeader(), fetchMessages()]);
+    }, [fetchHeader, fetchMessages]);
 
     // Mark this conversation read → clears its unread badge in the chat list.
     // Opening the chat (or a new inbound arriving while it's open) is the "read"
@@ -274,7 +311,7 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
         atBottomRef.current = true;
         setLoadingMsgs(true);
         setMessages([]);
-        fetchMessages();
+        fetchChat();
         // Opening the chat clears its unread badge.
         void markChatRead();
         // Switching chats: reset the composer + quick-reply UI so a typed draft,
@@ -291,88 +328,58 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
         setSearchQuery('');
         setReplyingTo(null);
 
-        // Subscribe to real-time changes. INSERT = new message; UPDATE =
-        // delivery-status change (sent → delivered → read, or failed) pushed
-        // by the webhook status-callback handler. Without the UPDATE branch a
-        // failed bubble would only turn red on the next 10s poll.
-        const channel = supabase
-            .channel(`whatsapp_messages:${phoneNumber}`)
-            .on('postgres_changes', {
-                event: 'INSERT',
-                schema: 'public',
-                table: 'whatsapp_messages',
-                filter: `phone_number=eq.${phoneNumber}`
-            }, (payload) => {
-                const incoming = payload.new as Message;
-                // Dedup: handleSend() also calls fetchMessages() right after a
-                // successful send, so the row may already be present.
-                setMessages(prev =>
-                    prev.some(m => m.id === incoming.id) ? prev : [...prev, incoming]
-                );
-                // A customer message arriving while the chat is open is read
-                // immediately — keep the badge cleared (the webhook just bumped it).
-                if (incoming.role === 'user') void markChatRead();
-            })
-            .on('postgres_changes', {
-                event: 'UPDATE',
-                schema: 'public',
-                table: 'whatsapp_messages',
-                filter: `phone_number=eq.${phoneNumber}`
-            }, (payload) => {
-                const updated = payload.new as Message;
-                setMessages(prev =>
-                    prev.map(m => (m.id === updated.id ? updated : m))
-                );
-            })
-            // Contact row changes (rename, or klien/vendor re-classification from
-            // the Contacts page) — keep the header name + badge live.
-            .on('postgres_changes', {
-                event: 'UPDATE',
-                schema: 'public',
-                table: 'whatsapp_chats',
-                filter: `phone_number=eq.${phoneNumber}`
-            }, (payload) => {
-                const row = payload.new as {
-                    contact_name: string | null;
-                    contact_type: string | null;
-                    company: string | null;
-                    last_message_at: string | null;
-                    last_inbound_at: string | null;
-                    lead_stage: string | null;
-                    event_interest: string | null;
-                    participant_count: number | null;
-                    location_pref: string | null;
-                    vendor_category: string | null;
-                    vendor_offering: string | null;
-                    ai_enabled: boolean | null;
-                };
-                setContactName(row.contact_name);
-                setContactType(row.contact_type);
-                setContactCompany(row.company);
-                setLastMessageAt(row.last_message_at);
-                setLastInboundAt(row.last_inbound_at);
-                setCrm({
-                    lead_stage: row.lead_stage,
-                    event_interest: row.event_interest,
-                    participant_count: row.participant_count,
-                    location_pref: row.location_pref,
-                    vendor_category: row.vendor_category,
-                    vendor_offering: row.vendor_offering,
-                    ai_enabled: row.ai_enabled ?? true,
-                });
-            })
-            .subscribe();
-
         // Polling fallback - refresh every 10 seconds
         const pollInterval = setInterval(() => {
-            fetchMessages();
+            fetchChat();
         }, 10000);
 
         return () => {
-            supabase.removeChannel(channel);
             clearInterval(pollInterval);
         };
-    }, [phoneNumber, fetchMessages, markChatRead, supabase]);
+    }, [phoneNumber, fetchChat, markChatRead]);
+
+    // Live, from the org Realtime bus. A whatsapp_messages event names its rows
+    // by id, never the chat: INSERT = new message; UPDATE = delivery-status
+    // change (sent → delivered → read, or failed) pushed by the webhook
+    // status-callback handler. Read those ids for THIS chat (ids of the org's
+    // other chats match nothing) and merge them; a DELETE drops its ids; a
+    // truncated event (over 50 rows) or a RESYNC reloads the thread.
+    const announcedIdsRef = useRef(new Set<string>());
+    const fetchAnnounced = useCallback(async () => {
+        const ids = Array.from(announcedIdsRef.current);
+        announcedIdsRef.current.clear();
+        if (ids.length === 0 || !orgId) return;
+        const { data, error } = await supabase
+            .from('whatsapp_messages')
+            .select('*')
+            .eq('org_id', orgId)
+            .eq('phone_number', phoneNumber)
+            .in('id', ids);
+        if (error || !data || data.length === 0 || phoneRef.current !== phoneNumber) return;
+        const rows = data as Message[];
+        // Dedup by id: handleSend() also reloads the thread right after a send.
+        setMessages((prev) => upsertMessages(prev, rows));
+        // A customer message arriving while the chat is open is read
+        // immediately — keep the badge cleared (the webhook just bumped it).
+        if (rows.some((m) => m.role === 'user')) void markChatRead();
+    }, [orgId, phoneNumber, supabase, markChatRead]);
+    // A short wait: the open chat should feel instant.
+    const fetchAnnouncedSoon = useCoalesced(fetchAnnounced, { wait: 150, maxWait: 1000 });
+    const fetchMessagesSoon = useCoalesced(fetchMessages);
+    useOrgRealtime('whatsapp_messages', (signal) => {
+        if (signal.op === 'RESYNC' || signal.truncated) {
+            fetchMessagesSoon();
+        } else if (signal.op === 'DELETE') {
+            const gone = new Set(signal.ids);
+            setMessages((prev) => prev.filter((m) => !gone.has(m.id)));
+        } else {
+            for (const id of signal.ids) announcedIdsRef.current.add(id);
+            fetchAnnouncedSoon();
+        }
+    });
+    // Contact row changes (rename, or klien/vendor re-classification from the
+    // Contacts page, AI mode, the 24 h window) — keep the header + badge live.
+    useOrgRefetch('whatsapp_chats', fetchHeader);
 
     useEffect(() => {
         // Follow new messages only when the user is already at the bottom; if
@@ -423,7 +430,7 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
             // their sent bubble appear. We can't rely on realtime alone
             // (only just enabled it) and the 10s polling interval feels
             // unresponsive — admins thought the send had failed.
-            await fetchMessages();
+            await fetchChat();
 
         } catch (error) {
             console.error('Error sending message:', error);
@@ -515,7 +522,7 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
             setNewMessage('');
             // Defensive: never let a reply context linger into the next text send.
             setReplyingTo(null);
-            await fetchMessages();
+            await fetchChat();
         } catch (e) {
             toast.error(e instanceof Error ? e.message : 'Gagal mengirim file', { duration: 10_000 });
         } finally {
@@ -1352,7 +1359,7 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
                 open={templateDialogOpen}
                 onOpenChange={setTemplateDialogOpen}
                 phoneNumber={phoneNumber}
-                onSent={fetchMessages}
+                onSent={fetchChat}
             />
         </div>
     );

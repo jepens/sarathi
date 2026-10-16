@@ -12,9 +12,11 @@ import {
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import { createClient } from '@/lib/supabase/client';
+import { useCurrentOrgId } from '@/components/current-org-provider';
+import { useOrgRefetch } from '@/components/realtime/org-realtime-provider';
 import { unlockAudio, playDing } from '@/lib/notifications/sound';
 import { setTitleBadge, setFaviconBadge, clearBadges } from '@/lib/notifications/badge';
-import { isNewInbound, type ChatRealtimeRow } from '@/lib/notifications/inbound';
+import { pickFreshInbound, type ChatRealtimeRow } from '@/lib/notifications/inbound';
 import { subscribeToPush, unsubscribeFromPush, isPushSupported } from '@/lib/notifications/push';
 import {
     subscribeNotifPrefs,
@@ -58,6 +60,7 @@ export function useNotifications(): NotificationState {
 
 export function NotificationProvider({ children }: { children: React.ReactNode }) {
     const router = useRouter();
+    const orgId = useCurrentOrgId();
 
     // Browser-derived prefs via an external store — no useState/useEffect, so no
     // set-state-in-effect and no hydration skew.
@@ -109,14 +112,22 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         void subscribeToPush(VAPID_PUBLIC_KEY);
     }, [enabled, permission]);
 
-    // The realtime notifier: one subscription for the whole dashboard session.
-    // It reads the latest prefs from the store (getNotifPrefs) and the current
-    // route from location at event time, so it never needs to re-subscribe.
+    // The in-tab notifier. The org Realtime bus says that a whatsapp_chats row
+    // of the org changed (and sends a RESYNC after every join, wake-up or
+    // reconnect); checkInbound below then re-reads the latest chats through
+    // PostgREST and alerts for each row with a NEW inbound message. seen: the
+    // last inbound timestamp handled per phone; mountFloor: on first sight of
+    // a phone only an inbound from this session alerts (Infinity until
+    // mounted, so nothing historical can alert).
+    const seenRef = useRef(new Map<string, number>());
+    const mountFloorRef = useRef(Number.POSITIVE_INFINITY);
     useEffect(() => {
-        const supabase = createClient();
-        const seen = new Map<string, number>();
-        const mountFloor = Date.now();
+        mountFloorRef.current = Date.now();
+    }, []);
 
+    // One alert. It reads the latest prefs from the store (getNotifPrefs) and
+    // the current route from location at alert time.
+    const notify = useMemo(() => {
         const openChat = (phone: string) =>
             router.push(`/dashboard/chats?phone=${encodeURIComponent(phone)}`);
 
@@ -153,13 +164,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
             }
         };
 
-        const handle = (row: ChatRealtimeRow) => {
-            const prev = seen.get(row.phone_number);
-            const fresh = isNewInbound(row, prev, mountFloor);
-            const inboundMs = row.last_inbound_at ? Date.parse(row.last_inbound_at) : NaN;
-            if (Number.isFinite(inboundMs)) seen.set(row.phone_number, inboundMs);
-            if (!fresh) return;
-
+        return (row: ChatRealtimeRow) => {
             const { soundOn: soundNow, enabled: enabledNow, permission: permNow } = getNotifPrefs();
             const active = enabledNow && permNow === 'granted';
             const name = row.contact_name || row.phone_number;
@@ -184,60 +189,22 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
                 });
             }
         };
-
-        let channel: ReturnType<typeof supabase.channel> | undefined;
-        let authListener: { unsubscribe: () => void } | undefined;
-        let cancelled = false;
-
-        (async () => {
-            // RLS-gated postgres_changes only stream to a realtime socket that
-            // carries the signed-in user's JWT. supabase-js sets that token on auth
-            // events, but this effect can subscribe BEFORE the token has propagated
-            // — the channel then joins unauthenticated and silently receives
-            // NOTHING (whatsapp_chats RLS = is_org_member(org_id)). Set the token
-            // explicitly before subscribing, and refresh it whenever it rotates.
-            const {
-                data: { session },
-            } = await supabase.auth.getSession();
-            if (cancelled) return;
-            if (session?.access_token) {
-                await supabase.realtime.setAuth(session.access_token);
-            }
-            if (cancelled) return;
-
-            channel = supabase
-                .channel('notif_inbound')
-                .on(
-                    'postgres_changes',
-                    { event: 'INSERT', schema: 'public', table: 'whatsapp_chats' },
-                    (payload) => handle(payload.new as ChatRealtimeRow),
-                )
-                .on(
-                    'postgres_changes',
-                    { event: 'UPDATE', schema: 'public', table: 'whatsapp_chats' },
-                    (payload) => handle(payload.new as ChatRealtimeRow),
-                )
-                .subscribe((status, err) => {
-                    // Make a silent realtime failure observable in the console.
-                    const st: string = status;
-                    if (st === 'SUBSCRIBED') {
-                        console.info('[notif] realtime subscribed to whatsapp_chats');
-                    } else if (st === 'CHANNEL_ERROR' || st === 'TIMED_OUT' || st === 'CLOSED') {
-                        console.error(`[notif] realtime ${st}`, err ?? '');
-                    }
-                });
-
-            authListener = supabase.auth.onAuthStateChange((_event, s) => {
-                if (s?.access_token) void supabase.realtime.setAuth(s.access_token);
-            }).data.subscription;
-        })();
-
-        return () => {
-            cancelled = true;
-            authListener?.unsubscribe();
-            if (channel) supabase.removeChannel(channel);
-        };
     }, [router, bumpBadge]);
+
+    // The latest 20 threads by inbound time: one read per burst of changes
+    // (coalesced, at most 2 s apart), so a 20-chat burst is the limit.
+    const checkInbound = useCallback(async () => {
+        if (!orgId) return;
+        const { data, error } = await createClient()
+            .from('whatsapp_chats')
+            .select('phone_number, contact_name, contact_type, last_message, last_message_at, last_inbound_at')
+            .eq('org_id', orgId)
+            .order('last_inbound_at', { ascending: false, nullsFirst: false })
+            .limit(20);
+        if (error || !data) return;
+        for (const row of pickFreshInbound(data, seenRef.current, mountFloorRef.current)) notify(row);
+    }, [orgId, notify]);
+    useOrgRefetch('whatsapp_chats', checkInbound);
 
     const enable = useCallback(async () => {
         if (typeof window === 'undefined' || !('Notification' in window)) return;

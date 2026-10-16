@@ -9,8 +9,9 @@
 --      service_role keep the platform's automatic grants;
 --   2. the app roles keep their grants on the existing tables (only anon was
 --      revoked);
---   3. anon is refused (42501) on the tables of the supabase_realtime
---      publication and may SELECT none of their columns.
+--   3. anon is refused (42501) on the 4 tables the supabase_realtime
+--      publication carried until 0068 and may SELECT no column of a table
+--      it publishes (none since 0068; 070 guard 10).
 -- 070 guard 11 checks every relation in public; this file checks the
 -- mechanism behind it.
 begin;
@@ -105,7 +106,7 @@ select tests.authenticate_as_anon();
 select throws_ok(
     format('select 1 from public.%I', t),
     '42501', format('permission denied for table %s', t),
-    format('%s (published): anon cannot read it', t))
+    format('%s (published until 0068): anon cannot read it', t))
 from unnest(array['whatsapp_chats', 'whatsapp_messages', 'labels', 'chat_labels']) t;
 
 select * from finish();

@@ -2,6 +2,8 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { createClient } from '@/lib/supabase/client';
+import { useCurrentOrgId } from '@/components/current-org-provider';
+import { useCoalesced, useOrgRealtime } from '@/components/realtime/org-realtime-provider';
 import {
     Table,
     TableBody,
@@ -319,11 +321,14 @@ export function OrderList() {
     const [detailId, setDetailId] = useState<string | null>(null);
     const [busy, setBusy] = useState(false);
     const supabase = createClient();
+    const orgId = useCurrentOrgId();
 
     const fetchOrders = useCallback(async (): Promise<Order[]> => {
+        if (!orgId) return [];
         const { data, error } = await supabase
             .from('orders')
             .select('*')
+            .eq('org_id', orgId)
             .order('created_at', { ascending: false });
 
         if (error) {
@@ -332,7 +337,7 @@ export function OrderList() {
             return [];
         }
         return (data as Order[]) || [];
-    }, [supabase]);
+    }, [supabase, orgId]);
 
     const refresh = useCallback(async () => {
         setOrders(await fetchOrders());
@@ -349,19 +354,24 @@ export function OrderList() {
         };
         load();
 
-        const channel = supabase
-            .channel('orders_realtime')
-            .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, async () => {
-                const data = await fetchOrders();
-                if (mounted) setOrders(data);
-            })
-            .subscribe();
-
         return () => {
             mounted = false;
-            supabase.removeChannel(channel);
         };
-    }, [fetchOrders, supabase]);
+    }, [fetchOrders]);
+
+    // Live (tracker 1.9): orders is on the org Realtime bus (0064), so a booking
+    // the AI makes or a change in another tab shows up without a reload. A
+    // delete names its ids: drop those rows; anything else refetches
+    // (coalesced).
+    const refreshSoon = useCoalesced(refresh);
+    useOrgRealtime('orders', (signal) => {
+        if (signal.op === 'DELETE' && !signal.truncated) {
+            const gone = new Set(signal.ids);
+            setOrders((cur) => cur.filter((o) => !gone.has(o.id)));
+        } else {
+            refreshSoon();
+        }
+    });
 
     const meetingCount = orders.filter(isMeeting).length;
     const eventCount = orders.length - meetingCount;
