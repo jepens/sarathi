@@ -349,6 +349,13 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
         const ids = Array.from(announcedIdsRef.current);
         announcedIdsRef.current.clear();
         if (ids.length === 0 || !orgId) return;
+        // A burst across the org's chats: one thread read beats a huge id list
+        // in the URL (the chat is open, so whatever arrived is read).
+        if (ids.length > 50) {
+            await fetchMessages();
+            void markChatRead();
+            return;
+        }
         const { data, error } = await supabase
             .from('whatsapp_messages')
             .select('*')
@@ -362,7 +369,7 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
         // A customer message arriving while the chat is open is read
         // immediately — keep the badge cleared (the webhook just bumped it).
         if (rows.some((m) => m.role === 'user')) void markChatRead();
-    }, [orgId, phoneNumber, supabase, markChatRead]);
+    }, [orgId, phoneNumber, supabase, markChatRead, fetchMessages]);
     // A short wait: the open chat should feel instant.
     const fetchAnnouncedSoon = useCoalesced(fetchAnnounced, { wait: 150, maxWait: 1000 });
     const fetchMessagesSoon = useCoalesced(fetchMessages);
