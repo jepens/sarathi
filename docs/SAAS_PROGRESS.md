@@ -67,9 +67,9 @@
 
 | # | Tugas | Temuan | Status | PR / Catatan |
 |---|---|---|---|---|
-| 1.1 | Rantai migrasi bisa di-replay (`supabase init`, baseline skema, `migration repair`, perbaiki dua file 0004) | KUA-1 | ⬜ | |
-| 1.2 | Suite pgTAP isolasi tenant + job CI | KUA-13 | ⬜ | |
-| 1.3 | `requireOrgContext()` berbasis keanggotaan + `proxy.ts` + `getClaims()` | KEA-2, KUA-14 | ⬜ | |
+| 1.1 | Rantai migrasi bisa di-replay (`supabase init`, baseline skema, `migration repair`, perbaiki dua file 0004) | KUA-1 | 👀 | [#39](https://github.com/jepens/sahabat_umkm/pull/39): baseline 00010/00011 + 0004→00041; replay 64 migrasi; fingerprint lokal **identik** produksi (552 baris, md5 d17c9045…). Baseline TIDAK diterapkan ke produksi |
+| 1.2 | Suite pgTAP isolasi tenant + job CI | KUA-13 | 👀 | [#39](https://github.com/jepens/sahabat_umkm/pull/39): pgTAP 463 test (dua org, dua user, anon; tanpa asersi vakum) + job CI `db-tests`; alur fingerprint dua tahap untuk PR migrasi |
+| 1.3 | `requireOrgContext()` berbasis keanggotaan + `proxy.ts` + `getClaims()` | KEA-2, KUA-14 | 👀 | [#40](https://github.com/jepens/sahabat_umkm/pull/40): `requireOrgContext()` di 49 handler + semua server action; mode strict (`getUser`) untuk integrasi & notifikasi order; `proxy.ts` + `getClaims`; 503 saat Auth terganggu (tanpa redirect loop) |
 | 1.4 | Semua penulis mengirim `org_id` eksplisit → cabut 13 `DEFAULT` org Sailendra | KUA-4 | ⬜ | |
 | 1.5 | Unique/FK per org; FK komposit `chat_labels → labels` | KUA-5 | ⬜ | |
 | 1.6 | Trigger vendor & persona sadar org | KEA-14 | ⬜ | |
@@ -80,7 +80,7 @@
 | 1.11 | `chat-media` jadi bucket privat + signed URL (bacaan via URL publik masih lolos) | KEA-4 | ⬜ | Lanjutan dari 0.7 |
 | 1.12 | Policy bucket `documents` tanpa fallback COALESCE ke org seed + pindahkan 15 objek legacy ke prefix org | KEA-4 | ⬜ | Ditemukan saat review #36 |
 | 1.13 | `filter_org_id` wajib di `match_*` (termasuk `/api/search`) | KEA-25 | ⬜ | Ditemukan saat review #36 |
-| 1.14 | Tes RLS/Storage dua-org di branch/staging Supabase | KUA-13 | ⬜ | Bagian dari 1.2; review #36 belum bisa menguji di DB |
+| 1.14 | Tes RLS/Storage dua-org di branch/staging Supabase | KUA-13 | 👀 | [#39](https://github.com/jepens/sahabat_umkm/pull/39): termasuk policy Storage; 2 tes TODO menandai 1.11 & 1.12 |
 
 ## Fase 2 — WhatsApp & integrasi per tenant, model "dikelola tim" (±2–3 minggu)
 
@@ -139,3 +139,5 @@
 | 2026-10-16 | [#35](https://github.com/jepens/sahabat_umkm/pull/35) di-merge (`9c92dde`). Migrasi **0058 + 0060 diterapkan** ke produksi via Supabase MCP dan terverifikasi (policy 4 tabel + 2 bucket, grant RPC, trigger `handle_new_user`; advisor: tidak ada temuan baru). [#36](https://github.com/jepens/sahabat_umkm/pull/36) di-merge (`1ddba83`). Keputusan D4/D12/D13 diambil dan diterapkan di [#37](https://github.com/jepens/sahabat_umkm/pull/37). Deploy Easypanel belum terlihat di header produksi saat dicek — perlu konfirmasi auto-deploy. |
 | 2026-10-16 | [#37](https://github.com/jepens/sahabat_umkm/pull/37) di-merge (`e7ef424`) setelah CI hijau pada kode gabungan (main digabung ke branch: 272 test lulus). Migrasi **0059 diterapkan** & terverifikasi. **Semua kode Fase 0 sudah di `main` dan semua migrasi aktif.** ⚠️ Deploy Easypanel belum terdeteksi: setelah 15+ menit produksi masih build lama (tanpa security header baru, `/design-system` masih 200) — perlu dicek di Easypanel. Migrasi 0058/0059/0060 kompatibel dengan kode lama, jadi produksi tetap berjalan normal. |
 | 2026-10-16 | **Deploy Fase 0 live** (build Easypanel #37 sukses): 6 security header aktif, `/design-system` 404, halaman debug di-redirect. Pipeline WhatsApp belum bisa diverifikasi dari data (belum ada pesan masuk sejak deploy) — kirim 1 pesan uji. Keputusan D9: 1 user = 1 org. **Fase 1 dimulai.** |
+| 2026-10-16 | [#38](https://github.com/jepens/sahabat_umkm/pull/38) di-merge (`c0dd059`). **Pipeline WhatsApp terverifikasi pasca-deploy**: sejak 09.00 WIB 10 pesan masuk / 10 balasan bot, 10 job antrean `completed`, 0 gagal. Fase 1 gelombang 1: F1-B (konteks org + proxy.ts) selesai & di-review (approve); F1-A (migrasi reproducible + pgTAP) terhenti karena batas sesi — pekerjaan diamankan sebagai commit WIP, fingerprint replay lokal **identik** dengan produksi; dilanjutkan. |
+| 2026-10-16 | Fase 1 gelombang 1 selesai: [#39](https://github.com/jepens/sahabat_umkm/pull/39) (F1-A, 2 major + 4 minor review diperbaiki) dan [#40](https://github.com/jepens/sahabat_umkm/pull/40) (F1-B, 1 major + 9 minor diperbaiki). Uji integrasi gabungan: 466 test, `next build` ✓ (Proxy terdeteksi). Keputusan: 1.10 (peran) dipindah ke Fase 3. |
