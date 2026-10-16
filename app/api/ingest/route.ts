@@ -32,48 +32,76 @@ export async function POST(request: Request) {
         // list doesn't show the org UUID (matches the pre-multi-tenant display).
         const displayName = filePath.slice(filePath.indexOf('/') + 1)
 
-        // 1. Download file from Supabase Storage
-        const { data: fileData, error: downloadError } = await supabase.storage
-            .from('documents')
-            .download(filePath)
-
-        if (downloadError) {
-            console.error('Ingest download failed:', downloadError)
-            return NextResponse.json({ error: 'Failed to download file' }, { status: 500 })
+        // The dashboard lists a KB entry by its documents rows, and DELETE
+        // /api/documents removes an object through them: an upload that ends
+        // with no row (an empty or unreadable file, or a failure before the
+        // first row) could never be seen or deleted again (tracker 3.9, UU
+        // PDP). Remove such an upload; once a row is stored the entry is
+        // listed and deletable, so the object stays.
+        let stored = 0
+        const dropUpload = async () => {
+            const { error } = await supabase.storage.from('documents').remove([filePath])
+            if (error) console.error('Ingest: removing the unprocessed upload failed:', error.message)
         }
 
-        // 2. Parse file content
-        const arrayBuffer = await fileData.arrayBuffer()
-        const buffer = Buffer.from(arrayBuffer)
-        const text = await parseFile(buffer, fileType)
+        try {
+            // 1. Download file from Supabase Storage
+            const { data: fileData, error: downloadError } = await supabase.storage
+                .from('documents')
+                .download(filePath)
 
-        // 3. Chunk text
-        const chunks = chunkText(text)
-
-        // 4. Generate embeddings and store in DB
-        for (let i = 0; i < chunks.length; i++) {
-            const chunk = chunks[i];
-            const embedding = await generateEmbedding(chunk)
-
-            const { error: insertError } = await supabase.from('documents').insert({
-                org_id: orgId,
-                content: chunk,
-                metadata: {
-                    source: filePath,
-                    file_name: displayName,
-                    file_type: fileType,
-                    chunk_index: i,
-                    created_at: new Date().toISOString(),
-                },
-                embedding,
-            })
-
-            if (insertError) {
-                console.error('Error inserting document:', insertError)
+            if (downloadError) {
+                console.error('Ingest download failed:', downloadError)
+                await dropUpload()
+                return NextResponse.json({ error: 'Failed to download file' }, { status: 500 })
             }
-        }
 
-        return NextResponse.json({ success: true, chunks: chunks.length })
+            // 2. Parse file content
+            const arrayBuffer = await fileData.arrayBuffer()
+            const buffer = Buffer.from(arrayBuffer)
+            const text = await parseFile(buffer, fileType)
+
+            // 3. Chunk text
+            const chunks = chunkText(text)
+            if (chunks.length === 0) {
+                await dropUpload()
+                return NextResponse.json({ error: 'File kosong atau teksnya tidak bisa dibaca.' }, { status: 422 })
+            }
+
+            // 4. Generate embeddings and store in DB
+            for (let i = 0; i < chunks.length; i++) {
+                const chunk = chunks[i];
+                const embedding = await generateEmbedding(chunk)
+
+                const { error: insertError } = await supabase.from('documents').insert({
+                    org_id: orgId,
+                    content: chunk,
+                    metadata: {
+                        source: filePath,
+                        file_name: displayName,
+                        file_type: fileType,
+                        chunk_index: i,
+                        created_at: new Date().toISOString(),
+                    },
+                    embedding,
+                })
+
+                if (insertError) {
+                    console.error('Error inserting document:', insertError)
+                } else {
+                    stored++
+                }
+            }
+
+            if (stored === 0) {
+                await dropUpload()
+                return NextResponse.json({ error: 'Gagal menyimpan dokumen. Silakan coba lagi.' }, { status: 500 })
+            }
+            return NextResponse.json({ success: true, chunks: stored })
+        } catch (error) {
+            if (stored === 0) await dropUpload()
+            throw error
+        }
     } catch (error) {
         console.error('Ingestion error:', error)
         const errorMessage = error instanceof Error ? error.message : 'Internal Server Error'

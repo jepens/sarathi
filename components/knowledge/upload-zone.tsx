@@ -31,6 +31,11 @@ export function UploadZone({ onUploadComplete }: UploadZoneProps = {}) {
     }
 
     const processFile = async (file: File) => {
+        // An empty file yields no text, so no KB entry: never upload it.
+        if (file.size === 0) {
+            toast.error("File kosong — tidak ada yang bisa diunggah.")
+            return
+        }
         setIsUploading(true)
         // One evolving toast across the two phases (upload → embed) instead of
         // separate info/success toasts.
@@ -61,7 +66,11 @@ export function UploadZone({ onUploadComplete }: UploadZoneProps = {}) {
                 body: JSON.stringify({ filePath, fileType: file.type }),
             })
 
-            if (!response.ok) throw new Error('Ingestion failed')
+            if (!response.ok) {
+                // The server removed the upload again; show its reason (e.g. an unreadable file).
+                const body = await response.json().catch(() => null) as { error?: unknown } | null
+                throw new Error(typeof body?.error === 'string' ? body.error : 'Ingestion failed')
+            }
 
             const data = await response.json()
             toast.success(`Berhasil — ${data.chunks} potongan diproses.`, { id: toastId })
