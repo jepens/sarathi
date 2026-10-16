@@ -258,9 +258,9 @@ begin
 end;
 $$;
 
--- No row access at all for the current role (anon everywhere; authenticated on
--- the service-role-only tables). Emits 5 assertions (the first is the
--- precondition that the table is not empty).
+-- No row access at all for the current role through RLS (authenticated on the
+-- service-role-only tables; anon has check_anon_denied below). Emits 5
+-- assertions (the first is the precondition that the table is not empty).
 create function tests.check_no_access(
     p_table text,
     p_cols text,
@@ -287,6 +287,46 @@ begin
     return next is_empty(
         format('delete from public.%I returning 1', p_table),
         format('%s: %s deletes no rows', p_table, p_who));
+end;
+$$;
+
+-- anon holds no privilege on the table at all (0063), so every statement is
+-- refused by the privilege check, before RLS is consulted, with
+-- 42501 "permission denied for table <t>". The exact message tells this apart
+-- from an RLS refusal ("new row violates row-level security policy ..."), so
+-- the set fails if the table privilege comes back. Call as anon. Emits 5
+-- assertions (the first is the same precondition as in check_no_access: the
+-- rows a regained privilege would expose to RLS alone really exist).
+create function tests.check_anon_denied(
+    p_table text,
+    p_cols text,
+    p_vals text,
+    p_set text
+) returns setof text
+language plpgsql
+as $$
+declare
+    v_denied text := format('permission denied for table %s', p_table);
+begin
+    return next ok(
+        tests.rows_ignoring_rls(p_table) > 0,
+        format('%s: precondition: the table has rows', p_table));
+    return next throws_ok(
+        format('select 1 from public.%I', p_table),
+        '42501', v_denied,
+        format('%s: anon cannot read (no table privilege)', p_table));
+    return next throws_ok(
+        format('insert into public.%I (%s) values (%s)', p_table, p_cols, p_vals),
+        '42501', v_denied,
+        format('%s: anon cannot insert (no table privilege)', p_table));
+    return next throws_ok(
+        format('update public.%I set %s', p_table, p_set),
+        '42501', v_denied,
+        format('%s: anon cannot update (no table privilege)', p_table));
+    return next throws_ok(
+        format('delete from public.%I', p_table),
+        '42501', v_denied,
+        format('%s: anon cannot delete (no table privilege)', p_table));
 end;
 $$;
 

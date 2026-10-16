@@ -2,7 +2,7 @@
 -- future migration must keep, so a new table / function / bucket policy that
 -- forgets tenant isolation fails CI even before it gets its own test.
 begin;
-select plan(10);
+select plan(11);
 
 -- 1. RLS is on for every table in public.
 select is_empty(
@@ -105,6 +105,25 @@ select is_empty(
                              where p.schemaname = 'public' and p.tablename = pt.tablename
                                and p.qual like '%is_org_member(%')) $$,
     'every realtime-published table has RLS with an org-membership policy');
+
+-- 11. anon holds no privilege on any relation in public (0063), whoever owns
+--     it: tables, partitioned tables, views, materialized views and foreign
+--     tables (table or column level; Realtime builds DELETE payloads from
+--     has_column_privilege, so a column grant counts) and sequences
+--     (USAGE/SELECT/UPDATE). Since 0063 what postgres creates in public gives
+--     anon nothing. An object created by another role (the default ACL of
+--     supabase_admin in public still grants anon, e.g. an extension installed
+--     into public) or an explicit grant fails here until it is reviewed.
+select is_empty(
+    $$ select c.oid::regclass::text || ' (relkind ' || c.relkind::text || ')' from pg_class c
+       where c.relnamespace = 'public'::regnamespace
+         and (   (c.relkind in ('r', 'p', 'v', 'm', 'f')
+                  and (has_table_privilege('anon', c.oid,
+                           'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER, MAINTAIN')
+                       or has_any_column_privilege('anon', c.oid, 'SELECT, INSERT, UPDATE, REFERENCES')))
+              or (c.relkind = 'S'
+                  and has_sequence_privilege('anon', c.oid, 'USAGE, SELECT, UPDATE'))) $$,
+    'anon holds no privilege on any table, view or sequence in public');
 
 select * from finish();
 rollback;

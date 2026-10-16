@@ -19,17 +19,30 @@ tenant data that means at least:
 
 - a new org-scoped table: add it to `010_tenant_tables_rls.test.sql`
   (`tests.check_tenant_table`, `tests.check_cross_org_blind`,
-  `tests.check_no_access` for anon) and to the fixture list there;
+  `tests.check_anon_denied` for anon) and to the fixture list there;
 - a new function: its EXECUTE grants in `050_rpc_grants.test.sql`
   (anon must not execute anything that reads or writes tenant data);
 - a new storage bucket/policy: `040_storage.test.sql`.
+
+**anon gets no table privileges (since 0063).** A table, view or sequence that
+`postgres` creates in `public` (migrations run as `postgres`) gives `anon`
+nothing: 0063 removed `anon` from the default privileges of `postgres` in
+`public`, while `authenticated` and `service_role` keep their automatic
+grants. Grant to `anon` only for a reviewed anonymous feature: explicitly in
+the migration, with a test, and with guard 11 in `070` adjusted on purpose.
+Caveat: the default privileges of `supabase_admin` in `public` still grant
+`anon`, and `postgres` cannot change them, so never create objects or
+extensions in `public` outside migrations. Functions are not covered: EXECUTE
+still goes to `anon` by default (tracker 5.5), so keep revoking it for every
+new function (`050`).
 
 `070_catalog_guards.test.sql` fails automatically when a public table has RLS
 off, a policy on an org_id table is not org-scoped (`is_org_member(...)`; a
 policy scoped only to `user_id = auth.uid()` must be on the reviewed allowlist
 in guard 4, so e.g. `auth.uid() IS NOT NULL` fails), a SECURITY DEFINER
 function is executable by anon or is new to the reviewed list for
-`authenticated`, or an app function has no pinned `search_path`, so a
+`authenticated`, an app function has no pinned `search_path`, or anon holds
+any privilege on a table, view or sequence in `public` (guard 11), so a
 forgotten test is often caught anyway.
 
 ## Run the stack and the tests locally
@@ -70,10 +83,14 @@ stops the `supabase_*_sarathi` containers; never use `--all`.
   because the test still runs as `postgres` (which bypasses RLS). 010 also
   asserts `current_user`/`auth.uid()` explicitly.
 - Every assertion set in 010 (`check_tenant_table`, `check_cross_org_blind`,
-  `check_no_access`) starts with a precondition counted through
-  `tests.rows_ignoring_rls()` (SECURITY DEFINER, bypasses RLS): the rows the
-  role must not read/update/delete really exist. A denial can therefore never
-  pass on an empty table; a new table needs fixtures in 010 or it fails.
+  `check_no_access`, `check_anon_denied`) starts with a precondition counted
+  through `tests.rows_ignoring_rls()` (SECURITY DEFINER, bypasses RLS): the
+  rows the role must not read/update/delete really exist. A denial can
+  therefore never pass on an empty table; a new table needs fixtures in 010 or
+  it fails.
+- anon's refusals are asserted with the exact message
+  `permission denied for table <t>` (42501): it tells the missing table
+  privilege (0063) apart from an RLS refusal, which has the same code.
 - Known, not-yet-fixed gaps are `todo` tests (reported as
   `Failed (TODO)` without failing the run) and start passing once fixed:
   tracker 1.11 (chat-media bucket is public) and 1.12 (documents policy
@@ -176,10 +193,18 @@ publication). It contains catalog SELECTs only.
 - `expected-diff.txt`: differences that are known and explained, one per line
   (`<` only in production, `>` only in the replay), each with a reason:
   permanent ones, or *pending* lines of a migration not yet applied to
-  production (see above). Entries that no longer differ fail as stale. It is
-  currently empty: the replay matches production exactly (re-checked
-  2026-10-16 after applying 0062, against a fresh read-only production query:
-  563 lines, md5 `bf9733425504e2bcbdc1a93ae91a413f`).
+  production (see above). Entries that no longer differ fail as stale. Apart
+  from the pending block `0063_revoke_anon_table_privileges` (the 20 anon
+  `relpriv` pairs) it is empty: the replay up to 0062 matches production
+  exactly (re-checked 2026-10-16 after applying 0062, against a fresh
+  read-only production query: 563 lines, md5
+  `bf9733425504e2bcbdc1a93ae91a413f`).
+- Not fingerprinted: sequence privileges and default privileges
+  (`pg_default_acl`). Whenever `production.txt` is refreshed (from 0063 on),
+  also run read-only on production the query of guard 11 in
+  `070_catalog_guards.test.sql` (tables, views, sequences) and the one of the
+  first assertion in `140_anon_no_table_access.test.sql` (default
+  privileges): both must return no row.
 
 Compare a fresh replay with the snapshot:
 

@@ -14,4 +14,51 @@
 #    migration is applied to production with apply_migration, refresh
 #    production.txt and delete these lines in the same commit.
 #
-# Currently empty: the replay matches production exactly.
+
+# pending production apply: 0063_revoke_anon_table_privileges
+# (tracker 1.9 step 0 / 1.14, audit KEA-15: anon loses every privilege on the
+# 20 public tables that had anon=arwdDxtm; platform_settings had none since
+# 0061). Independent of the app deploy: apply after review, then refresh
+# production.txt and delete this block. Not visible in the fingerprint: the
+# default privileges of postgres in public (pg_default_acl) and sequences
+# (public has none); verify those with the read-only SELECTs of the PR.
+< relpriv public.app_settings anon=rawdDxt
+< relpriv public.business_profiles anon=rawdDxt
+< relpriv public.chat_labels anon=rawdDxt
+< relpriv public.documents anon=rawdDxt
+< relpriv public.kb_sources anon=rawdDxt
+< relpriv public.labels anon=rawdDxt
+< relpriv public.message_queue anon=rawdDxt
+< relpriv public.orders anon=rawdDxt
+< relpriv public.organization_members anon=rawdDxt
+< relpriv public.organizations anon=rawdDxt
+< relpriv public.products anon=rawdDxt
+< relpriv public.proposals anon=rawdDxt
+< relpriv public.push_subscriptions anon=rawdDxt
+< relpriv public.quick_replies anon=rawdDxt
+< relpriv public.rate_limits anon=rawdDxt
+< relpriv public.system_message anon=rawdDxt
+< relpriv public.vendors anon=rawdDxt
+< relpriv public.whatsapp_chats anon=rawdDxt
+< relpriv public.whatsapp_integrations anon=rawdDxt
+< relpriv public.whatsapp_messages anon=rawdDxt
+> relpriv public.app_settings anon=
+> relpriv public.business_profiles anon=
+> relpriv public.chat_labels anon=
+> relpriv public.documents anon=
+> relpriv public.kb_sources anon=
+> relpriv public.labels anon=
+> relpriv public.message_queue anon=
+> relpriv public.orders anon=
+> relpriv public.organization_members anon=
+> relpriv public.organizations anon=
+> relpriv public.products anon=
+> relpriv public.proposals anon=
+> relpriv public.push_subscriptions anon=
+> relpriv public.quick_replies anon=
+> relpriv public.rate_limits anon=
+> relpriv public.system_message anon=
+> relpriv public.vendors anon=
+> relpriv public.whatsapp_chats anon=
+> relpriv public.whatsapp_integrations anon=
+> relpriv public.whatsapp_messages anon=

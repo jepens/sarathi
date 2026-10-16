@@ -69,8 +69,11 @@ select results_eq(
     $$ values ('bbbbbbbb-0000-4000-8000-00000000000b'::uuid, 'bbbbbbbb-1abe-4000-8000-00000000000b'::uuid) $$,
     'the other org sees only its own assignment');
 
+-- anon holds no privilege on the table (0063): refused before RLS.
 select tests.authenticate_as_anon();
-select is_empty($$ select 1 from public.chat_labels $$, 'anon reads no assignment');
+select throws_ok($$ select 1 from public.chat_labels $$,
+    '42501', 'permission denied for table chat_labels',
+    'anon cannot read assignments (no table privilege)');
 
 select tests.clear_authentication();
 select is(

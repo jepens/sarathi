@@ -75,7 +75,7 @@
 | 1.6 | Trigger vendor & persona sadar org | KEA-14 | ✅ | [#41](https://github.com/jepens/sahabat_umkm/pull/41): trigger vendor hanya menyentuh org yang sama; 1 persona aktif per org (index unik parsial) |
 | 1.7 | Pisahkan setting platform vs tenant di `app_settings` | KEA-9 | ✅ | [#41](https://github.com/jepens/sahabat_umkm/pull/41): tabel `platform_settings` (khusus service role); key platform keluar dari `app_settings` (0062); `verify_webhook_token` hanya membaca `platform_settings` |
 | 1.8 | Persona bisa dibuat untuk org baru | KUA-6 | ✅ | [#41](https://github.com/jepens/sahabat_umkm/pull/41): `PUT /api/system-message` dengan id `default` membuat persona pertama org baru; id tak dikenal → 404 |
-| 1.9 | Realtime: filter org + mitigasi event DELETE | KEA-15, PER-8 | ⬜ | |
+| 1.9 | Realtime: filter org + mitigasi event DELETE | KEA-15, PER-8 | 🔄 | langkah 0 (cabut hak anon, 0063) — PR menyusul |
 | 1.10 | Peran minimal owner/admin vs staff untuk aksi sensitif | KEA-17 | ➡️ | Dipindah ke Fase 3 (3.2) bersama undangan & manajemen tim — keputusan pemilik 2026-10-16 (tenant pilot awalnya 1 owner) |
 | 1.11 | `chat-media` jadi bucket privat + signed URL (bacaan via URL publik masih lolos) | KEA-4 | ⬜ | Lanjutan dari 0.7 |
 | 1.12 | Policy bucket `documents` tanpa fallback COALESCE ke org seed + pindahkan 15 objek legacy ke prefix org | KEA-4 | ⬜ | Ditemukan saat review #36 |
