@@ -97,6 +97,13 @@ begin
     perform set_config('request.jwt.claim.sub', p_user::text, true);
     perform set_config('request.jwt.claim.role', 'authenticated', true);
     perform set_config('role', 'authenticated', true);
+    -- Guard against vacuous passes: if the switch did not take effect the
+    -- caller would still be postgres (RLS bypassed) and every "sees nothing"
+    -- assertion would be meaningless. Fail loudly instead.
+    if current_user <> 'authenticated' or auth.uid() is distinct from p_user then
+        raise exception 'tests.authenticate_as: role switch failed (current_user=%, auth.uid()=%)',
+            current_user, auth.uid();
+    end if;
 end;
 $$;
 
@@ -109,6 +116,9 @@ begin
     perform set_config('request.jwt.claim.sub', '', true);
     perform set_config('request.jwt.claim.role', 'anon', true);
     perform set_config('role', 'anon', true);
+    if current_user <> 'anon' or auth.uid() is not null then
+        raise exception 'tests.authenticate_as_anon: role switch failed (current_user=%)', current_user;
+    end if;
 end;
 $$;
 
@@ -121,6 +131,9 @@ begin
     perform set_config('request.jwt.claim.sub', '', true);
     perform set_config('request.jwt.claim.role', 'service_role', true);
     perform set_config('role', 'service_role', true);
+    if current_user <> 'service_role' then
+        raise exception 'tests.authenticate_as_service_role: role switch failed (current_user=%)', current_user;
+    end if;
 end;
 $$;
 
@@ -133,6 +146,9 @@ begin
     perform set_config('request.jwt.claim.sub', '', true);
     perform set_config('request.jwt.claim.role', '', true);
     perform set_config('role', 'none', true);
+    if current_user = any (array['authenticated', 'anon', 'service_role']) then
+        raise exception 'tests.clear_authentication: still running as %', current_user;
+    end if;
 end;
 $$;
 

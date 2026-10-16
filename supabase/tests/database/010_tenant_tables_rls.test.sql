@@ -8,7 +8,7 @@
 -- read-only for members (no self-service membership or role escalation).
 -- chat_labels and push_subscriptions have their own files (extra rules).
 begin;
-select plan(267);
+select plan(272);
 
 select tests.create_two_orgs();
 
@@ -66,7 +66,15 @@ insert into public.rate_limits (identifier) values
 -- ---------------------------------------------------------------------------
 -- 1. Member of org A: full access to org A, none to other orgs (14 x 9)
 -- ---------------------------------------------------------------------------
+-- Preconditions (still postgres): rows of other orgs really exist, so the
+-- "reads no row of any other org" assertions below cannot pass vacuously.
+select isnt_empty(
+    format('select 1 from public.whatsapp_chats where org_id <> %L', tests.org_a()),
+    'precondition: rows outside org A exist before switching roles');
+
 select tests.authenticate_as(tests.user_a1());
+select is(current_user::text, 'authenticated', 'acting as a member: role is authenticated (RLS applies)');
+select is(auth.uid(), tests.user_a1(), 'acting as a member: auth.uid() is user a1');
 
 select * from tests.check_tenant_table('whatsapp_chats',
     'org_id, phone_number', $$ {org}, 'tst-new-chat' $$,
@@ -179,6 +187,7 @@ select is_empty(
 -- 2. Member of org B: blind to org A and the seed org (14 x 3)
 -- ---------------------------------------------------------------------------
 select tests.authenticate_as(tests.user_b1());
+select is(auth.uid(), tests.user_b1(), 'acting as a member of org B: auth.uid() is user b1');
 
 select * from tests.check_cross_org_blind('whatsapp_chats', $$ notes = 'diubah' $$, tests.org_b());
 select * from tests.check_cross_org_blind('whatsapp_messages', $$ status = 'read' $$, tests.org_b());
@@ -199,6 +208,7 @@ select * from tests.check_cross_org_blind('whatsapp_integrations', $$ display_ph
 -- 3. anon: no row access on any app table (20 x 4)
 -- ---------------------------------------------------------------------------
 select tests.authenticate_as_anon();
+select is(current_user::text, 'anon', 'acting as anon: role is anon');
 
 select * from tests.check_no_access('whatsapp_chats',
     'org_id, phone_number', $$ tests.org_a(), 'anon' $$, $$ notes = 'x' $$, 'anon');

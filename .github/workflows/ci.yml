@@ -78,6 +78,38 @@ jobs:
       - name: Scan PR commits
         run: gitleaks git --redact --verbose --log-opts="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}" .
 
+  # Database tests (tracker 1.1 / 1.2 / 1.14, audit KUA-1 / KUA-13): replay
+  # every supabase/migrations file on a fresh local Postgres, run the pgTAP
+  # tenant-isolation suite (supabase/tests/database) and compare the resulting
+  # schema with the committed production fingerprint. No secrets, no network
+  # access to production. See supabase/README.md.
+  db-tests:
+    name: Database (migrations · pgTAP · fingerprint)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Pinned CLI: migration ordering and `test db` behaviour were verified
+      # with this exact version (supabase/README.md). Bump deliberately.
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: 2.121.0
+
+      # `db start` runs ONLY the Postgres container (no auth, storage,
+      # realtime, rest, kong, studio, ...). The CLI still initialises the auth
+      # and storage schemas the migrations and tests depend on, then applies
+      # supabase/migrations in order. Nothing else is needed by the tests.
+      - name: Start local database (applies all migrations)
+        run: supabase db start
+
+      - name: Run pgTAP tests
+        run: supabase test db
+
+      - name: Compare schema with the production fingerprint
+        run: bash supabase/fingerprint/compare.sh
+
   # Tier 3 — Playwright smoke tests against the PRODUCTION build. Unauthenticated
   # (placeholder Supabase env, no secrets): proves the artifact boots & serves,
   # the Sarathi rebrand is live, and the middleware auth-gate redirects to /login.
