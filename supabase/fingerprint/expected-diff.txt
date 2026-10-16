@@ -1,0 +1,4 @@
+# Documented, explainable differences between production (production.txt)
+# and a fresh local replay of supabase/migrations. compare.sh fails on any
+# difference that is not listed here ('<' = only in production, '>' = only
+# in the local replay). Every entry needs a reason.
