@@ -176,14 +176,10 @@ publication). It contains catalog SELECTs only.
 - `expected-diff.txt`: differences that are known and explained, one per line
   (`<` only in production, `>` only in the replay), each with a reason:
   permanent ones, or *pending* lines of a migration not yet applied to
-  production (see above). Entries that no longer differ fail as stale. Apart
-  from the pending block `0062_tenant_schema_contract` it is empty: the
-  replay up to 0061 matches production exactly (re-checked 2026-10-16 after
-  applying 0061, against a fresh read-only production query: 570 lines, md5
-  `bbee7cd45d094803cf2140f63647b9bd`). The 0062 block stays pending until 0062
-  is applied after the deploy (see *Contract migrations*); its two `< fn`
-  lines are the 0061 bodies of `sync_vendor_from_contact` and
-  `verify_webhook_token` that production holds until then.
+  production (see above). Entries that no longer differ fail as stale. It is
+  currently empty: the replay matches production exactly (re-checked
+  2026-10-16 after applying 0062, against a fresh read-only production query:
+  563 lines, md5 `bf9733425504e2bcbdc1a93ae91a413f`).
 
 Compare a fresh replay with the snapshot:
 
