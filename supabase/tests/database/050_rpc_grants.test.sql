@@ -2,7 +2,7 @@
 -- vector-search functions stay inside the caller's org (tracker 1.2, audit
 -- KUA-13 / KEA-5 / KEA-25).
 begin;
-select plan(41);
+select plan(46);
 
 select tests.create_two_orgs();
 
@@ -30,6 +30,18 @@ select is(has_function_privilege(r, 'private.is_org_member(uuid)', 'execute'),
           r <> 'anon',
           format('private.is_org_member: executable by %s = %s', r, r <> 'anon'))
 from unnest(array['anon', 'authenticated']) r;
+
+-- Org Realtime bus (0064; behaviour in 150_realtime_org_broadcast): the topic
+-- helper is evaluated by the realtime.messages policy as authenticated; the
+-- broadcaster only fires from its triggers (as its owner).
+select is(has_function_privilege(r, 'private.realtime_topic_org_id(text)', 'execute'),
+          r <> 'anon',
+          format('private.realtime_topic_org_id: executable by %s = %s', r, r <> 'anon'))
+from unnest(array['anon', 'authenticated']) r;
+
+select ok(not has_function_privilege(r, 'private.broadcast_org_changes()', 'execute'),
+          format('private.broadcast_org_changes: not executable by %s', r))
+from unnest(array['anon', 'authenticated', 'service_role']) r;
 
 -- Server-only functions: never callable through the API roles.
 select ok(not has_function_privilege(r, f, 'execute'),

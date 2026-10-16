@@ -41,9 +41,11 @@ off, a policy on an org_id table is not org-scoped (`is_org_member(...)`; a
 policy scoped only to `user_id = auth.uid()` must be on the reviewed allowlist
 in guard 4, so e.g. `auth.uid() IS NOT NULL` fails), a SECURITY DEFINER
 function is executable by anon or is new to the reviewed list for
-`authenticated`, an app function has no pinned `search_path`, or anon holds
-any privilege on a table, view or sequence in `public` (guard 11), so a
-forgotten test is often caught anyway.
+`authenticated`, an app function has no pinned `search_path`, anon holds
+any privilege on a table, view or sequence in `public` (guard 11), or a
+`realtime.messages` policy is more than "members receive their joined org
+topic" (guard 12, see "Realtime org bus" below), so a forgotten test is
+often caught anyway.
 
 ## Run the stack and the tests locally
 
@@ -95,6 +97,58 @@ stops the `supabase_*_sarathi` containers; never use `--all`.
   `Failed (TODO)` without failing the run) and start passing once fixed:
   tracker 1.11 (chat-media bucket is public) and 1.12 (documents policy
   falls back to the seed org). Remove the `todo` when fixing them.
+- `150_realtime_org_broadcast.test.sql` needs the `realtime.messages`
+  partition of today (UTC). `db start` / `db reset` create the partitions
+  from yesterday to +3 days, and no Realtime server runs afterwards to add
+  more, so on a local stack started more than 3 days ago its precondition
+  fails (it never skips): run `npx supabase db reset`.
+  `tests.realtime_join_as(user, topic)` simulates Realtime's join check
+  (the user's role and claims plus `realtime.topic`; a null user = anon key).
+
+## Realtime org bus (0064)
+
+Live dashboard updates are moving from `postgres_changes` to ONE private
+Broadcast topic per org, `org:<org uuid>` (lower-case uuid): 0064 is the
+expand step; the client (one org channel per tab) and the contract 0068
+(empty `supabase_realtime`) follow. Reason (KEA-15): `realtime.apply_rls`
+sends the key columns of every DELETE to every subscriber of every org, and
+filters chosen by the client do not isolate tenants.
+
+- **Who receives.** The only policy on `realtime.messages`, "org members
+  receive org broadcasts", is SELECT for `authenticated` on broadcast rows
+  with `topic = realtime.topic()` (the topic being joined) when
+  `private.is_org_member(private.realtime_topic_org_id(realtime.topic()))`.
+  Realtime authorizes a private join by reading back its probe row for that
+  topic under this policy. The topic equality is required: `realtime.send`
+  runs `SET LOCAL realtime.topic`, so the setting stays for the rest of a
+  writer's transaction. No INSERT/UPDATE/DELETE policy exists, so clients
+  cannot send.
+- **Who sends.** `private.broadcast_org_changes()`, from 15 statement-level
+  triggers (`trg_org_broadcast_ins` / `_upd` / `_del`) on `whatsapp_chats`,
+  `whatsapp_messages`, `labels`, `chat_labels` and `orders`: one
+  `realtime.send` per org and statement, each in its own exception block, so
+  a failed broadcast is a WARNING, never a failed write.
+  - SECURITY DEFINER (owner `postgres`, `search_path ''`, EXECUTE revoked
+    from every API role): `realtime.send` is SECURITY INVOKER and turns
+    errors into WARNINGs, so an invoker trigger would silently drop the
+    broadcast of every authenticated write.
+  - Statement level with transition tables: `delete_contact_cascade`, a
+    label delete (cascades to `chat_labels`) and `markChatRead` change many
+    rows in one statement and would otherwise send one message per row.
+    PostgreSQL refuses transition tables on multi-event triggers, hence one
+    trigger per event.
+- **Payload contract v1** (event = table name):
+  `{"v": 1, "table": <table>, "op": "INSERT" | "UPDATE" | "DELETE", "n": <rows>, "ids": [<at most 50 ids>]}`
+  plus the `id` that `realtime.send` adds. No phone numbers and no message
+  text (`realtime.messages` keeps rows for about 3 days): clients refetch
+  through PostgREST under RLS. `whatsapp_chats` and `chat_labels` have
+  composite keys holding the phone number, so their `ids` are always `[]`;
+  `n` larger than the number of ids means "refetch". A breaking change
+  needs `"v": 2`.
+- A new table the dashboard shows live gets the same three triggers and a
+  row in the trigger check of `150`; never add it to the `supabase_realtime`
+  publication (the contract migration 0068, after the client deploy,
+  empties it).
 
 ## Migration naming and ordering
 
@@ -181,20 +235,38 @@ pending block stays in `expected-diff.txt` through the merge:
    the code it depends on (the migration header names the PR).
 4. Follow-up PR: refresh `production.txt` and delete the contract block.
 
+**Rolling back a contract once a second tenant has real data.** While
+Sailendra is the only tenant with real data, a contract can be rolled back
+by restoring what it removed. After a second tenant is onboarded, a rollback
+must never reopen a cross-tenant leak: never re-add tables to the
+`supabase_realtime` publication (planned contract 0068: every signed-in user
+of every org would receive the other orgs' DELETE keys again, KEA-15) and
+never make the `chat-media` bucket public again (planned contract 0067,
+KEA-4). Degrade instead: revert only the failing client build and accept
+the reduced mode (ChatList and ChatWindow keep their polls; live updates
+elsewhere pause), or first close the tenant-2 gate again (suspend the other
+tenants' access). Expand migrations such as 0064 stay safe to roll back.
+
 ## Schema fingerprint (production vs replay)
 
 `fingerprint/schema_fingerprint.sql` prints one sorted line per app-owned
 schema object (tables, columns, constraints, indexes, RLS flags, policies,
 grants, functions with a hash of the body, triggers, buckets, realtime
-publication). It contains catalog SELECTs only.
+publication, and the policies on `realtime.messages`, which decide who may
+join a private Broadcast topic). It contains catalog SELECTs only. The
+`realtime.messages` policies were added to the query with 0064; production
+had none (read-only check 2026-10-16), so this query change alone adds no
+line to `production.txt`.
 
 - `production.txt`: output of the query on production (committed snapshot).
 - `local.txt`: output on a fresh local replay, kept for review.
 - `expected-diff.txt`: differences that are known and explained, one per line
   (`<` only in production, `>` only in the replay), each with a reason:
   permanent ones, or *pending* lines of a migration not yet applied to
-  production (see above). Entries that no longer differ fail as stale. It is
-  currently empty: the replay matches production exactly (re-checked
+  production (see above). Entries that no longer differ fail as stale. Apart
+  from the pending block `0064_realtime_org_broadcast` (2 functions, their 6
+  EXECUTE lines, the `realtime.messages` policy and 15 triggers) it is
+  empty: the replay up to 0063 matches production exactly (re-checked
   2026-10-16 after applying 0063, against a fresh read-only production query:
   563 lines, md5 `d64ce8915b69c05d3de67eac556d11bd`).
 - Not fingerprinted: sequence privileges, column-level privileges, MAINTAIN,

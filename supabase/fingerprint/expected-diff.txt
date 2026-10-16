@@ -14,4 +14,37 @@
 #    migration is applied to production with apply_migration, refresh
 #    production.txt and delete these lines in the same commit.
 #
-# Currently empty: the replay matches production exactly.
+
+# pending production apply: 0064_realtime_org_broadcast
+# (tracker 1.9 / 1.14, audit KEA-15 / PER-8: one private Broadcast topic per
+# org, EXPAND phase: topic helper, receive-only policy on realtime.messages,
+# the SECURITY DEFINER broadcaster and its 15 statement-level triggers).
+# Apply BEFORE deploying the client PR that joins the org topics (the code on
+# main never joins them), then refresh production.txt and delete this block.
+# The pol line exists because schema_fingerprint.sql now also lists the
+# policies on realtime.messages; production had none on 2026-10-16
+# (read-only check), so that query change alone adds no line.
+> fn private.broadcast_org_changes() returns=trigger lang=plpgsql volatile=v secdef=t config=search_path="" owner=postgres body_md5=45b6be58e48c8365bdece15a87f7dbde
+> fn private.realtime_topic_org_id(p_topic text) returns=uuid lang=sql volatile=i secdef=f config=search_path="" owner=postgres body_md5=c259bedfefd90dbe69f92d1c1891b720
+> fnexec private.broadcast_org_changes() anon=f
+> fnexec private.broadcast_org_changes() authenticated=f
+> fnexec private.broadcast_org_changes() service_role=f
+> fnexec private.realtime_topic_org_id(p_topic text) anon=f
+> fnexec private.realtime_topic_org_id(p_topic text) authenticated=t
+> fnexec private.realtime_topic_org_id(p_topic text) service_role=f
+> pol realtime.messages "org members receive org broadcasts" PERMISSIVE cmd=SELECT roles=authenticated using=((extension = 'broadcast'::text) AND (topic = ( SELECT realtime.topic() AS topic)) AND private.is_org_member(private.realtime_topic_org_id(( SELECT realtime.topic() AS topic)))) check=-
+> trg public.chat_labels CREATE TRIGGER trg_org_broadcast_del AFTER DELETE ON public.chat_labels REFERENCING OLD TABLE AS old_rows FOR EACH STATEMENT EXECUTE FUNCTION private.broadcast_org_changes()
+> trg public.chat_labels CREATE TRIGGER trg_org_broadcast_ins AFTER INSERT ON public.chat_labels REFERENCING NEW TABLE AS new_rows FOR EACH STATEMENT EXECUTE FUNCTION private.broadcast_org_changes()
+> trg public.chat_labels CREATE TRIGGER trg_org_broadcast_upd AFTER UPDATE ON public.chat_labels REFERENCING NEW TABLE AS new_rows FOR EACH STATEMENT EXECUTE FUNCTION private.broadcast_org_changes()
+> trg public.labels CREATE TRIGGER trg_org_broadcast_del AFTER DELETE ON public.labels REFERENCING OLD TABLE AS old_rows FOR EACH STATEMENT EXECUTE FUNCTION private.broadcast_org_changes()
+> trg public.labels CREATE TRIGGER trg_org_broadcast_ins AFTER INSERT ON public.labels REFERENCING NEW TABLE AS new_rows FOR EACH STATEMENT EXECUTE FUNCTION private.broadcast_org_changes()
+> trg public.labels CREATE TRIGGER trg_org_broadcast_upd AFTER UPDATE ON public.labels REFERENCING NEW TABLE AS new_rows FOR EACH STATEMENT EXECUTE FUNCTION private.broadcast_org_changes()
+> trg public.orders CREATE TRIGGER trg_org_broadcast_del AFTER DELETE ON public.orders REFERENCING OLD TABLE AS old_rows FOR EACH STATEMENT EXECUTE FUNCTION private.broadcast_org_changes()
+> trg public.orders CREATE TRIGGER trg_org_broadcast_ins AFTER INSERT ON public.orders REFERENCING NEW TABLE AS new_rows FOR EACH STATEMENT EXECUTE FUNCTION private.broadcast_org_changes()
+> trg public.orders CREATE TRIGGER trg_org_broadcast_upd AFTER UPDATE ON public.orders REFERENCING NEW TABLE AS new_rows FOR EACH STATEMENT EXECUTE FUNCTION private.broadcast_org_changes()
+> trg public.whatsapp_chats CREATE TRIGGER trg_org_broadcast_del AFTER DELETE ON public.whatsapp_chats REFERENCING OLD TABLE AS old_rows FOR EACH STATEMENT EXECUTE FUNCTION private.broadcast_org_changes()
+> trg public.whatsapp_chats CREATE TRIGGER trg_org_broadcast_ins AFTER INSERT ON public.whatsapp_chats REFERENCING NEW TABLE AS new_rows FOR EACH STATEMENT EXECUTE FUNCTION private.broadcast_org_changes()
+> trg public.whatsapp_chats CREATE TRIGGER trg_org_broadcast_upd AFTER UPDATE ON public.whatsapp_chats REFERENCING NEW TABLE AS new_rows FOR EACH STATEMENT EXECUTE FUNCTION private.broadcast_org_changes()
+> trg public.whatsapp_messages CREATE TRIGGER trg_org_broadcast_del AFTER DELETE ON public.whatsapp_messages REFERENCING OLD TABLE AS old_rows FOR EACH STATEMENT EXECUTE FUNCTION private.broadcast_org_changes()
+> trg public.whatsapp_messages CREATE TRIGGER trg_org_broadcast_ins AFTER INSERT ON public.whatsapp_messages REFERENCING NEW TABLE AS new_rows FOR EACH STATEMENT EXECUTE FUNCTION private.broadcast_org_changes()
+> trg public.whatsapp_messages CREATE TRIGGER trg_org_broadcast_upd AFTER UPDATE ON public.whatsapp_messages REFERENCING NEW TABLE AS new_rows FOR EACH STATEMENT EXECUTE FUNCTION private.broadcast_org_changes()

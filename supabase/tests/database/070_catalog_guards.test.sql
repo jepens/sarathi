@@ -2,7 +2,7 @@
 -- future migration must keep, so a new table / function / bucket policy that
 -- forgets tenant isolation fails CI even before it gets its own test.
 begin;
-select plan(11);
+select plan(12);
 
 -- 1. RLS is on for every table in public.
 select is_empty(
@@ -124,6 +124,21 @@ select is_empty(
               or (c.relkind = 'S'
                   and has_sequence_privilege('anon', c.oid, 'USAGE, SELECT, UPDATE'))) $$,
     'anon holds no privilege on any table, view or sequence in public');
+
+-- 12. Realtime Authorization (0064): every realtime.messages policy only lets
+--     a member RECEIVE the topic being joined: SELECT, for authenticated,
+--     bound to that topic (topic = realtime.topic(); realtime.send leaves
+--     realtime.topic set for the rest of a writer's transaction) and scoped
+--     with is_org_member on the org the topic names. An INSERT/UPDATE/DELETE
+--     (or ALL) policy would let clients send on org topics.
+select is_empty(
+    $$ select policyname from pg_policies
+       where schemaname = 'realtime' and tablename = 'messages'
+         and not (cmd = 'SELECT'
+                  and roles = array['authenticated']::name[]
+                  and coalesce(qual, '') like '%topic = ( SELECT realtime.topic() AS topic)%'
+                  and coalesce(qual, '') like '%private.is_org_member(private.realtime_topic_org_id(%') $$,
+    'every realtime.messages policy is SELECT for authenticated, bound to the joined topic and org-scoped');
 
 select * from finish();
 rollback;

@@ -15,7 +15,8 @@
 --   * triggers on auth.users that call app functions;
 --   * schema USAGE for anon/authenticated/service_role on private/extensions;
 --   * extensions (name + schema; versions are platform-managed, left out);
---   * supabase_realtime publication tables;
+--   * supabase_realtime publication tables and realtime.messages policies
+--     (who may join a private Broadcast topic);
 --   * storage buckets and storage.objects policies.
 --
 -- Function bodies are hashed after removing `--` line comments and collapsing
@@ -121,7 +122,8 @@ lines as (
       and (tn.nspname in ('public', 'private') or fpn.nspname in ('public', 'private'))
 
     union all
-    -- RLS policies on app tables and on storage.objects
+    -- RLS policies on app tables, storage.objects and realtime.messages
+    -- (Realtime Authorization of the private org topics, 0064)
     select format('pol %s.%s "%s" %s cmd=%s roles=%s using=%s check=%s',
                   p.schemaname, p.tablename, p.policyname, p.permissive, p.cmd,
                   array_to_string(array(select unnest(p.roles) order by 1), ','),
@@ -129,6 +131,7 @@ lines as (
     from pg_policies p
     where p.schemaname in ('public', 'private')
        or (p.schemaname = 'storage' and p.tablename = 'objects')
+       or (p.schemaname = 'realtime' and p.tablename = 'messages')
 
     union all
     -- functions (body as md5 so the line stays short but any change shows)

@@ -284,7 +284,9 @@ ext plpgsql schema=pg_catalog
 ext supabase_vault schema=vault
 ext uuid-ossp schema=extensions
 ext vector schema=extensions
+fn private.broadcast_org_changes() returns=trigger lang=plpgsql volatile=v secdef=t config=search_path="" owner=postgres body_md5=45b6be58e48c8365bdece15a87f7dbde
 fn private.is_org_member(check_org uuid) returns=boolean lang=sql volatile=s secdef=t config=search_path="" owner=postgres body_md5=e57ba0309b4973cc15064c4550ae395a
+fn private.realtime_topic_org_id(p_topic text) returns=uuid lang=sql volatile=i secdef=f config=search_path="" owner=postgres body_md5=c259bedfefd90dbe69f92d1c1891b720
 fn public.bump_unread(p_org uuid, p_phone text) returns=void lang=sql volatile=v secdef=t config=search_path=public, pg_temp owner=postgres body_md5=801a5b00f2d861e5f1cf8c494ca28d1a
 fn public.claim_queue_jobs(p_limit integer, p_stale_seconds integer, p_debounce_seconds integer) returns=SETOF message_queue lang=plpgsql volatile=v secdef=t config=search_path="" owner=postgres body_md5=99a6fdfaf148a6f605bdb985f5f6585d
 fn public.cleanup_old_queue_entries() returns=void lang=plpgsql volatile=v secdef=f config=search_path=public owner=postgres body_md5=a7d64dbb496e09e97c364d3192821b7d
@@ -301,9 +303,15 @@ fn public.sync_vendor_from_contact() returns=trigger lang=plpgsql volatile=v sec
 fn public.update_app_settings_updated_at() returns=trigger lang=plpgsql volatile=v secdef=f config=search_path=public owner=postgres body_md5=8d0d99f0f246f51e6e468e02e03e428b
 fn public.update_updated_at_column() returns=trigger lang=plpgsql volatile=v secdef=f config=search_path=public owner=postgres body_md5=8d0d99f0f246f51e6e468e02e03e428b
 fn public.verify_webhook_token(input_token text) returns=boolean lang=plpgsql volatile=v secdef=t config=search_path=public owner=postgres body_md5=005b92d092eca6b499b70cad6952f3ef
+fnexec private.broadcast_org_changes() anon=f
+fnexec private.broadcast_org_changes() authenticated=f
+fnexec private.broadcast_org_changes() service_role=f
 fnexec private.is_org_member(check_org uuid) anon=f
 fnexec private.is_org_member(check_org uuid) authenticated=t
 fnexec private.is_org_member(check_org uuid) service_role=f
+fnexec private.realtime_topic_org_id(p_topic text) anon=f
+fnexec private.realtime_topic_org_id(p_topic text) authenticated=t
+fnexec private.realtime_topic_org_id(p_topic text) service_role=f
 fnexec public.bump_unread(p_org uuid, p_phone text) anon=f
 fnexec public.bump_unread(p_org uuid, p_phone text) authenticated=f
 fnexec public.bump_unread(p_org uuid, p_phone text) service_role=t
@@ -451,6 +459,7 @@ pol public.vendors "org members full access" PERMISSIVE cmd=ALL roles=authentica
 pol public.whatsapp_chats "org members full access" PERMISSIVE cmd=ALL roles=authenticated using=private.is_org_member(org_id) check=private.is_org_member(org_id)
 pol public.whatsapp_integrations "org members manage their whatsapp integration" PERMISSIVE cmd=ALL roles=authenticated using=private.is_org_member(org_id) check=private.is_org_member(org_id)
 pol public.whatsapp_messages "org members full access" PERMISSIVE cmd=ALL roles=authenticated using=private.is_org_member(org_id) check=private.is_org_member(org_id)
+pol realtime.messages "org members receive org broadcasts" PERMISSIVE cmd=SELECT roles=authenticated using=((extension = 'broadcast'::text) AND (topic = ( SELECT realtime.topic() AS topic)) AND private.is_org_member(private.realtime_topic_org_id(( SELECT realtime.topic() AS topic)))) check=-
 pol storage.objects "chat-media org members" PERMISSIVE cmd=ALL roles=authenticated using=((bucket_id = 'chat-media'::text) AND CASE WHEN ((storage.foldername(name))[1] ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'::text) THEN private.is_org_member(((storage.foldername(name))[1])::uuid) ELSE false END) check=((bucket_id = 'chat-media'::text) AND CASE WHEN ((storage.foldername(name))[1] ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'::text) THEN private.is_org_member(((storage.foldername(name))[1])::uuid) ELSE false END)
 pol storage.objects "documents bucket org members" PERMISSIVE cmd=ALL roles=authenticated using=((bucket_id = 'documents'::text) AND private.is_org_member((COALESCE((storage.foldername(name))[1], '5a11e024-0001-4000-8000-000000000001'::text))::uuid)) check=((bucket_id = 'documents'::text) AND private.is_org_member((COALESCE((storage.foldername(name))[1], '5a11e024-0001-4000-8000-000000000001'::text))::uuid))
 pol storage.objects "proposals org members" PERMISSIVE cmd=ALL roles=authenticated using=((bucket_id = 'proposals'::text) AND CASE WHEN ((storage.foldername(name))[1] ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'::text) THEN private.is_org_member(((storage.foldername(name))[1])::uuid) ELSE false END) check=((bucket_id = 'proposals'::text) AND CASE WHEN ((storage.foldername(name))[1] ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'::text) THEN private.is_org_member(((storage.foldername(name))[1])::uuid) ELSE false END)
@@ -553,11 +562,26 @@ schema public authenticated usage=t create=f
 schema public service_role usage=t create=f
 trg auth.users CREATE TRIGGER on_auth_user_created AFTER INSERT ON auth.users FOR EACH ROW EXECUTE FUNCTION handle_new_user()
 trg public.app_settings CREATE TRIGGER app_settings_updated_at BEFORE UPDATE ON public.app_settings FOR EACH ROW EXECUTE FUNCTION update_app_settings_updated_at()
+trg public.chat_labels CREATE TRIGGER trg_org_broadcast_del AFTER DELETE ON public.chat_labels REFERENCING OLD TABLE AS old_rows FOR EACH STATEMENT EXECUTE FUNCTION private.broadcast_org_changes()
+trg public.chat_labels CREATE TRIGGER trg_org_broadcast_ins AFTER INSERT ON public.chat_labels REFERENCING NEW TABLE AS new_rows FOR EACH STATEMENT EXECUTE FUNCTION private.broadcast_org_changes()
+trg public.chat_labels CREATE TRIGGER trg_org_broadcast_upd AFTER UPDATE ON public.chat_labels REFERENCING NEW TABLE AS new_rows FOR EACH STATEMENT EXECUTE FUNCTION private.broadcast_org_changes()
 trg public.kb_sources CREATE TRIGGER trg_kb_sources_updated_at BEFORE UPDATE ON public.kb_sources FOR EACH ROW EXECUTE FUNCTION set_updated_at()
+trg public.labels CREATE TRIGGER trg_org_broadcast_del AFTER DELETE ON public.labels REFERENCING OLD TABLE AS old_rows FOR EACH STATEMENT EXECUTE FUNCTION private.broadcast_org_changes()
+trg public.labels CREATE TRIGGER trg_org_broadcast_ins AFTER INSERT ON public.labels REFERENCING NEW TABLE AS new_rows FOR EACH STATEMENT EXECUTE FUNCTION private.broadcast_org_changes()
+trg public.labels CREATE TRIGGER trg_org_broadcast_upd AFTER UPDATE ON public.labels REFERENCING NEW TABLE AS new_rows FOR EACH STATEMENT EXECUTE FUNCTION private.broadcast_org_changes()
+trg public.orders CREATE TRIGGER trg_org_broadcast_del AFTER DELETE ON public.orders REFERENCING OLD TABLE AS old_rows FOR EACH STATEMENT EXECUTE FUNCTION private.broadcast_org_changes()
+trg public.orders CREATE TRIGGER trg_org_broadcast_ins AFTER INSERT ON public.orders REFERENCING NEW TABLE AS new_rows FOR EACH STATEMENT EXECUTE FUNCTION private.broadcast_org_changes()
+trg public.orders CREATE TRIGGER trg_org_broadcast_upd AFTER UPDATE ON public.orders REFERENCING NEW TABLE AS new_rows FOR EACH STATEMENT EXECUTE FUNCTION private.broadcast_org_changes()
 trg public.platform_settings CREATE TRIGGER trg_platform_settings_updated_at BEFORE UPDATE ON public.platform_settings FOR EACH ROW EXECUTE FUNCTION set_updated_at()
 trg public.system_message CREATE TRIGGER trigger_single_active_system_message BEFORE INSERT OR UPDATE ON public.system_message FOR EACH ROW WHEN ((new.is_active = true)) EXECUTE FUNCTION ensure_single_active_system_message()
 trg public.system_message CREATE TRIGGER update_system_message_updated_at BEFORE UPDATE ON public.system_message FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()
 trg public.vendors CREATE TRIGGER trg_vendors_updated_at BEFORE UPDATE ON public.vendors FOR EACH ROW EXECUTE FUNCTION set_updated_at()
 trg public.whatsapp_chats CREATE TRIGGER trg_cleanup_vendor_on_untag AFTER UPDATE OF contact_type ON public.whatsapp_chats FOR EACH ROW WHEN (((old.contact_type = 'vendor'::text) AND (new.contact_type IS DISTINCT FROM old.contact_type))) EXECUTE FUNCTION cleanup_vendor_on_untag()
+trg public.whatsapp_chats CREATE TRIGGER trg_org_broadcast_del AFTER DELETE ON public.whatsapp_chats REFERENCING OLD TABLE AS old_rows FOR EACH STATEMENT EXECUTE FUNCTION private.broadcast_org_changes()
+trg public.whatsapp_chats CREATE TRIGGER trg_org_broadcast_ins AFTER INSERT ON public.whatsapp_chats REFERENCING NEW TABLE AS new_rows FOR EACH STATEMENT EXECUTE FUNCTION private.broadcast_org_changes()
+trg public.whatsapp_chats CREATE TRIGGER trg_org_broadcast_upd AFTER UPDATE ON public.whatsapp_chats REFERENCING NEW TABLE AS new_rows FOR EACH STATEMENT EXECUTE FUNCTION private.broadcast_org_changes()
 trg public.whatsapp_chats CREATE TRIGGER trg_sync_vendor_on_insert AFTER INSERT ON public.whatsapp_chats FOR EACH ROW WHEN ((new.contact_type = 'vendor'::text)) EXECUTE FUNCTION sync_vendor_from_contact()
 trg public.whatsapp_chats CREATE TRIGGER trg_sync_vendor_on_tag AFTER UPDATE OF contact_type ON public.whatsapp_chats FOR EACH ROW WHEN (((new.contact_type = 'vendor'::text) AND (new.contact_type IS DISTINCT FROM old.contact_type))) EXECUTE FUNCTION sync_vendor_from_contact()
+trg public.whatsapp_messages CREATE TRIGGER trg_org_broadcast_del AFTER DELETE ON public.whatsapp_messages REFERENCING OLD TABLE AS old_rows FOR EACH STATEMENT EXECUTE FUNCTION private.broadcast_org_changes()
+trg public.whatsapp_messages CREATE TRIGGER trg_org_broadcast_ins AFTER INSERT ON public.whatsapp_messages REFERENCING NEW TABLE AS new_rows FOR EACH STATEMENT EXECUTE FUNCTION private.broadcast_org_changes()
+trg public.whatsapp_messages CREATE TRIGGER trg_org_broadcast_upd AFTER UPDATE ON public.whatsapp_messages REFERENCING NEW TABLE AS new_rows FOR EACH STATEMENT EXECUTE FUNCTION private.broadcast_org_changes()
