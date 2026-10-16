@@ -1,7 +1,6 @@
-import { createClient } from '@/lib/supabase/server';
 import { NextResponse } from 'next/server';
 import { LEAD_STAGES, type LeadStage } from '@/lib/ai/tools';
-import { getCurrentOrgId } from '@/lib/settings/org-context';
+import { accessDeniedResponse, requireOrgContext } from '@/lib/settings/org-context';
 
 // Mirror the DB CHECK constraint so we reject bad input before hitting Postgres.
 function isLeadStage(v: unknown): v is LeadStage {
@@ -32,14 +31,9 @@ export async function PATCH(
     request: Request,
     { params }: { params: Promise<{ phone: string }> }
 ) {
-    const supabase = await createClient();
-
-    const {
-        data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const access = await requireOrgContext();
+    if (!access.ok) return accessDeniedResponse(access);
+    const { supabase, orgId } = access;
 
     const { phone } = await params;
     if (!phone) {
@@ -84,6 +78,7 @@ export async function PATCH(
     const { data, error } = await supabase
         .from('whatsapp_chats')
         .update(patch)
+        .eq('org_id', orgId)
         .eq('phone_number', phone)
         .select()
         .single();
@@ -104,12 +99,9 @@ export async function DELETE(
     _request: Request,
     { params }: { params: Promise<{ phone: string }> }
 ) {
-    const supabase = await createClient();
-
-    const orgId = await getCurrentOrgId(supabase);
-    if (!orgId) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const access = await requireOrgContext();
+    if (!access.ok) return accessDeniedResponse(access);
+    const { supabase, orgId } = access;
 
     const { phone } = await params;
     if (!phone) {

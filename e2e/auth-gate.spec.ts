@@ -1,9 +1,10 @@
 import { test, expect } from '@playwright/test';
 
-// The middleware is the app's authentication boundary. These prove it actually
+// The proxy (proxy.ts, formerly middleware) is the app's page-level auth gate,
+// backed by the dashboard layout's own session check. These prove it actually
 // enforces it end-to-end: an unauthenticated visitor can never reach the
 // dashboard, and (single-tenant) self-serve signup is closed.
-test.describe('Auth gate (middleware)', () => {
+test.describe('Auth gate (proxy)', () => {
     const protectedRoutes = [
         '/dashboard',
         '/dashboard/pipeline',

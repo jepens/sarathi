@@ -1,8 +1,7 @@
-import { createClient } from '@/lib/supabase/server';
 import { NextResponse } from 'next/server';
 import { isPortalConfigured } from '@/lib/portal/config';
 import { searchPortalClients } from '@/lib/portal/client';
-import { requireEnvIntegration } from '@/lib/settings/org-context';
+import { accessDeniedResponse, requireEnvIntegration } from '@/lib/settings/org-context';
 
 // Search proxy for the handoff picker. The browser calls THIS route (same
 // origin, gated to members of the default org — the Portal + its token are
@@ -11,11 +10,8 @@ import { requireEnvIntegration } from '@/lib/settings/org-context';
 // staying snappy for debounced typeahead (a plain GET, not a serialized action).
 
 export async function GET(request: Request) {
-    const supabase = await createClient();
-    const access = await requireEnvIntegration('portal', supabase);
-    if (!access.ok) {
-        return NextResponse.json({ error: access.error }, { status: access.status });
-    }
+    const access = await requireEnvIntegration('portal');
+    if (!access.ok) return accessDeniedResponse(access);
 
     if (!isPortalConfigured()) {
         return NextResponse.json({ error: 'Portal belum dikonfigurasi' }, { status: 503 });

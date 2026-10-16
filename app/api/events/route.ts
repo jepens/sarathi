@@ -1,4 +1,4 @@
-import { createClient } from '@/lib/supabase/server';
+import { accessDeniedResponse, requireOrgContext } from '@/lib/settings/org-context';
 import { NextResponse } from 'next/server';
 
 // Calendar feed for the /dashboard/calendar page.
@@ -89,14 +89,9 @@ function plainDatePlusDays(yyyyMmDd: string, days: number): string {
 }
 
 export async function GET(request: Request) {
-    const supabase = await createClient();
-
-    const {
-        data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const access = await requireOrgContext();
+    if (!access.ok) return accessDeniedResponse(access);
+    const { supabase } = access;
 
     const { searchParams } = new URL(request.url);
     const now = new Date();

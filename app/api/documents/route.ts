@@ -1,6 +1,5 @@
-import { createClient } from '@/lib/supabase/server';
 import { NextResponse } from 'next/server';
-import { requireOrgMember } from '@/lib/settings/org-context';
+import { accessDeniedResponse, requireOrgContext } from '@/lib/settings/org-context';
 
 interface DocumentMetadata {
     file_name?: string;
@@ -26,12 +25,9 @@ interface UniqueDocument {
 
 export async function GET() {
     try {
-        const supabase = await createClient();
-
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) {
-            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-        }
+        const access = await requireOrgContext();
+        if (!access.ok) return accessDeniedResponse(access);
+        const { supabase } = access;
 
         // Fetch all documents with their metadata
         const { data: documents, error } = await supabase
@@ -92,6 +88,10 @@ export async function GET() {
 
 export async function DELETE(request: Request) {
     try {
+        const access = await requireOrgContext();
+        if (!access.ok) return accessDeniedResponse(access);
+        const { supabase } = access;
+
         const { searchParams } = new URL(request.url);
         const fileName = searchParams.get('fileName');
 
@@ -108,13 +108,6 @@ export async function DELETE(request: Request) {
                 { error: 'fileName tidak valid' },
                 { status: 400 }
             );
-        }
-
-        const supabase = await createClient();
-
-        const access = await requireOrgMember(supabase);
-        if (!access.ok) {
-            return NextResponse.json({ error: access.error }, { status: access.status });
         }
 
         // Find document chunks that match the filename in metadata. We check

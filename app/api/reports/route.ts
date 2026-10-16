@@ -1,4 +1,4 @@
-import { createClient } from '@/lib/supabase/server';
+import { accessDeniedResponse, requireOrgContext } from '@/lib/settings/org-context';
 import { NextResponse } from 'next/server';
 import { computeReport } from '@/lib/reports/aggregate';
 
@@ -9,14 +9,9 @@ import { computeReport } from '@/lib/reports/aggregate';
 // lib/reports/aggregate.ts so the PDF route (/api/reports/pdf) shares it.
 
 export async function GET(request: Request) {
-    const supabase = await createClient();
-
-    const {
-        data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const access = await requireOrgContext();
+    if (!access.ok) return accessDeniedResponse(access);
+    const { supabase } = access;
 
     const { searchParams } = new URL(request.url);
     const now = new Date();

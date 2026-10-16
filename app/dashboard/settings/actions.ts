@@ -1,25 +1,18 @@
 'use server';
 
-import { createClient } from '@/lib/supabase/server';
 import {
     type BusinessProfile,
     saveBusinessProfile,
 } from '@/lib/settings/business-profile';
-import { getCurrentOrgId } from '@/lib/settings/org-context';
+import { requireOrgContext } from '@/lib/settings/org-context';
 import { revalidatePath } from 'next/cache';
 
 export async function updateBusinessProfile(
     input: BusinessProfile,
 ): Promise<{ ok: boolean; error?: string }> {
-    const supabase = await createClient();
-
-    const {
-        data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) return { ok: false, error: 'Tidak terautentikasi.' };
-
-    const orgId = await getCurrentOrgId(supabase);
-    if (!orgId) return { ok: false, error: 'Organisasi tidak ditemukan.' };
+    const access = await requireOrgContext();
+    if (!access.ok) return { ok: false, error: access.error };
+    const { supabase, orgId } = access;
 
     try {
         await saveBusinessProfile(input, supabase, orgId);

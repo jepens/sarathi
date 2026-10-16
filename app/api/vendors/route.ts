@@ -1,4 +1,4 @@
-import { createClient } from '@/lib/supabase/server';
+import { accessDeniedResponse, requireOrgContext } from '@/lib/settings/org-context';
 import { NextResponse } from 'next/server';
 import { VENDOR_CATEGORIES, isVendorCategory } from '@/lib/vendors/categories';
 
@@ -38,14 +38,9 @@ function normalizeText(v: unknown): string | null {
 }
 
 export async function GET(request: Request) {
-    const supabase = await createClient();
-
-    const {
-        data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const access = await requireOrgContext();
+    if (!access.ok) return accessDeniedResponse(access);
+    const { supabase } = access;
 
     const { searchParams } = new URL(request.url);
     const category = searchParams.get('category');
@@ -81,14 +76,9 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-    const supabase = await createClient();
-
-    const {
-        data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const access = await requireOrgContext();
+    if (!access.ok) return accessDeniedResponse(access);
+    const { supabase, orgId } = access;
 
     let rawBody: unknown;
     try {
@@ -135,6 +125,7 @@ export async function POST(request: Request) {
         const { data: existing } = await supabase
             .from('vendors')
             .select('id')
+            .eq('org_id', orgId)
             .eq('chat_phone', chatPhone)
             .maybeSingle();
 
@@ -149,6 +140,7 @@ export async function POST(request: Request) {
             const { data, error } = await supabase
                 .from('vendors')
                 .update(updatePatch)
+                .eq('org_id', orgId)
                 .eq('id', existing.id)
                 .select()
                 .single();
@@ -161,7 +153,8 @@ export async function POST(request: Request) {
 
     const { data, error } = await supabase
         .from('vendors')
-        .insert({ ...fields, chat_phone: chatPhone, created_by: user.id })
+        // Explicit org — the column DEFAULT is the seed org (KUA-4).
+        .insert({ ...fields, org_id: orgId, chat_phone: chatPhone, created_by: access.userId })
         .select()
         .single();
 

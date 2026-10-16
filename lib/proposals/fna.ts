@@ -1,6 +1,5 @@
 import { getOpenAIApiKey } from '@/lib/settings/app-settings';
 import { getBusinessProfile } from '@/lib/settings/business-profile';
-import { getCurrentOrgId } from '@/lib/settings/org-context';
 import { SupabaseClient } from '@supabase/supabase-js';
 
 // FNA = Form Need Analysis. The structured client requirements the admin
@@ -80,22 +79,23 @@ export interface FnaSummaryResult {
 // since this is an on-demand admin action, mirroring summarizeConversation.
 export async function generateFnaSummary(
     phoneNumber: string,
-    supabase: SupabaseClient
+    supabase: SupabaseClient,
+    orgId: string
 ): Promise<FnaSummaryResult> {
-    const orgId = await getCurrentOrgId(supabase);
-    if (!orgId) return { ok: false, error: 'Organisasi tidak ditemukan.' };
     const profile = await getBusinessProfile(supabase, orgId);
     const { data: crm } = await supabase
         .from('whatsapp_chats')
         .select(
             'contact_name, event_interest, participant_count, location_pref, event_date_pref, event_goals, budget_range, notes, source'
         )
+        .eq('org_id', orgId)
         .eq('phone_number', phoneNumber)
         .maybeSingle<ChatCrmRow>();
 
     const { data: messages } = await supabase
         .from('whatsapp_messages')
         .select('role, content')
+        .eq('org_id', orgId)
         .eq('phone_number', phoneNumber)
         .order('created_at', { ascending: false })
         .limit(40);

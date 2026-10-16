@@ -1,6 +1,5 @@
-import { createClient } from '@/lib/supabase/server';
 import { NextResponse } from 'next/server';
-import { getCurrentOrgId } from '@/lib/settings/org-context';
+import { accessDeniedResponse, requireOrgContext } from '@/lib/settings/org-context';
 import { leadInputSchema } from '@/lib/leads/schema';
 import { createOrFillLead } from '@/lib/leads/create';
 import { isPortalConfigured } from '@/lib/portal/config';
@@ -16,14 +15,9 @@ const LEAD_FIELDS =
     'portal_client_id, portal_last_proposal_url';
 
 export async function GET(request: Request) {
-    const supabase = await createClient();
-
-    const {
-        data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const access = await requireOrgContext();
+    if (!access.ok) return accessDeniedResponse(access);
+    const { supabase } = access;
 
     const { searchParams } = new URL(request.url);
     const stage = searchParams.get('stage');
@@ -57,22 +51,9 @@ export async function GET(request: Request) {
 // fill-empty: if a row already exists for this org+identity, only empty columns
 // are filled in (see createOrFillLead).
 export async function POST(request: Request) {
-    const supabase = await createClient();
-
-    const {
-        data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    const orgId = await getCurrentOrgId(supabase);
-    if (!orgId) {
-        return NextResponse.json(
-            { error: 'Tidak ada organisasi aktif untuk akun ini' },
-            { status: 403 }
-        );
-    }
+    const access = await requireOrgContext();
+    if (!access.ok) return accessDeniedResponse(access);
+    const { supabase, orgId } = access;
 
     let body: unknown;
     try {

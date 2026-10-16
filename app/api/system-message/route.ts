@@ -1,8 +1,7 @@
-import { createClient } from '@/lib/supabase/server';
 import { NextResponse } from 'next/server';
-import { buildSystemMessage, getDefaultSystemMessage } from '@/lib/ai/system-message';
+import { buildSystemMessage } from '@/lib/ai/system-message';
 import { getBusinessProfile } from '@/lib/settings/business-profile';
-import { getCurrentOrgId } from '@/lib/settings/org-context';
+import { accessDeniedResponse, requireOrgContext } from '@/lib/settings/org-context';
 
 export const dynamic = 'force-dynamic';
 
@@ -12,16 +11,14 @@ export const dynamic = 'force-dynamic';
  */
 export async function GET(request: Request) {
     try {
+        const access = await requireOrgContext();
+        if (!access.ok) return accessDeniedResponse(access);
+        const { supabase, orgId } = access;
+
         const { searchParams } = new URL(request.url);
         const name = searchParams.get('name');
-        const supabase = await createClient();
 
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) {
-            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-        }
-
-        let query = supabase.from('system_message').select('*');
+        let query = supabase.from('system_message').select('*').eq('org_id', orgId);
 
         if (name) {
             query = query.eq('name', name);
@@ -34,12 +31,9 @@ export async function GET(request: Request) {
 
         if (error) {
             // If no active message found, return a default built from this org's
-            // business profile (brand-less generic if the org isn't resolved).
+            // business profile.
             if (error.code === 'PGRST116') {
-                const orgId = await getCurrentOrgId(supabase);
-                const content = orgId
-                    ? buildSystemMessage(await getBusinessProfile(supabase, orgId))
-                    : getDefaultSystemMessage();
+                const content = buildSystemMessage(await getBusinessProfile(supabase, orgId));
                 return NextResponse.json({
                     id: 'default',
                     name: 'Default System Message',
@@ -69,6 +63,10 @@ export async function GET(request: Request) {
  */
 export async function PUT(request: Request) {
     try {
+        const access = await requireOrgContext();
+        if (!access.ok) return accessDeniedResponse(access);
+        const { supabase, orgId } = access;
+
         const body = await request.json();
         const { id, content, is_active } = body;
 
@@ -110,13 +108,6 @@ export async function PUT(request: Request) {
             );
         }
 
-        const supabase = await createClient();
-
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) {
-            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-        }
-
         const updateData: {
             content?: string;
             is_active?: boolean;
@@ -136,6 +127,7 @@ export async function PUT(request: Request) {
         const { data, error } = await supabase
             .from('system_message')
             .update(updateData)
+            .eq('org_id', orgId)
             .eq('id', id)
             .select()
             .single();
@@ -158,6 +150,10 @@ export async function PUT(request: Request) {
  */
 export async function POST(request: Request) {
     try {
+        const access = await requireOrgContext();
+        if (!access.ok) return accessDeniedResponse(access);
+        const { supabase, orgId } = access;
+
         const body = await request.json();
         const { name, content, description, is_active = false } = body;
 
@@ -207,20 +203,9 @@ export async function POST(request: Request) {
             );
         }
 
-        const supabase = await createClient();
-
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) {
-            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-        }
-
         // system_message.org_id is NOT NULL with an is_org_member with_check —
-        // set it explicitly so a non-Sailendra tenant's persona isn't rejected
-        // (and isn't mis-attributed via the column DEFAULT).
-        const orgId = await getCurrentOrgId(supabase);
-        if (!orgId) {
-            return NextResponse.json({ error: 'No organization for current user' }, { status: 403 });
-        }
+        // set it explicitly (orgId above) so a non-Sailendra tenant's persona
+        // isn't rejected (and isn't mis-attributed via the column DEFAULT).
 
         const { data, error } = await supabase
             .from('system_message')

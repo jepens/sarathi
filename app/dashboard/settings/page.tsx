@@ -9,8 +9,7 @@ import { TestChatPreview } from "./components/TestChatPreview";
 import { KnowledgeCoverageSummary } from "./components/KnowledgeCoverageSummary";
 import { BusinessProfileEditor } from "./components/BusinessProfileEditor";
 import { GENERIC_BUSINESS_PROFILE, getBusinessProfile } from "@/lib/settings/business-profile";
-import { getCurrentOrgId, isDefaultOrg } from "@/lib/settings/org-context";
-import { createClient } from "@/lib/supabase/server";
+import { isDefaultOrg, requireOrgContext } from "@/lib/settings/org-context";
 import { createServiceOrServerClient } from "@/lib/supabase/service";
 import { WhatsAppCredentials } from "./components/WhatsAppCredentials";
 import { QuickRepliesEditor } from "./components/QuickRepliesEditor";
@@ -20,9 +19,10 @@ import { resolvePublicOrigin } from "@/lib/utils/public-url";
 import { headers } from "next/headers";
 
 export default async function SettingsPage() {
-    // Fetch all settings
-    const supabase = await createClient();
-    const orgId = await getCurrentOrgId(supabase);
+    // Same cached org context the dashboard layout resolved (one lookup per
+    // render). Non-members still see the page, with generic defaults.
+    const access = await requireOrgContext();
+    const orgId = access.ok ? access.orgId : null;
 
     // The env WhatsApp number, its Meta webhook (Callback URL + Verify Token) and
     // credentials belong to the default org. Other tenants' WhatsApp numbers are
@@ -43,8 +43,8 @@ export default async function SettingsPage() {
         verifyToken = await getVerifyToken(svc);
     }
 
-    const businessProfile = orgId
-        ? await getBusinessProfile(supabase, orgId)
+    const businessProfile = access.ok
+        ? await getBusinessProfile(access.supabase, access.orgId)
         : { ...GENERIC_BUSINESS_PROFILE };
     // WhatsApp credentials live in server env, not the DB — and only the
     // default org uses them.

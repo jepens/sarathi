@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '@/lib/supabase/server';
 import {
     uploadWhatsAppMedia,
     sendWhatsAppMedia,
@@ -9,7 +8,7 @@ import {
     type WhatsAppApiError,
 } from '@/lib/whatsapp/client';
 import { whatsappLogger } from '@/lib/utils/logger';
-import { requireEnvIntegration } from '@/lib/settings/org-context';
+import { accessDeniedResponse, requireEnvIntegration } from '@/lib/settings/org-context';
 
 const CHAT_MEDIA_BUCKET = 'chat-media';
 
@@ -29,14 +28,11 @@ function safeExt(filename: string, mime: string): string {
 // customer. Multipart body: { phone_number, file, caption? }.
 export async function POST(request: Request) {
     try {
-        const supabase = await createClient();
         // Member of the default org only (env WhatsApp credentials) — before
-        // the Meta upload/send below.
-        const access = await requireEnvIntegration('whatsapp', supabase);
-        if (!access.ok) {
-            return NextResponse.json({ error: access.error }, { status: access.status });
-        }
-        const orgId = access.orgId;
+        // the body is read and the Meta upload/send below.
+        const access = await requireEnvIntegration('whatsapp');
+        if (!access.ok) return accessDeniedResponse(access);
+        const { supabase, orgId } = access;
 
         const form = await request.formData();
         const phone_number = form.get('phone_number');

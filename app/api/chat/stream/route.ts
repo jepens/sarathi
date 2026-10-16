@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
 import { generateRAGResponse, ChatMessage } from '@/lib/ai/rag';
-import { createClient } from '@/lib/supabase/server';
-import { requireOrgMember } from '@/lib/settings/org-context';
+import { accessDeniedResponse, requireOrgContext } from '@/lib/settings/org-context';
 
 /**
  * Streaming chat endpoint — emits NDJSON (one JSON object per line).
@@ -18,13 +17,10 @@ import { requireOrgMember } from '@/lib/settings/org-context';
  * preserved and back-pressure works naturally via the underlying stream.
  */
 export async function POST(request: Request) {
-    const supabase = await createClient();
     // Membership required, and retrieval/persona are scoped to the caller's own
     // org — a non-default tenant must never read Sailendra's KB through here.
-    const access = await requireOrgMember(supabase);
-    if (!access.ok) {
-        return NextResponse.json({ error: access.error }, { status: access.status });
-    }
+    const access = await requireOrgContext();
+    if (!access.ok) return accessDeniedResponse(access);
     const orgId = access.orgId;
 
     let parsed: { message?: string; history?: ChatMessage[] };

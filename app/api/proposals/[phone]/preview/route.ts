@@ -1,4 +1,4 @@
-import { createClient } from '@/lib/supabase/server';
+import { accessDeniedResponse, requireOrgContext } from '@/lib/settings/org-context';
 import { NextResponse } from 'next/server';
 import { buildProposalPreview } from '@/lib/proposals/send';
 
@@ -17,14 +17,10 @@ export async function GET(
     request: Request,
     { params }: { params: Promise<{ phone: string }> }
 ) {
-    const supabase = await createClient();
-
-    const {
-        data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    // Membership gate; buildProposalPreview reads through its own cookie-bound
+    // (RLS) client, so it only ever sees this org's leads/proposals.
+    const access = await requireOrgContext();
+    if (!access.ok) return accessDeniedResponse(access);
 
     const { phone } = await params;
     if (!phone) {

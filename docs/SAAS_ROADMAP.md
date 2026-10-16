@@ -45,7 +45,7 @@ end-to-end dengan tenant kedua nyata**, lalu melengkapi kebutuhan self-serve
 |---|---|---|
 | **Tenant model** | `organizations` + `organization_members` (role owner/admin/staff); helper `private.is_org_member(org_id)` SECURITY DEFINER | migrasi `0025`, `0029` |
 | **Isolasi data** | `org_id` di 12 tabel + RLS `is_org_member(org_id)` (pola "no-join" + helper) | `0027`–`0030` |
-| **Resolusi org (UI)** | `getCurrentOrgId()` dari membership user (1 user = 1 org) | [lib/settings/org-context.ts](../lib/settings/org-context.ts) |
+| **Resolusi org (UI)** | `requireOrgContext()` → `{ supabase, userId, orgId, role }` dari membership user (1 user = 1 org; sesi via `getClaims()`, di-cache per render); 401/403 seragam di semua route & server action | [lib/settings/org-context.ts](../lib/settings/org-context.ts) |
 | **Resolusi org (service-role)** | webhook/queue resolve via `phone_number_id` → org; fallback env = Sailendra | [lib/whatsapp/credentials.ts](../lib/whatsapp/credentials.ts) |
 | **WhatsApp per-tenant** | `whatsapp_integrations` (phone_number_id unik, access_token, **app_secret**, waba_id); webhook routing by phone_number_id + verifikasi signature pakai app_secret org tsb | `0032`, [app/api/webhook/whatsapp/route.ts](../app/api/webhook/whatsapp/route.ts) |
 | **Kunci chat** | `whatsapp_chats` PK = **composite `(org_id, phone_number)`** (dua tenant bisa punya kontak dengan nomor sama) | `0033`–`0036` (expand/contract) |

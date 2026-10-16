@@ -1,14 +1,23 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '@/lib/supabase/server';
 import { sendWhatsAppMessage, describeWhatsAppError, type WhatsAppApiError } from '@/lib/whatsapp/client';
 import { whatsappLogger } from '@/lib/utils/logger';
-import { requireEnvIntegration } from '@/lib/settings/org-context';
+import { accessDeniedResponse, requireEnvIntegration } from '@/lib/settings/org-context';
 
 export async function POST(request: Request) {
     let phone_number: string | undefined;
     let message: string | undefined;
 
     try {
+        // Resolve the sender's org from their membership and require it to be
+        // the org that owns the env WhatsApp credentials — checked FIRST, before
+        // the body is read and before Meta is called, so another tenant can
+        // never send from Sailendra's number. org_id is also set explicitly
+        // below (part of the composite key); relying on the column DEFAULT
+        // would mis-stamp another tenant's reply.
+        const access = await requireEnvIntegration('whatsapp');
+        if (!access.ok) return accessDeniedResponse(access);
+        const { supabase, orgId } = access;
+
         const body = await request.json();
         phone_number = body.phone_number;
         message = body.message;
@@ -26,19 +35,6 @@ export async function POST(request: Request) {
                 { status: 400 }
             );
         }
-
-        const supabase = await createClient();
-
-        // Resolve the sender's org from their membership and require it to be
-        // the org that owns the env WhatsApp credentials — checked BEFORE Meta
-        // is called, so another tenant can never send from Sailendra's number.
-        // org_id is also set explicitly below (part of the composite key);
-        // relying on the column DEFAULT would mis-stamp another tenant's reply.
-        const access = await requireEnvIntegration('whatsapp', supabase);
-        if (!access.ok) {
-            return NextResponse.json({ error: access.error }, { status: access.status });
-        }
-        const orgId = access.orgId;
 
         // Send via Meta first — if Meta rejects (e.g. past 24h window), we
         // don't want a phantom assistant message stored locally that the
