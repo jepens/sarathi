@@ -63,10 +63,10 @@ export type UserAccess =
 export type { OrgAccessDenied };
 
 /**
- * The default org for service-role writes/reads. A platform setting
- * (platform_settings, service role only — tenants cannot change it; legacy
- * app_settings fallback during the rollout), so it can change without a
- * deploy; falls back to the seed org (migration 0026).
+ * The default org for service-role writes/reads. A platform setting read
+ * from platform_settings only (service role only — tenants cannot change it;
+ * app_settings is not consulted), so it can change without a deploy; the seed
+ * org constant (migration 0026) is the last resort when the row is missing.
  * Pass a service-role client.
  */
 export async function getDefaultOrgId(client: SupabaseClient): Promise<string> {

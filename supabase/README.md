@@ -144,6 +144,23 @@ If the PR is merged before step 2 (not recommended), main stays green with
 the pending lines; steps 2-3 then happen in a follow-up PR. Never apply a
 migration to production that has not passed step 1 and review.
 
+**Contract migrations (applied after the code deploy).** Production deploys
+the app automatically from `main` (`docs/VPS_DEPLOYMENT.md`), so a migration
+that the code on `main` is not compatible with (e.g. `0062_tenant_schema_contract`:
+drops column defaults and global unique keys the old code relies on) cannot
+close its loop in the same PR. Its pending block stays in `expected-diff.txt`
+through the merge:
+
+1. Apply the expand migration (`0061`), refresh `production.txt` and delete
+   its pending block, in the PR. If the contract migration redefines a
+   function the expand one created, its block carries prepared, commented
+   `<` lines for the expand bodies: un-comment them in the same commit.
+2. Merge; the merge deploys the code. Confirm every instance (app and cron
+   caller) runs the new build.
+3. Only then apply the contract migration; never while `main` lacks the code
+   it depends on (the migration header names the commit).
+4. Follow-up PR: refresh `production.txt` and delete the contract block.
+
 ## Schema fingerprint (production vs replay)
 
 `fingerprint/schema_fingerprint.sql` prints one sorted line per app-owned
@@ -157,10 +174,15 @@ publication). It contains catalog SELECTs only.
   (`<` only in production, `>` only in the replay), each with a reason:
   permanent ones, or *pending* lines of a migration not yet applied to
   production (see above). Entries that no longer differ fail as stale. Apart
-  from the pending block of `0061_tenant_schema_expand` it is empty: the
-  replay matched production exactly before 0061 (re-checked 2026-10-16
-  against a fresh read-only production query: 552 lines, md5
-  `d17c90453caa0ec2b719e0ac361aa9aa`).
+  from the two pending blocks `0061_tenant_schema_expand` and
+  `0062_tenant_schema_contract` it is empty: the replay matched production
+  exactly before 0061 (re-checked 2026-10-16 against a fresh read-only
+  production query: 552 lines, md5 `d17c90453caa0ec2b719e0ac361aa9aa`). When
+  0061 is applied and its block deleted, the 0062 block stays pending (it is
+  applied after the merge, see *Contract migrations*); in that same commit
+  un-comment the two prepared `< fn` lines in the 0062 block
+  (`sync_vendor_from_contact`, `verify_webhook_token`: production then holds
+  their 0061 bodies).
 
 Compare a fresh replay with the snapshot:
 
