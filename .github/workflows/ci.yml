@@ -98,10 +98,16 @@ jobs:
         with:
           version: 2.121.0
 
-      # `db start` runs ONLY the Postgres container (no auth, storage,
-      # realtime, rest, kong, studio, ...). The CLI still initialises the auth
-      # and storage schemas the migrations and tests depend on, then applies
-      # supabase/migrations in order. Nothing else is needed by the tests.
+      # `db start` leaves ONLY the Postgres container running (no auth,
+      # storage, realtime, rest, kong, studio, ...). During setup the CLI still
+      # initialises the auth, storage and realtime schemas the migrations and
+      # tests depend on (with [realtime] enabled in config.toml it runs the
+      # Realtime image once: realtime.messages, realtime.send / topic and the
+      # daily realtime.messages partitions from yesterday to +3 days), then
+      # applies supabase/migrations in order. 150_realtime_org_broadcast
+      # FAILS, not skips, when today's partition is missing (e.g. after a CLI
+      # bump that stops creating them), so the Realtime tests cannot silently
+      # drop out of CI.
       - name: Start local database (applies all migrations)
         run: supabase db start
 

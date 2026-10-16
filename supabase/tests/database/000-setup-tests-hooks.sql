@@ -153,6 +153,46 @@ end;
 $$;
 
 -- ---------------------------------------------------------------------------
+-- Realtime (org broadcast bus, 0064)
+-- ---------------------------------------------------------------------------
+
+-- True when realtime.messages has the partition of the current UTC day
+-- (Realtime names them messages_YYYY_MM_DD; inserted_at is UTC). Without it a
+-- broadcast is only a WARNING and probe rows cannot be inserted. The local
+-- stack gets yesterday .. +3 days when `supabase db start` / `db reset`
+-- initialises the realtime schema; no Realtime server runs afterwards to
+-- create more, so a stack started more than 3 days ago needs a `db reset`.
+create function tests.realtime_partition_ready() returns boolean
+language sql
+stable
+as $$
+    select exists (
+        select 1
+        from pg_inherits i
+        join pg_class c on c.oid = i.inhrelid
+        where i.inhparent = to_regclass('realtime.messages')
+          and c.relname = 'messages_' || to_char(now() at time zone 'utc', 'YYYY_MM_DD')
+    );
+$$;
+
+-- Simulates how Realtime authorizes a private channel join: it switches to
+-- the caller's role and JWT claims, sets realtime.topic to the joined topic
+-- (transaction-local), then reads back the probe row it inserted for that
+-- topic through RLS. p_user null = a client holding only the anon key.
+create function tests.realtime_join_as(p_user uuid, p_topic text) returns void
+language plpgsql
+as $$
+begin
+    if p_user is null then
+        perform tests.authenticate_as_anon();
+    else
+        perform tests.authenticate_as(p_user);
+    end if;
+    perform set_config('realtime.topic', coalesce(p_topic, ''), true);
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
 -- Reusable assertion sets (return pgTAP lines; call with select * from ...)
 -- ---------------------------------------------------------------------------
 
