@@ -63,7 +63,11 @@ export function pickFreshInbound(
     for (const row of rows) {
         if (isNewInbound(row, seen.get(row.phone_number), mountFloorMs)) fresh.push(row);
         const inboundMs = row.last_inbound_at ? Date.parse(row.last_inbound_at) : NaN;
-        if (Number.isFinite(inboundMs)) seen.set(row.phone_number, inboundMs);
+        // Never move back: overlapping reads can land out of order, and an
+        // older read must not make an already-alerted message look new again.
+        if (Number.isFinite(inboundMs)) {
+            seen.set(row.phone_number, Math.max(seen.get(row.phone_number) ?? -Infinity, inboundMs));
+        }
     }
     return fresh;
 }

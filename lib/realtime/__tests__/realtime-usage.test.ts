@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 
 // Structural guard (tracker 1.9, audit KEA-15): live updates come only from
@@ -29,17 +29,25 @@ function sourceFiles(dir: string): string[] {
     });
 }
 
-const files = ['app', 'components', 'lib']
+// The app's source folders (hooks/ is the shadcn alias '@/hooks') and the
+// root-level files (proxy.ts, configs).
+const rootFiles = readdirSync(ROOT)
+    .filter((name) => SOURCE.test(name) && !TEST.test(name) && statSync(join(ROOT, name)).isFile())
+    .map((name) => join(ROOT, name));
+const files = ['app', 'components', 'lib', 'hooks']
+    .filter((dir) => existsSync(join(ROOT, dir)))
     .flatMap((dir) => sourceFiles(join(ROOT, dir)))
+    .concat(rootFiles)
     .map((full) => relative(ROOT, full).split(sep).join('/'))
     .sort();
 
 const containing = (needle: string) => files.filter((rel) => readFileSync(join(ROOT, rel), 'utf8').includes(needle));
 
 describe('Realtime usage', () => {
-    it('scans the app, component and library sources', () => {
+    it('scans the app, component, hook and library sources and the root-level files', () => {
         expect(files.length).toBeGreaterThan(100);
         expect(files).toContain(PROVIDER);
+        expect(files).toContain('proxy.ts');
     });
 
     it('no source subscribes to postgres_changes', () => {

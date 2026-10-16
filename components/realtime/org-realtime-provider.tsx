@@ -50,12 +50,22 @@ export type OrgRealtimeStatus =
 export interface OrgChannel {
     on(type: 'broadcast', filter: { event: string }, callback: (message: unknown) => void): OrgChannel;
     subscribe(callback: (status: string, err?: Error) => void): OrgChannel;
+    unsubscribe(): Promise<unknown>;
+}
+
+/** The socket side (realtime-js RealtimeClient). */
+export interface OrgRealtimeSocket {
+    setAuth(token?: string | null): Promise<void>;
+    connect(): void;
+    isConnected(): boolean;
+    isConnecting(): boolean;
+    isDisconnecting(): boolean;
 }
 
 export interface OrgRealtimeClient {
     channel(topic: string, options: { config: { private: boolean } }): OrgChannel;
     removeChannel(channel: OrgChannel): Promise<unknown>;
-    realtime: { setAuth(token?: string | null): Promise<void> };
+    realtime: OrgRealtimeSocket;
 }
 
 export interface OrgChannelHandlers {
@@ -71,16 +81,31 @@ export interface OrgChannelController {
     stop(): void;
 }
 
-// realtime-js rejoins an errored channel by itself (socket drop -> reconnect
-// -> SUBSCRIBED again). It never rejoins a CLOSED one: the server closes a
-// channel on an expired token ("Token has expired"), revoked access or a rate
-// limit. Re-create the channel then, and also when its own rejoins keep
-// failing or stop (its reconnect waits for a close event that a refused
-// WebSocket connect does not always fire).
+// realtime-js keeps the SOCKET up (reconnect with backoff, heartbeats) and
+// rejoins an errored channel once the socket is back. It never rejoins a
+// CLOSED one: the server closes a channel on an expired token ("Token has
+// expired"), revoked access or a rate limit. So the channel is re-created
+// - after a server-side close (CLOSED), and
+// - when its joins keep failing, or no join happens, while the socket IS
+//   connected;
+// and never while the socket is down: each re-creation would leave a join and
+// a leave in realtime-js's send buffer, all flushed in one burst on reconnect.
+// It is re-created with channel.unsubscribe(), not removeChannel(): removing
+// the last channel disconnects the socket, and connect() is ignored while it
+// is still 'disconnecting'. A drop of the socket reports CHANNEL_ERROR twice
+// (error + close), so only failures while it is connected count.
 const RECREATE_AFTER_FAILURES = 3;
 const RECREATE_AFTER_STALL_MS = 20_000;
 const REJOIN_MIN_MS = 1_000;
 const REJOIN_MAX_MS = 30_000;
+/** Retry of connect() while the socket is still 'disconnecting' (at most 100 ms in realtime-js). */
+const SOCKET_RETRY_MS = 150;
+/**
+ * A second RESYNC this long after every join: the first join of an idle
+ * Realtime tenant starts its broadcast replication, and writes in that first
+ * ~0.5 s are not delivered (local measurement, supabase/README.md).
+ */
+export const FOLLOWUP_RESYNC_MS = 3_000;
 
 /** Wait before the n-th re-creation since the last join (n from 0): 1 s, 2 s, 4 s ... 30 s. */
 export function rejoinDelay(attempt: number): number {
@@ -90,9 +115,10 @@ export function rejoinDelay(attempt: number): number {
 /**
  * Joins the org's private channel and keeps it joined: RESYNC on EVERY
  * SUBSCRIBED (the first included: whatever changed before the join exists
- * only in the database), re-creation with capped exponential backoff after a
- * server-side close or a run of failed rejoins, and nothing after stop().
- * Logs status changes only, never payloads.
+ * only in the database) and again FOLLOWUP_RESYNC_MS later, re-creation with
+ * capped exponential backoff after a server-side close or failed or stalled
+ * joins on a connected socket, and nothing after stop(). Logs status changes
+ * only, never payloads.
  */
 export function startOrgChannel(
     client: OrgRealtimeClient,
@@ -100,15 +126,18 @@ export function startOrgChannel(
     handlers: OrgChannelHandlers,
 ): OrgChannelController {
     const topic = orgTopic(orgId);
+    const socket = client.realtime;
     let channel: OrgChannel | null = null;
     let stopped = false;
     // True while this code removes a channel itself: the CLOSED that
-    // removeChannel reports is ours, not a server-side close.
+    // unsubscribe / removeChannel reports is ours, not a server-side close.
     let tearingDown = false;
-    let failures = 0; // failed join attempts of the current channel
+    let failures = 0; // failed joins of the current channel while the socket was connected
     let attempt = 0; // re-creations since the last SUBSCRIBED
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
     let stallTimer: ReturnType<typeof setTimeout> | undefined;
+    let socketTimer: ReturnType<typeof setTimeout> | undefined;
+    let followupTimer: ReturnType<typeof setTimeout> | undefined;
     let status: OrgRealtimeStatus = 'connecting';
 
     const report = (next: OrgRealtimeStatus, detail: string) => {
@@ -121,14 +150,19 @@ export function startOrgChannel(
     const clearTimers = () => {
         clearTimeout(retryTimer);
         clearTimeout(stallTimer);
+        clearTimeout(socketTimer);
         retryTimer = undefined;
         stallTimer = undefined;
+        socketTimer = undefined;
     };
 
-    const remove = async (ch: OrgChannel) => {
+    /** Drops a channel this code no longer wants; its CLOSED is ignored. */
+    const drop = async (ch: OrgChannel, how: 'unsubscribe' | 'remove') => {
         tearingDown = true;
         try {
-            await client.removeChannel(ch);
+            // remove also disconnects the socket when it was the last channel
+            // (only on stop); unsubscribe leaves the socket alone.
+            await (how === 'remove' ? client.removeChannel(ch) : ch.unsubscribe());
         } catch {
             // already gone from the socket
         } finally {
@@ -136,12 +170,47 @@ export function startOrgChannel(
         }
     };
 
+    // A channel waiting for its join needs a socket that is connecting or
+    // open. subscribe() connects an idle socket itself, but connect() is a
+    // no-op while the socket is still 'disconnecting' (after the
+    // removeChannel of a previous provider, e.g. a remount): try again then.
+    // Never called on a socket error, so it cannot spin while offline:
+    // realtime-js reconnects with its own backoff.
+    const ensureSocket = () => {
+        clearTimeout(socketTimer);
+        socketTimer = undefined;
+        if (stopped || socket.isConnected() || socket.isConnecting()) return;
+        if (socket.isDisconnecting()) {
+            socketTimer = setTimeout(ensureSocket, SOCKET_RETRY_MS);
+            return;
+        }
+        socket.connect();
+    };
+
+    const armStall = () => {
+        if (stallTimer === undefined) stallTimer = setTimeout(onStall, RECREATE_AFTER_STALL_MS);
+    };
+
+    // No join for a while: on a connected socket the channel is stuck, so it
+    // is re-created; on a socket that is down, the socket gets a nudge and
+    // the channel waits for realtime-js to rejoin it.
+    const onStall = () => {
+        stallTimer = undefined;
+        if (stopped) return;
+        if (socket.isConnected()) {
+            void recreate();
+            return;
+        }
+        ensureSocket();
+        armStall();
+    };
+
     const open = async () => {
         retryTimer = undefined;
         try {
             // A current token in the join (the session may have been refreshed
             // meanwhile); supabase-js re-sends it on every heartbeat as well.
-            await client.realtime.setAuth();
+            await socket.setAuth();
         } catch {
             // join with the token the socket already has
         }
@@ -154,13 +223,15 @@ export function startOrgChannel(
             const event = parseOrgEvent(message);
             if (event) handlers.onEvent(event);
         }).subscribe((st, err) => onChannelStatus(ch, st, err));
+        ensureSocket();
+        armStall();
     };
 
     const recreate = async () => {
         clearTimers();
         const old = channel;
         channel = null;
-        if (old) await remove(old);
+        if (old) await drop(old, 'unsubscribe');
         if (stopped) return;
         const delay = rejoinDelay(attempt);
         attempt += 1;
@@ -177,6 +248,11 @@ export function startOrgChannel(
             stallTimer = undefined;
             report('live', st);
             handlers.onResync();
+            clearTimeout(followupTimer);
+            followupTimer = setTimeout(() => {
+                followupTimer = undefined;
+                if (!stopped) handlers.onResync();
+            }, FOLLOWUP_RESYNC_MS);
             return;
         }
         report('paused', err?.message ? `${st}: ${err.message}` : st);
@@ -184,21 +260,26 @@ export function startOrgChannel(
             void recreate();
             return;
         }
-        // CHANNEL_ERROR / TIMED_OUT: let realtime-js rejoin, unless it keeps
-        // failing or stops trying (e.g. a socket that never reconnects).
-        failures += 1;
-        if (failures >= RECREATE_AFTER_FAILURES) {
-            void recreate();
-        } else if (stallTimer === undefined) {
-            stallTimer = setTimeout(() => void recreate(), RECREATE_AFTER_STALL_MS);
+        // CHANNEL_ERROR / TIMED_OUT: realtime-js rejoins by itself. Re-create
+        // only when joins keep failing on a connected socket (a refused or
+        // lost join); a socket drop is not a failed join.
+        if (socket.isConnected()) {
+            failures += 1;
+            if (failures >= RECREATE_AFTER_FAILURES) {
+                void recreate();
+                return;
+            }
         }
+        armStall();
     };
 
     void open();
 
     return {
         wake() {
-            if (stopped || retryTimer === undefined) return;
+            if (stopped) return;
+            ensureSocket();
+            if (retryTimer === undefined) return;
             clearTimeout(retryTimer);
             retryTimer = undefined;
             void open();
@@ -207,10 +288,34 @@ export function startOrgChannel(
             if (stopped) return;
             stopped = true;
             clearTimers();
+            clearTimeout(followupTimer);
+            followupTimer = undefined;
             const old = channel;
             channel = null;
-            if (old) void remove(old);
+            if (old) void drop(old, 'remove');
         },
+    };
+}
+
+/**
+ * Calls `onWake` when the tab becomes visible again and when the device comes
+ * back online (events can be missed while offline, and background timers are
+ * throttled); returns the cleanup. Not gated on visibility for 'online': the
+ * in-tab notifier alerts while the tab is hidden.
+ */
+export function watchWake(
+    doc: Pick<Document, 'visibilityState' | 'addEventListener' | 'removeEventListener'>,
+    win: Pick<Window, 'addEventListener' | 'removeEventListener'>,
+    onWake: () => void,
+): () => void {
+    const onVisibility = () => {
+        if (doc.visibilityState === 'visible') onWake();
+    };
+    doc.addEventListener('visibilitychange', onVisibility);
+    win.addEventListener('online', onWake);
+    return () => {
+        doc.removeEventListener('visibilitychange', onVisibility);
+        win.removeEventListener('online', onWake);
     };
 }
 
@@ -229,22 +334,14 @@ export function OrgRealtimeProvider({ children }: { children: React.ReactNode })
             onResync: () => bus.emit(RESYNC),
             onStatus: setStatus,
         });
-        // Events can be missed while the device was offline or the tab
-        // slept (background timers are throttled): refetch, and re-join now
-        // if a backoff is pending. Not gated on visibility for 'online': the
-        // in-tab notifier alerts while the tab is hidden.
-        const resync = () => {
+        // Back from offline or a sleeping tab: refetch, and re-join now if a
+        // backoff is pending.
+        const unwatch = watchWake(document, window, () => {
             channel.wake();
             bus.emit(RESYNC);
-        };
-        const onVisibility = () => {
-            if (document.visibilityState === 'visible') resync();
-        };
-        document.addEventListener('visibilitychange', onVisibility);
-        window.addEventListener('online', resync);
+        });
         return () => {
-            document.removeEventListener('visibilitychange', onVisibility);
-            window.removeEventListener('online', resync);
+            unwatch();
             channel.stop();
         };
     }, [orgId, bus]);

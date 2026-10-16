@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo } fr
 import { createClient } from '@/lib/supabase/client';
 import { useCurrentOrgId } from '@/components/current-org-provider';
 import { useCoalesced, useOrgRealtime, useOrgRefetch } from '@/components/realtime/org-realtime-provider';
+import { createListGuard } from '@/lib/realtime/list-guard';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Send, MoreVertical, Check, CheckCheck, AlertCircle, FileText, Store, Clock, ChevronLeft, Trash2, Paperclip, X, Loader2, Download, ImageOff, Mic, Film, Zap, Smile, Search, ChevronUp, ChevronDown, Reply } from 'lucide-react';
@@ -110,12 +111,14 @@ interface Message {
 // Merge rows read by id into the open thread: replace the known ids, add the
 // new ones, keep created_at order (PostgREST timestamps share one format, so
 // they compare as strings, microseconds included).
+function byCreatedAt(a: Message, b: Message): number {
+    return a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0;
+}
+
 function upsertMessages(prev: Message[], rows: Message[]): Message[] {
     const byId = new Map(prev.map((m) => [m.id, m] as const));
     for (const row of rows) byId.set(row.id, row);
-    return Array.from(byId.values()).sort((a, b) =>
-        a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0,
-    );
+    return Array.from(byId.values()).sort(byCreatedAt);
 }
 
 interface ChatWindowProps {
@@ -249,12 +252,19 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
         }
     }, [phoneNumber, supabase, orgId]);
 
+    // Whole-thread reads (open, poll, RESYNC, after a send) overlap with the
+    // rows merged by id from the bus and can land in any order: the guard
+    // keeps a slow read from undoing a newer merge or delete. One per chat.
+    const listGuardRef = useRef(createListGuard<Message>());
+
     // The whole thread.
     const fetchMessages = useCallback(async () => {
         if (!orgId) {
             setLoadingMsgs(false);
             return;
         }
+        const guard = listGuardRef.current;
+        const ticket = guard.begin();
         const { data, error } = await supabase
             .from('whatsapp_messages')
             .select('*')
@@ -267,7 +277,10 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
             console.error('Error fetching messages:', error);
             toast.error('Failed to load messages');
         } else {
-            setMessages(data || []);
+            setMessages((prev) => {
+                const next = guard.settle(ticket, (data as Message[] | null) ?? [], prev);
+                return next ? next.sort(byCreatedAt) : prev;
+            });
         }
         setLoadingMsgs(false);
     }, [phoneNumber, supabase, orgId]);
@@ -313,6 +326,7 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
         atBottomRef.current = true;
         setLoadingMsgs(true);
         setMessages([]);
+        listGuardRef.current = createListGuard<Message>();
         fetchChat();
         // Opening the chat clears its unread badge.
         void markChatRead();
@@ -355,6 +369,7 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
         // in the URL (the chat is open, so whatever arrived is read).
         if (ids.length > 50) {
             await fetchMessages();
+            if (phoneRef.current !== phoneNumber) return; // another chat is open now
             void markChatRead();
             return;
         }
@@ -367,6 +382,7 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
         if (error || !data || data.length === 0 || phoneRef.current !== phoneNumber) return;
         const rows = data as Message[];
         // Dedup by id: handleSend() also reloads the thread right after a send.
+        listGuardRef.current.noteUpsert(rows.map((m) => m.id));
         setMessages((prev) => upsertMessages(prev, rows));
         // A customer message arriving while the chat is open is read
         // immediately — keep the badge cleared (the webhook just bumped it).
@@ -380,6 +396,7 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
             fetchMessagesSoon();
         } else if (signal.op === 'DELETE') {
             const gone = new Set(signal.ids);
+            listGuardRef.current.noteDelete(gone);
             setMessages((prev) => prev.filter((m) => !gone.has(m.id)));
         } else {
             for (const id of signal.ids) announcedIdsRef.current.add(id);

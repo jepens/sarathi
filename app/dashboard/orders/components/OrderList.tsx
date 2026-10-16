@@ -1,9 +1,10 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { useCurrentOrgId } from '@/components/current-org-provider';
 import { useCoalesced, useOrgRealtime } from '@/components/realtime/org-realtime-provider';
+import { createListGuard } from '@/lib/realtime/list-guard';
 import {
     Table,
     TableBody,
@@ -311,6 +312,11 @@ function OrderActions({
     );
 }
 
+/** Newest first, like the query. */
+function byCreatedAtDesc(a: Order, b: Order): number {
+    return a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0;
+}
+
 export function OrderList() {
     const [orders, setOrders] = useState<Order[]>([]);
     const [loading, setLoading] = useState(true);
@@ -323,7 +329,8 @@ export function OrderList() {
     const supabase = createClient();
     const orgId = useCurrentOrgId();
 
-    const fetchOrders = useCallback(async (): Promise<Order[]> => {
+    /** All orders of the org, newest first; null when the read failed (already toasted). */
+    const fetchOrders = useCallback(async (): Promise<Order[] | null> => {
         if (!orgId) return [];
         const { data, error } = await supabase
             .from('orders')
@@ -334,21 +341,41 @@ export function OrderList() {
         if (error) {
             console.error('Error fetching orders:', error);
             toast.error('Gagal memuat data pesanan');
-            return [];
+            return null;
         }
         return (data as Order[]) || [];
     }, [supabase, orgId]);
 
+    // Whole-list reads overlap with deletes applied by id (from the bus or
+    // this tab) and can land in any order: the guard keeps a read that
+    // started before a delete from bringing the row back.
+    const listGuardRef = useRef(createListGuard<Order>());
+    const applyRead = useCallback((ticket: number, fresh: Order[]) => {
+        const guard = listGuardRef.current;
+        setOrders((cur) => {
+            const next = guard.settle(ticket, fresh, cur);
+            return next ? next.sort(byCreatedAtDesc) : cur;
+        });
+    }, []);
+    const dropOrders = useCallback((ids: Iterable<string>) => {
+        const gone = new Set(ids);
+        listGuardRef.current.noteDelete(gone);
+        setOrders((cur) => cur.filter((o) => !gone.has(o.id)));
+    }, []);
+
     const refresh = useCallback(async () => {
-        setOrders(await fetchOrders());
-    }, [fetchOrders]);
+        const ticket = listGuardRef.current.begin();
+        const data = await fetchOrders();
+        if (data) applyRead(ticket, data); // a failed read keeps the list
+    }, [fetchOrders, applyRead]);
 
     useEffect(() => {
         let mounted = true;
         const load = async () => {
+            const ticket = listGuardRef.current.begin();
             const data = await fetchOrders();
             if (mounted) {
-                setOrders(data);
+                applyRead(ticket, data ?? []);
                 setLoading(false);
             }
         };
@@ -357,7 +384,7 @@ export function OrderList() {
         return () => {
             mounted = false;
         };
-    }, [fetchOrders]);
+    }, [fetchOrders, applyRead]);
 
     // Live (tracker 1.9): orders is on the org Realtime bus (0064), so a booking
     // the AI makes or a change in another tab shows up without a reload. A
@@ -366,8 +393,7 @@ export function OrderList() {
     const refreshSoon = useCoalesced(refresh);
     useOrgRealtime('orders', (signal) => {
         if (signal.op === 'DELETE' && !signal.truncated) {
-            const gone = new Set(signal.ids);
-            setOrders((cur) => cur.filter((o) => !gone.has(o.id)));
+            dropOrders(signal.ids);
         } else {
             refreshSoon();
         }
@@ -407,7 +433,7 @@ export function OrderList() {
         try {
             const result = await deleteBooking(deleteTarget.id);
             if (result.success) {
-                setOrders((cur) => cur.filter((o) => o.id !== deleteTarget.id));
+                dropOrders([deleteTarget.id]);
                 toast.success(result.message);
                 setDeleteTarget(null);
             } else {

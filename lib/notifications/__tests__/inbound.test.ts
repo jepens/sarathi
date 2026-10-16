@@ -112,4 +112,18 @@ describe('pickFreshInbound', () => {
         expect(pickFreshInbound([row({ phone_number: 'a' })], seen, Number.POSITIVE_INFINITY)).toEqual([]);
         expect(seen.has('a')).toBe(true);
     });
+
+    it('overlapping reads that land out of order never alert twice for one message', () => {
+        const seen = new Map<string, number>();
+        const before = row({ phone_number: 'p', last_inbound_at: '2026-08-13T10:02:00Z', last_message_at: '2026-08-13T10:02:00Z' });
+        const after = row({ phone_number: 'p', last_inbound_at: '2026-08-13T10:03:00Z', last_message_at: '2026-08-13T10:03:00Z' });
+        // Read B (started later, saw the new message) lands first and alerts.
+        expect(phones(pickFreshInbound([after], seen, MOUNT))).toEqual(['p']);
+        // Read A (started earlier, older snapshot) lands afterwards: no alert,
+        // and it must not move `seen` back...
+        expect(pickFreshInbound([before], seen, MOUNT)).toEqual([]);
+        expect(seen.get('p')).toBe(T('2026-08-13T10:03:00Z'));
+        // ...so the next read of the same message stays silent.
+        expect(pickFreshInbound([after], seen, MOUNT)).toEqual([]);
+    });
 });

@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
+    FOLLOWUP_RESYNC_MS,
     rejoinDelay,
     startOrgChannel,
+    watchWake,
     type OrgChannel,
     type OrgRealtimeClient,
     type OrgRealtimeStatus,
@@ -10,18 +12,84 @@ import type { OrgEvent } from '@/lib/realtime/org-events';
 
 // The tab's org channel (components/realtime/org-realtime-provider.tsx) as a
 // state machine, against a fake supabase-js client that behaves like
-// realtime-js 2.86 where it matters: removeChannel() reports CLOSED to the
-// subscribe callback (unsubscribe -> phx_close hooks), a server-side close is
-// final, and channel() hands out a new channel for a removed topic.
+// realtime-js 2.86 where it matters:
+// - channel() returns the existing channel of a topic that is still listed;
+// - subscribe() connects an idle socket; connect() is a no-op while the socket
+//   is connecting, open or 'disconnecting';
+// - unsubscribe() reports CLOSED to the subscribe callback and unlists the
+//   channel; removeChannel() unsubscribes and, when no channel is left,
+//   disconnects the socket ('disconnecting' for 100 ms);
+// - a join or leave pushed while the socket is not open waits in the send
+//   buffer until the socket opens;
+// - a failed connect reports CHANNEL_ERROR twice (error + close), a dropped
+//   socket once.
 
 const ORG = '5A11E024-0001-4000-8000-000000000001';
 const TOPIC = 'org:5a11e024-0001-4000-8000-000000000001';
+
+type SocketState = 'closed' | 'connecting' | 'open' | 'disconnecting';
+
+class FakeSocket {
+    state: SocketState = 'closed';
+    connects = 0;
+    disconnects = 0;
+    sendBuffer: string[] = [];
+    sent: string[] = [];
+    channels: FakeChannel[] = [];
+    setAuth = vi.fn(async () => {});
+    connect() {
+        if (this.state !== 'closed') return;
+        this.state = 'connecting';
+        this.connects += 1;
+    }
+    isConnected() {
+        return this.state === 'open';
+    }
+    isConnecting() {
+        return this.state === 'connecting';
+    }
+    isDisconnecting() {
+        return this.state === 'disconnecting';
+    }
+    disconnect() {
+        if (this.state === 'disconnecting') return;
+        this.disconnects += 1;
+        this.state = 'disconnecting';
+        setTimeout(() => {
+            this.state = 'closed';
+        }, 100);
+    }
+    push(what: string) {
+        if (this.state === 'open') this.sent.push(what);
+        else this.sendBuffer.push(what);
+    }
+    /** The pending connect succeeded: the buffer is flushed. */
+    opened() {
+        this.state = 'open';
+        this.sent.push(...this.sendBuffer);
+        this.sendBuffer = [];
+    }
+    /** A connect attempt failed: error + close each report CHANNEL_ERROR. */
+    failConnect() {
+        this.state = 'closed';
+        for (const ch of [...this.channels]) {
+            ch.status('CHANNEL_ERROR', new Error('error'));
+            ch.status('CHANNEL_ERROR', new Error('close'));
+        }
+    }
+    /** An open socket dropped. */
+    drop() {
+        this.state = 'closed';
+        for (const ch of [...this.channels]) ch.status('CHANNEL_ERROR', new Error('close'));
+    }
+}
 
 class FakeChannel implements OrgChannel {
     statusCallback?: (status: string, err?: Error) => void;
     messageCallback?: (message: unknown) => void;
     removed = false;
     constructor(
+        readonly socket: FakeSocket,
         readonly topic: string,
         readonly options: { config: { private: boolean } },
     ) {}
@@ -31,7 +99,16 @@ class FakeChannel implements OrgChannel {
     }
     subscribe(callback: (status: string, err?: Error) => void) {
         this.statusCallback = callback;
+        if (!this.socket.isConnected()) this.socket.connect();
+        this.socket.push(`join ${this.topic}`);
         return this;
+    }
+    async unsubscribe() {
+        this.socket.push(`leave ${this.topic}`);
+        this.removed = true;
+        this.socket.channels = this.socket.channels.filter((c) => c !== this);
+        this.status('CLOSED');
+        return 'ok';
     }
     /** What the server / realtime-js reports for this channel. */
     status(status: string, err?: Error) {
@@ -43,29 +120,31 @@ class FakeChannel implements OrgChannel {
 }
 
 function fakeClient() {
-    const channels: FakeChannel[] = [];
+    const socket = new FakeSocket();
+    const created: FakeChannel[] = [];
     const calls: string[] = [];
+    socket.setAuth.mockImplementation(async () => {
+        calls.push('setAuth');
+    });
     const client: OrgRealtimeClient = {
         channel: vi.fn((topic: string, options: { config: { private: boolean } }) => {
             calls.push('channel');
-            const ch = new FakeChannel(topic, options);
-            channels.push(ch);
+            const listed = socket.channels.find((c) => c.topic === topic);
+            if (listed) return listed;
+            const ch = new FakeChannel(socket, topic, options);
+            socket.channels.push(ch);
+            created.push(ch);
             return ch;
         }),
         removeChannel: vi.fn(async (ch: OrgChannel) => {
             calls.push('removeChannel');
-            const fake = ch as FakeChannel;
-            fake.removed = true;
-            fake.status('CLOSED'); // realtime-js: unsubscribe triggers the close hooks
+            await ch.unsubscribe();
+            if (socket.channels.length === 0) socket.disconnect();
             return 'ok';
         }),
-        realtime: {
-            setAuth: vi.fn(async () => {
-                calls.push('setAuth');
-            }),
-        },
+        realtime: socket,
     };
-    return { client, channels, calls };
+    return { client, socket, channels: created, calls };
 }
 
 function start(client: OrgRealtimeClient) {
@@ -105,13 +184,16 @@ describe('rejoinDelay', () => {
 
 describe('startOrgChannel', () => {
     it('sets the auth token, then joins ONE private channel on the lower-case org topic', async () => {
-        const { client, channels, calls } = fakeClient();
+        const { client, socket, channels, calls } = fakeClient();
         start(client);
         await vi.advanceTimersByTimeAsync(0);
         expect(calls).toEqual(['setAuth', 'channel']);
         expect(channels).toHaveLength(1);
         expect(channels[0].topic).toBe(TOPIC);
         expect(channels[0].options).toEqual({ config: { private: true } });
+        expect(socket.connects).toBe(1);
+        socket.opened();
+        expect(socket.sent).toEqual([`join ${TOPIC}`]);
     });
 
     it('forwards parsed broadcasts and drops malformed ones', async () => {
@@ -127,49 +209,65 @@ describe('startOrgChannel', () => {
         ]);
     });
 
-    it('SUBSCRIBED -> CHANNEL_ERROR -> SUBSCRIBED: RESYNC on every join, realtime-js rejoins (no re-create)', async () => {
-        const { client, channels } = fakeClient();
+    it('RESYNC on every SUBSCRIBED and once more shortly after it (first-join replication gap)', async () => {
+        const { client, socket, channels } = fakeClient();
         const { statuses, onResync } = start(client);
         await vi.advanceTimersByTimeAsync(0);
+        socket.opened();
 
         channels[0].status('SUBSCRIBED');
         expect(onResync).toHaveBeenCalledTimes(1); // the first join too
-        channels[0].status('CHANNEL_ERROR', new Error('socket closed'));
-        channels[0].status('SUBSCRIBED'); // realtime-js rejoined after the reconnect
+        await vi.advanceTimersByTimeAsync(FOLLOWUP_RESYNC_MS - 1);
+        expect(onResync).toHaveBeenCalledTimes(1);
+        await vi.advanceTimersByTimeAsync(1);
         expect(onResync).toHaveBeenCalledTimes(2);
+
+        socket.drop();
+        socket.opened();
+        channels[0].status('SUBSCRIBED'); // realtime-js rejoined after the reconnect
+        expect(onResync).toHaveBeenCalledTimes(3);
+        await vi.advanceTimersByTimeAsync(FOLLOWUP_RESYNC_MS);
+        expect(onResync).toHaveBeenCalledTimes(4);
         expect(statuses).toEqual(['live', 'paused', 'live']);
 
         await vi.advanceTimersByTimeAsync(120_000);
-        expect(client.removeChannel).not.toHaveBeenCalled();
-        expect(channels).toHaveLength(1);
+        expect(channels).toHaveLength(1); // no re-creation
+        expect(onResync).toHaveBeenCalledTimes(4);
     });
 
-    it('SUBSCRIBED -> CLOSED (server-side) -> re-created after the backoff -> SUBSCRIBED', async () => {
-        const { client, channels, calls } = fakeClient();
+    it('SUBSCRIBED -> CLOSED (server-side) -> re-created with unsubscribe after the backoff; the socket stays up', async () => {
+        const { client, socket, channels, calls } = fakeClient();
         const { statuses, onResync, events } = start(client);
         await vi.advanceTimersByTimeAsync(0);
+        socket.opened();
         channels[0].status('SUBSCRIBED');
 
         // e.g. the token expired: the server closes the channel; realtime-js never rejoins it.
         channels[0].status('CLOSED');
         await vi.advanceTimersByTimeAsync(0);
-        expect(client.removeChannel).toHaveBeenCalledWith(channels[0]);
-        expect(channels).toHaveLength(1); // the CLOSED our removeChannel reported re-created nothing
+        expect(channels[0].removed).toBe(true);
+        expect(client.removeChannel).not.toHaveBeenCalled();
+        expect(socket.disconnects).toBe(0);
+        expect(channels).toHaveLength(1); // the CLOSED our unsubscribe reported re-created nothing
         expect(statuses).toEqual(['live', 'paused']);
 
         await vi.advanceTimersByTimeAsync(999);
         expect(channels).toHaveLength(1);
         await vi.advanceTimersByTimeAsync(1);
         expect(channels).toHaveLength(2);
-        expect(calls).toEqual(['setAuth', 'channel', 'removeChannel', 'setAuth', 'channel']);
+        expect(calls).toEqual(['setAuth', 'channel', 'setAuth', 'channel']);
         expect(channels[1].topic).toBe(TOPIC);
         expect(channels[1].options).toEqual({ config: { private: true } });
+        expect(socket.sendBuffer).toEqual([]); // the new join went out at once
 
         channels[1].status('SUBSCRIBED');
+        // The 2nd join came within 3 s of the 1st: one follow-up, re-armed.
         expect(onResync).toHaveBeenCalledTimes(2);
+        await vi.advanceTimersByTimeAsync(FOLLOWUP_RESYNC_MS);
+        expect(onResync).toHaveBeenCalledTimes(3);
         expect(statuses).toEqual(['live', 'paused', 'live']);
 
-        // The removed channel is dead to us: late messages and statuses are ignored.
+        // The dropped channel is dead to us: late messages and statuses are ignored.
         channels[0].broadcast(labelsInsert);
         channels[0].status('CLOSED');
         expect(events).toEqual([]);
@@ -178,9 +276,10 @@ describe('startOrgChannel', () => {
     });
 
     it('backs off 1 s, 2 s, 4 s ... while the re-created channels keep closing, and resets after a join', async () => {
-        const { client, channels } = fakeClient();
+        const { client, socket, channels } = fakeClient();
         start(client);
         await vi.advanceTimersByTimeAsync(0);
+        socket.opened();
 
         const closeAndWait = async (expectedDelay: number) => {
             const n = channels.length;
@@ -198,76 +297,161 @@ describe('startOrgChannel', () => {
         await closeAndWait(1000);
     });
 
-    it('re-creates the channel after repeated join failures (e.g. a refused or timed-out join)', async () => {
-        const { client, channels } = fakeClient();
+    it('re-creates the channel after repeated join failures on a connected socket (e.g. a refused join)', async () => {
+        const { client, socket, channels } = fakeClient();
         const { statuses } = start(client);
         await vi.advanceTimersByTimeAsync(0);
+        socket.opened();
 
         channels[0].status('CHANNEL_ERROR', new Error('Unauthorized'));
         channels[0].status('TIMED_OUT');
-        expect(client.removeChannel).not.toHaveBeenCalled();
+        expect(channels[0].removed).toBe(false);
         channels[0].status('CHANNEL_ERROR', new Error('Unauthorized'));
         await vi.advanceTimersByTimeAsync(0);
-        expect(client.removeChannel).toHaveBeenCalledTimes(1);
+        expect(channels[0].removed).toBe(true);
         await vi.advanceTimersByTimeAsync(1000);
         expect(channels).toHaveLength(2);
         expect(statuses).toEqual(['paused']);
+        expect(socket.disconnects).toBe(0);
     });
 
-    it('re-creates a channel whose rejoin never happens (one failure, then silence)', async () => {
-        const { client, channels } = fakeClient();
-        start(client);
+    it('never re-creates while the socket is down: no join burst piles up for the reconnect', async () => {
+        const { client, socket, channels } = fakeClient();
+        const { statuses, onResync } = start(client);
         await vi.advanceTimersByTimeAsync(0);
+        socket.opened();
         channels[0].status('SUBSCRIBED');
 
-        channels[0].status('TIMED_OUT');
-        await vi.advanceTimersByTimeAsync(19_999);
-        expect(client.removeChannel).not.toHaveBeenCalled();
-        await vi.advanceTimersByTimeAsync(1);
-        expect(client.removeChannel).toHaveBeenCalledTimes(1);
-        await vi.advanceTimersByTimeAsync(1000);
-        expect(channels).toHaveLength(2);
+        // A one-hour outage: the socket drops, then every connect attempt
+        // fails (two CHANNEL_ERRORs each); realtime-js keeps retrying.
+        socket.drop();
+        for (let i = 0; i < 360; i += 1) {
+            socket.connect(); // realtime-js's own reconnect timer
+            socket.failConnect();
+            await vi.advanceTimersByTimeAsync(10_000);
+        }
+        expect(channels).toHaveLength(1);
+        expect(channels[0].removed).toBe(false);
+        // At most what the provider's own nudges add: no join or leave at all.
+        expect(socket.sendBuffer).toEqual([]);
+        expect(statuses).toEqual(['live', 'paused']);
+
+        // Back online: realtime-js reconnects and rejoins the same channel.
+        socket.connect();
+        socket.opened();
+        channels[0].status('SUBSCRIBED');
+        expect(statuses).toEqual(['live', 'paused', 'live']);
+        expect(onResync).toHaveBeenCalledTimes(3); // first join, its follow-up, the rejoin
+        expect(socket.sent.filter((m) => m.startsWith('join'))).toHaveLength(1); // only the first join was ever sent
     });
 
-    it('wake() skips the rest of a backoff', async () => {
-        const { client, channels } = fakeClient();
-        const { controller } = start(client);
+    it('a stalled join on a connected socket is re-created; on a socket that is down only the socket is nudged', async () => {
+        const a = fakeClient();
+        start(a.client);
         await vi.advanceTimersByTimeAsync(0);
+        a.socket.opened();
+        a.channels[0].status('SUBSCRIBED');
+        a.channels[0].status('TIMED_OUT');
+        await vi.advanceTimersByTimeAsync(19_999);
+        expect(a.channels[0].removed).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(a.channels[0].removed).toBe(true);
+        await vi.advanceTimersByTimeAsync(1000);
+        expect(a.channels).toHaveLength(2);
+
+        const b = fakeClient();
+        start(b.client);
+        await vi.advanceTimersByTimeAsync(0);
+        b.socket.failConnect(); // the first connect fails; realtime-js would retry later
+        expect(b.socket.connects).toBe(1);
+        await vi.advanceTimersByTimeAsync(20_000);
+        expect(b.channels).toHaveLength(1); // not re-created while down
+        expect(b.socket.connects).toBe(2); // ...but the idle socket was nudged
+        expect(b.socket.sendBuffer).toEqual([`join ${TOPIC}`]); // still exactly one join waiting
+        await vi.advanceTimersByTimeAsync(20_000);
+        expect(b.socket.connects).toBe(2); // still connecting: no extra connect
+    });
+
+    it('wake() skips the rest of a backoff, and the new channel joins at once (no disconnecting window)', async () => {
+        const { client, socket, channels } = fakeClient();
+        const { controller, statuses } = start(client);
+        await vi.advanceTimersByTimeAsync(0);
+        socket.opened();
+        channels[0].status('SUBSCRIBED');
         channels[0].status('CLOSED');
-        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(10);
         expect(channels).toHaveLength(1);
         controller.wake();
         await vi.advanceTimersByTimeAsync(0);
         expect(channels).toHaveLength(2);
+        expect(socket.state).toBe('open');
+        expect(socket.sent.at(-1)).toBe(`join ${TOPIC}`);
+        channels[1].status('SUBSCRIBED');
+        expect(statuses).toEqual(['live', 'paused', 'live']);
         // ...and only once: the pending timer is gone.
         await vi.advanceTimersByTimeAsync(60_000);
         expect(channels).toHaveLength(2);
         expect(client.channel).toHaveBeenCalledTimes(2);
     });
 
-    it('stop() (unmount) removes the channel and never re-creates it', async () => {
-        const { client, channels } = fakeClient();
+    it('wake() connects an idle socket without re-creating a joined channel', async () => {
+        const { client, socket, channels } = fakeClient();
+        const { controller } = start(client);
+        await vi.advanceTimersByTimeAsync(0);
+        socket.failConnect();
+        expect(socket.state).toBe('closed');
+        controller.wake();
+        expect(socket.connects).toBe(2);
+        expect(channels).toHaveLength(1);
+    });
+
+    it('stop() (unmount) removes the channel, closes the socket and never re-creates it', async () => {
+        const { client, socket, channels } = fakeClient();
         const { controller, statuses, onResync, events } = start(client);
         await vi.advanceTimersByTimeAsync(0);
+        socket.opened();
         channels[0].status('SUBSCRIBED');
 
         controller.stop(); // removeChannel reports CLOSED synchronously here
         await vi.advanceTimersByTimeAsync(0);
         expect(client.removeChannel).toHaveBeenCalledWith(channels[0]);
+        expect(socket.disconnects).toBe(1);
         channels[0].broadcast(labelsInsert);
         channels[0].status('SUBSCRIBED');
         await vi.advanceTimersByTimeAsync(120_000);
 
         expect(channels).toHaveLength(1);
-        expect(onResync).toHaveBeenCalledTimes(1);
+        expect(onResync).toHaveBeenCalledTimes(1); // the follow-up RESYNC was cancelled too
         expect(statuses).toEqual(['live']);
         expect(events).toEqual([]);
+    });
+
+    it('a remount right after an unmount joins within a moment, not after the 10 s timeout + 20 s stall', async () => {
+        const { client, socket, channels } = fakeClient();
+        const first = start(client);
+        await vi.advanceTimersByTimeAsync(0);
+        socket.opened();
+        channels[0].status('SUBSCRIBED');
+
+        const connectsBefore = socket.connects;
+        first.controller.stop();
+        const second = start(client); // same tab, same org (org change, Fast Refresh)
+        await vi.advanceTimersByTimeAsync(0);
+        expect(socket.state).toBe('disconnecting'); // removeChannel closed the socket
+        expect(channels).toHaveLength(2);
+        expect(socket.connects).toBe(connectsBefore); // subscribe's connect() was ignored
+        await vi.advanceTimersByTimeAsync(150);
+        expect(socket.connects).toBe(connectsBefore + 1); // ...and retried once the socket was down
+        socket.opened();
+        channels[1].status('SUBSCRIBED');
+        expect(second.statuses).toEqual(['live']);
     });
 
     it('stop() during a backoff or before the first join creates no channel', async () => {
         const a = fakeClient();
         const first = start(a.client);
         await vi.advanceTimersByTimeAsync(0);
+        a.socket.opened();
         a.channels[0].status('CLOSED');
         await vi.advanceTimersByTimeAsync(0);
         first.controller.stop();
@@ -280,5 +464,38 @@ describe('startOrgChannel', () => {
         second.controller.stop();
         await vi.advanceTimersByTimeAsync(60_000);
         expect(b.client.channel).not.toHaveBeenCalled();
+    });
+});
+
+describe('watchWake', () => {
+    function fakeDom() {
+        const doc = Object.assign(new EventTarget(), { visibilityState: 'visible' as DocumentVisibilityState });
+        const win = new EventTarget();
+        return { doc, win };
+    }
+
+    it('wakes when the tab becomes visible and when the device comes back online', () => {
+        const { doc, win } = fakeDom();
+        const onWake = vi.fn();
+        watchWake(doc as unknown as Document, win as unknown as Window, onWake);
+        doc.visibilityState = 'hidden';
+        doc.dispatchEvent(new Event('visibilitychange'));
+        expect(onWake).not.toHaveBeenCalled();
+        doc.visibilityState = 'visible';
+        doc.dispatchEvent(new Event('visibilitychange'));
+        expect(onWake).toHaveBeenCalledTimes(1);
+        doc.visibilityState = 'hidden';
+        win.dispatchEvent(new Event('online')); // also while hidden: the notifier alerts in the background
+        expect(onWake).toHaveBeenCalledTimes(2);
+    });
+
+    it('the cleanup removes both listeners', () => {
+        const { doc, win } = fakeDom();
+        const onWake = vi.fn();
+        const unwatch = watchWake(doc as unknown as Document, win as unknown as Window, onWake);
+        unwatch();
+        doc.dispatchEvent(new Event('visibilitychange'));
+        win.dispatchEvent(new Event('online'));
+        expect(onWake).not.toHaveBeenCalled();
     });
 });

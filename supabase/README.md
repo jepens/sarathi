@@ -189,13 +189,22 @@ tenants; only an empty publication closes it.
   RLS; a DELETE that names its ids drops those rows (the open chat,
   Bookings), a truncated event refetches. The ChatList (30 s) and ChatWindow
   (10 s) polls stay as a safety net. Every view gets a RESYNC on every
-  SUBSCRIBED (the first one included), when the tab becomes visible and on
-  `online`. The channel is re-created (removeChannel, setAuth, a new channel
-  after 1 s, 2 s, 4 s ... 30 s) when the server closes it (CLOSED: an
-  expired token, revoked access, a rate limit; realtime-js never rejoins a
-  closed channel), after 3 failed joins in a row, or when no rejoin happened
-  20 s after a failure; the CLOSED that its own removeChannel reports is
-  ignored. `useOrgRealtimeStatus()` gives `live` / `paused`; the console logs
+  SUBSCRIBED (the first one included) and again 3 s later, when the tab
+  becomes visible and on `online`. realtime-js reconnects the socket and
+  rejoins an errored channel by itself. The provider re-creates the channel
+  (unsubscribe, setAuth, a new channel after 1 s, 2 s, 4 s ... 30 s) when the
+  server closes it (CLOSED: an expired token, revoked access, a rate limit;
+  realtime-js never rejoins a closed channel), after 3 failed joins while the
+  socket is connected, or when no join happened 20 s after a failure on a
+  connected socket. It never re-creates while the socket is down (each
+  re-creation would leave a join and a leave in realtime-js's send buffer,
+  flushed in one burst on reconnect); a socket drop reports CHANNEL_ERROR
+  twice and does not count as a failed join. Only unmounting uses
+  removeChannel (it closes the socket with the last channel); a channel
+  opened while the socket is still disconnecting retries `connect()`. Views
+  that also apply rows by id (the open chat, Bookings) guard their
+  whole-list reads (`lib/realtime/list-guard.ts`), so a slow read never
+  undoes a newer merge or delete. `useOrgRealtimeStatus()` gives `live` / `paused`; the console logs
   status changes only (`[realtime] org:<uuid> live (SUBSCRIBED)`), never
   payloads. Local end-to-end check (Realtime v2.143.4, supabase-js 2.86):
   member join SUBSCRIBED, a label insert + delete as the member delivers
@@ -206,8 +215,10 @@ tenants; only an empty publication closes it.
   token expiry the server sends "Token has expired" and closes the channel,
   and the provider re-joins with a fresh token. The first join of an idle
   Realtime tenant starts its broadcast replication: writes in that first
-  ~0.5 s were not delivered (the polls and the next RESYNC cover them).
-- **Contract 0068 runbook** (details in the migration header):
+  ~0.5 s were not delivered; the second RESYNC 3 s after every join reads
+  them.
+- **Contract 0068 runbook** (the same steps, with the same numbers, as in the
+  migration header):
   0. the Data API must refuse the realtime schema: an anon
      `GET /rest/v1/subscription` with `Accept-Profile: realtime` answers 406
      PGRST106 (checked 2026-10-16); re-check it before any rollback;
@@ -224,10 +235,16 @@ tenants; only an empty publication closes it.
      build id changed, smoke-test with two tabs (SUBSCRIBED in the console,
      inbox + open chat + alert on an inbound message, a label toggle across
      tabs, a contact rename, a booking in Bookings);
-  3. reload every open dashboard tab; `select count(*) from
-     realtime.subscription` must be 0 (no Postgres Changes subscriber left);
+  3. ask every user to reload every open dashboard tab; `select count(*) from
+     realtime.subscription` must be 0 (no connected Postgres Changes
+     subscriber left). 0 does not prove that no old tab exists: a sleeping
+     laptop or a frozen mobile tab holds no socket and no row, and wakes up
+     without live updates after 0068 until it is reloaded;
   4. apply 0068; `select count(*) from pg_publication_tables where pubname =
-     'supabase_realtime'` must be 0; repeat the smoke test;
+     'supabase_realtime'` must be 0; repeat the smoke test, and ask every user
+     once more to reload any dashboard tab opened before the deploy. For the
+     next days, a failed Postgres Changes subscription in the Realtime logs
+     ("Unable to subscribe to changes ...") is an old tab to reload;
   5. the owner turns off "Allow public access" (Dashboard > Realtime >
      Settings), which disconnects every socket once: a tab that was NOT
      reloaded must recover by itself; check also that a non-private join
