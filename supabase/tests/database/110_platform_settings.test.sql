@@ -1,7 +1,7 @@
 -- platform_settings: deployment-level config readable/writable by the service
--- role only (migration 0061; tracker 1.7, audit KEA-9). verify_webhook_token()
--- reads it first and falls back to the legacy seed-org app_settings row during
--- the rollout.
+-- role only (migrations 0061 / 0062; tracker 1.7, audit KEA-9).
+-- verify_webhook_token() reads it only: the legacy seed-org app_settings
+-- fallback was removed by the contract migration 0062.
 begin;
 select plan(20);
 
@@ -21,11 +21,11 @@ from unnest(array['anon', 'authenticated']) r,
      unnest(array['SELECT', 'INSERT', 'UPDATE', 'DELETE']) p;
 
 -- ---------------------------------------------------------------------------
--- 2. The migration copied the platform keys of the seed org
+-- 2. The migrations moved the platform keys of the seed org
 -- ---------------------------------------------------------------------------
 select is((select value from public.platform_settings where key = 'default_org_id'),
-          (select value from public.app_settings where key = 'default_org_id' and org_id = tests.seed_org()),
-          'default_org_id was copied from app_settings');
+          tests.seed_org()::text,
+          'default_org_id (the seed org) lives in platform_settings');
 
 insert into public.platform_settings (key, value) values ('whatsapp_verify_token', 'rahasia-platform')
 on conflict (key) do update set value = excluded.value;
@@ -52,24 +52,18 @@ select is(public.verify_webhook_token('salah'), false,
           'verify_webhook_token: rejects another token');
 
 -- ---------------------------------------------------------------------------
--- 4. verify_webhook_token fallback + fail closed
+-- 4. No app_settings fallback + fail closed
 -- ---------------------------------------------------------------------------
 select tests.clear_authentication();
 delete from public.platform_settings where key = 'whatsapp_verify_token';
-delete from public.app_settings where key = 'whatsapp_verify_token';
-insert into public.app_settings (org_id, key, value)
-values (tests.seed_org(), 'whatsapp_verify_token', 'rahasia-lama');
+-- Neither the seed org's (legacy) row nor a tenant's row is read any more.
+insert into public.app_settings (org_id, key, value) values
+    (tests.seed_org(), 'whatsapp_verify_token', 'rahasia-lama'),
+    (tests.org_a(), 'whatsapp_verify_token', 'token-tenant');
 
 select tests.authenticate_as_service_role();
-select is(public.verify_webhook_token('rahasia-lama'), true,
-          'verify_webhook_token: falls back to the legacy seed-org app_settings row');
-
-select tests.clear_authentication();
-delete from public.app_settings where key = 'whatsapp_verify_token';
--- Only the seed org's legacy row counts: a tenant cannot plant a token.
-alter table public.app_settings drop constraint app_settings_key_key;
-insert into public.app_settings (org_id, key, value)
-values (tests.org_a(), 'whatsapp_verify_token', 'token-tenant');
+select is(public.verify_webhook_token('rahasia-lama'), false,
+          'verify_webhook_token: ignores the legacy seed-org app_settings row');
 select tests.authenticate_as_service_role();
 select is(public.verify_webhook_token('token-tenant'), false,
           'verify_webhook_token: ignores a tenant''s app_settings row');

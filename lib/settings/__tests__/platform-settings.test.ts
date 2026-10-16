@@ -2,9 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 // Platform settings (tracker 1.7, audit KEA-9): getDefaultOrgId and the
-// verify-token helpers read public.platform_settings (service role only) and,
-// during the expand → contract rollout, fall back to the legacy app_settings
-// row of the SEED org — never to a row another tenant could create.
+// verify-token helpers read public.platform_settings (service role only) and
+// nothing else: the legacy app_settings fallback was removed with the contract
+// migration 0062, so a row a tenant creates in app_settings is never read.
 
 const SEED = '5a11e024-0001-4000-8000-000000000001';
 
@@ -55,29 +55,26 @@ describe('getPlatformSetting', () => {
         expect(calls).toEqual([{ table: 'platform_settings', filters: [['key', 'default_org_id']] }]);
     });
 
-    it('falls back to the seed org app_settings row when the platform row is missing', async () => {
+    it('never falls back to app_settings when the platform row is missing', async () => {
         const { client, calls } = fakeClient({
             app_settings: { data: { value: 'legacy' }, error: null },
         });
-        expect(await getPlatformSetting(client, 'whatsapp_verify_token')).toBe('legacy');
-        expect(calls[1]).toEqual({
-            table: 'app_settings',
-            filters: [['org_id', SEED], ['key', 'whatsapp_verify_token']],
-        });
+        expect(await getPlatformSetting(client, 'whatsapp_verify_token')).toBeNull();
+        expect(calls.map((c) => c.table)).toEqual(['platform_settings']);
     });
 
-    it('falls back when platform_settings is not readable (non-service client)', async () => {
-        const { client } = fakeClient({
+    it('returns null when platform_settings is not readable (non-service client)', async () => {
+        const { client, calls } = fakeClient({
             platform_settings: { data: null, error: { code: '42501', message: 'permission denied' } },
             app_settings: { data: { value: 'legacy' }, error: null },
         });
-        expect(await getPlatformSetting(client, 'whatsapp_webhook_url')).toBe('legacy');
+        expect(await getPlatformSetting(client, 'whatsapp_webhook_url')).toBeNull();
+        expect(calls.map((c) => c.table)).toEqual(['platform_settings']);
     });
 
-    it('treats an empty value as missing and returns null when nothing is configured', async () => {
+    it('treats an empty value as missing', async () => {
         const { client } = fakeClient({
             platform_settings: { data: { value: '' }, error: null },
-            app_settings: { data: null, error: null },
         });
         expect(await getPlatformSetting(client, 'whatsapp_verify_token')).toBeNull();
     });

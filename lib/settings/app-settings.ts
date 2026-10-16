@@ -11,15 +11,19 @@ export interface AppSetting {
     updated_at: string;
 }
 
+// Tenant settings: app_settings is keyed by (org_id, key) — the global unique
+// on key was dropped in migration 0062 — so every helper takes the org.
+
 /**
- * Get a specific setting by key
+ * Get a specific tenant setting by key
  */
-export async function getAppSetting(key: string, client?: SupabaseClient): Promise<string | null> {
+export async function getAppSetting(orgId: string, key: string, client?: SupabaseClient): Promise<string | null> {
     const supabase = client || await createClient();
 
     const { data, error } = await supabase
         .from('app_settings')
         .select('value')
+        .eq('org_id', orgId)
         .eq('key', key)
         .maybeSingle();
 
@@ -32,14 +36,15 @@ export async function getAppSetting(key: string, client?: SupabaseClient): Promi
 }
 
 /**
- * Get all settings
+ * Get all tenant settings of an org
  */
-export async function getAllSettings(client?: SupabaseClient): Promise<AppSetting[]> {
+export async function getAllSettings(orgId: string, client?: SupabaseClient): Promise<AppSetting[]> {
     const supabase = client || await createClient();
 
     const { data, error } = await supabase
         .from('app_settings')
         .select('*')
+        .eq('org_id', orgId)
         .order('key');
 
     if (error) {
@@ -51,14 +56,15 @@ export async function getAllSettings(client?: SupabaseClient): Promise<AppSettin
 }
 
 /**
- * Update a setting
+ * Update a tenant setting of an org
  */
-export async function updateAppSetting(key: string, value: string, client?: SupabaseClient): Promise<boolean> {
+export async function updateAppSetting(orgId: string, key: string, value: string, client?: SupabaseClient): Promise<boolean> {
     const supabase = client || await createClient();
 
     const { error } = await supabase
         .from('app_settings')
         .update({ value })
+        .eq('org_id', orgId)
         .eq('key', key);
 
     if (error) {

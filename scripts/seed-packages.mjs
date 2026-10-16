@@ -10,7 +10,7 @@
 //     consistent with packages added via the dashboard.
 //
 // Run (preview):  node --env-file=.env.local scripts/seed-packages.mjs
-// Run (write):    node --env-file=.env.local scripts/seed-packages.mjs --confirm
+// Run (write):    node --env-file=.env.local scripts/seed-packages.mjs --confirm [--org=<uuid>]
 
 import { createClient } from '@supabase/supabase-js';
 import OpenAI from 'openai';
@@ -76,6 +76,29 @@ const confirm = process.argv.includes('--confirm');
 const openai = new OpenAI({ apiKey: openaiKey });
 const sb = createClient(url, serviceKey, { auth: { persistSession: false } });
 
+// Target org: products.org_id has no column DEFAULT (migration 0062), so every
+// row is stamped explicitly. --org=<uuid> wins; otherwise the deployment's
+// default org (platform_settings.default_org_id = Sailendra).
+const orgArg = process.argv.find((a) => a.startsWith('--org='))?.slice('--org='.length);
+let orgId = orgArg;
+if (!orgId) {
+    const { data, error } = await sb
+        .from('platform_settings')
+        .select('value')
+        .eq('key', 'default_org_id')
+        .maybeSingle();
+    if (error) {
+        console.error(`Gagal membaca default_org_id: ${error.message}`);
+        process.exit(1);
+    }
+    orgId = data?.value;
+}
+if (!orgId || !/^[0-9a-f-]{36}$/i.test(orgId)) {
+    console.error('Org tujuan tidak diketahui. Jalankan dengan --org=<uuid>.');
+    process.exit(1);
+}
+console.log(`Org tujuan: ${orgId}`);
+
 const toEmbed = (p) =>
     `Type: ${p.type}\nName: ${p.name}\nDescription: ${p.description}\nPrice: ${p.price}`;
 
@@ -95,6 +118,7 @@ for (const p of PACKAGES) {
         input: toEmbed(p).replace(/\n/g, ' '),
     });
     const { error } = await sb.from('products').insert({
+        org_id: orgId,
         name: p.name,
         description: p.description,
         price: p.price,

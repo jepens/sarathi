@@ -120,7 +120,7 @@ export async function POST(request: Request) {
 
     // Promote-from-contact path: a contact maps to at most one directory row.
     // If one already exists for this chat_phone, update it instead of inserting
-    // a duplicate (also guarded at the DB level by uq_vendors_chat_phone).
+    // a duplicate (also guarded at the DB level by uq_vendors_org_chat_phone).
     if (chatPhone) {
         const { data: existing } = await supabase
             .from('vendors')

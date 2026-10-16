@@ -10,11 +10,10 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 // verify token nor redirect the webhook to another org.
 // Tenant settings stay in app_settings, keyed by (org_id, key).
 //
-// Rollout (expand → contract): migration 0061 copied these keys from
-// app_settings but left the old rows in place. Until the contract phase removes
-// them, a missing platform row (migration not yet applied, or a client that
-// cannot read platform_settings) falls back to the legacy row of the SEED org
-// only — never to a key another tenant could create in its own org.
+// Rollout: migration 0061 copied these keys from app_settings (expand), the
+// contract migration 0062 deleted the app_settings copies. platform_settings is
+// the only source; there is no app_settings fallback any more, so a key a
+// tenant creates in its own org can never act as a platform setting.
 
 /** The seed org (Sailendra, tenant #1), created by migration 0026. */
 export const SEED_ORG_ID = '5a11e024-0001-4000-8000-000000000001';
@@ -33,8 +32,8 @@ function nonEmpty(value: unknown): string | null {
 
 /**
  * Read a platform setting. Pass a SERVICE-ROLE client: platform_settings is
- * invisible to anon/authenticated (those clients only reach the fallback).
- * Returns null when the key is not configured anywhere.
+ * invisible to anon/authenticated (those clients get null).
+ * Returns null when the key is not configured.
  */
 export async function getPlatformSetting(
     client: SupabaseClient,
@@ -45,21 +44,9 @@ export async function getPlatformSetting(
         .select('value')
         .eq('key', key)
         .maybeSingle();
-    if (!error) {
-        const value = nonEmpty(data?.value);
-        if (value) return value;
-    }
-
-    // Legacy fallback (removed in the contract phase): the seed org's row.
-    const legacy = await client
-        .from('app_settings')
-        .select('value')
-        .eq('org_id', SEED_ORG_ID)
-        .eq('key', key)
-        .maybeSingle();
-    if (legacy.error) {
-        console.error(`Error fetching platform setting ${key}:`, legacy.error);
+    if (error) {
+        console.error(`Error fetching platform setting ${key}:`, error);
         return null;
     }
-    return nonEmpty(legacy.data?.value);
+    return nonEmpty(data?.value);
 }

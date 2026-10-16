@@ -30,9 +30,9 @@ export type SaveFirstPersonaResult =
 
 /**
  * Names tried for an org's first persona, in order. 'default' is the natural
- * name; while the global system_message_name_key still exists (until the
- * contract migration) another org may already own 'default', so an
- * org-specific fallback name keeps the save working.
+ * name. Migration 0062 drops the global system_message_name_key; until it is
+ * applied (it runs after this code is deployed) another org may already own
+ * 'default', so an org-specific fallback name keeps the save working.
  */
 export function firstPersonaNames(orgId: string): string[] {
     return ['default', `default_${orgId.replace(/[^0-9a-z]/gi, '').toLowerCase()}`];

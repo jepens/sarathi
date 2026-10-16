@@ -1,7 +1,6 @@
--- Org-scoped unique keys + composite label FK (migration 0061; tracker 1.5,
--- audit KUA-5). Expand phase: the org-scoped keys exist; the global keys are
--- dropped by the contract migration, so "same value in two orgs" is asserted
--- with the global key removed inside this (rolled back) transaction.
+-- Org-scoped unique keys + composite label FK (migrations 0061 / 0062;
+-- tracker 1.5, audit KUA-5). The global keys were dropped by the contract
+-- migration 0062 (asserted in 130), so the org-scoped keys are what fires.
 begin;
 select plan(17);
 
@@ -29,14 +28,9 @@ select is((select pg_get_constraintdef(oid) from pg_constraint
           'chat_labels has exactly one FK to labels: (org_id, label_id) -> labels(org_id, id)');
 
 -- ---------------------------------------------------------------------------
--- 2. Duplicates within ONE org are rejected by the org-scoped key
---    (the global key is dropped first so the org-scoped one is what fires)
+-- 2. The same value in two orgs is allowed; duplicates within ONE org are
+--    rejected by the org-scoped key
 -- ---------------------------------------------------------------------------
-alter table public.kb_sources drop constraint kb_sources_title_key;
-alter table public.system_message drop constraint system_message_name_key;
-drop index public.uq_vendors_chat_phone;
-alter table public.app_settings drop constraint app_settings_key_key;
-
 insert into public.whatsapp_chats (org_id, phone_number) values
     (tests.org_a(), '628111'),
     (tests.org_b(), '628111');

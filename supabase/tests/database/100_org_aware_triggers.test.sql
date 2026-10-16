@@ -1,4 +1,4 @@
--- Org-aware vendor + persona triggers (migration 0061; tracker 1.6 / 1.8,
+-- Org-aware vendor + persona triggers (migrations 0061 / 0062; tracker 1.6 / 1.8,
 -- audit KEA-14 / KUA-6): tagging/untagging the same phone number in two orgs
 -- never reads or writes the other org's vendor row, and activating a persona
 -- only deactivates personas of the same org (one active persona per org).
@@ -26,28 +26,32 @@ select lives_ok(
     'org A: tagging a contact as vendor succeeds although org B has a vendor with that number');
 select tests.clear_authentication();
 
--- Expand phase: the global uq_vendors_chat_phone still holds org B's row, so
--- org A's vendor row is skipped (ON CONFLICT DO NOTHING) — never org B's touched.
-select is((select name from public.vendors where org_id = tests.org_b() and chat_phone = '628111'),
-          'Vendor milik B', 'org B''s vendor row is untouched by org A''s tag');
-select is((select count(*)::int from public.vendors where chat_phone = '628111'), 1,
-          'expand phase: no second row while the global chat_phone key exists');
-select is((select contact_type from public.whatsapp_chats where org_id = tests.org_a() and phone_number = '628111'),
-          'vendor', 'org A''s contact update was kept');
-
--- Contract phase simulated: without the global key, org A gets ITS OWN row.
-drop index public.uq_vendors_chat_phone;
-update public.whatsapp_chats set contact_type = 'lead'
-where org_id = tests.org_a() and phone_number = '628111';
-select is((select count(*)::int from public.vendors where org_id = tests.org_b() and chat_phone = '628111'), 1,
-          'untagging in org A does not delete org B''s unverified vendor with the same number');
-
-update public.whatsapp_chats set contact_type = 'vendor'
-where org_id = tests.org_a() and phone_number = '628111';
+-- Global uq_vendors_chat_phone is gone (0062): org A gets ITS OWN row and
+-- org B's row is never touched.
 select results_eq(
     $$ select org_id, name from public.vendors where chat_phone = '628111' order by name $$,
     $$ values (tests.org_a(), 'Kontak A'), (tests.org_b(), 'Vendor milik B') $$,
     'tagging in org A creates org A''s vendor row (org_id of the chat, name of the contact)');
+select is((select contact_type from public.whatsapp_chats where org_id = tests.org_a() and phone_number = '628111'),
+          'vendor', 'org A''s contact update was kept');
+
+-- Re-tagging org A's contact (row exists) creates nothing new.
+update public.whatsapp_chats set contact_type = 'vendor', contact_name = 'Kontak A2'
+where org_id = tests.org_a() and phone_number = '628111';
+select is((select count(*)::int from public.vendors where chat_phone = '628111'), 2,
+          're-tagging in org A does not duplicate org A''s vendor row');
+
+update public.whatsapp_chats set contact_type = 'lead'
+where org_id = tests.org_a() and phone_number = '628111';
+select results_eq(
+    $$ select org_id from public.vendors where chat_phone = '628111' $$,
+    $$ values (tests.org_b()) $$,
+    'untagging in org A deletes only org A''s unverified vendor, not org B''s');
+
+update public.whatsapp_chats set contact_type = 'vendor'
+where org_id = tests.org_a() and phone_number = '628111';
+select is((select count(*)::int from public.vendors where org_id = tests.org_a() and chat_phone = '628111'), 1,
+          're-tagging in org A recreates org A''s row');
 
 -- Org B tags (B already has a row → nothing new), then untags its contact.
 update public.whatsapp_chats set contact_type = 'vendor'
