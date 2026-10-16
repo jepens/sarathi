@@ -282,13 +282,10 @@ line to `production.txt`.
 - `expected-diff.txt`: differences that are known and explained, one per line
   (`<` only in production, `>` only in the replay), each with a reason:
   permanent ones, or *pending* lines of a migration not yet applied to
-  production (see above). Entries that no longer differ fail as stale. Apart
-  from the pending blocks `0064_realtime_org_broadcast` (2 functions, their
-  6 EXECUTE lines, the `realtime.messages` policy and 15 triggers) and
-  `0065_push_register_rpc` (1 function, 3 EXECUTE lines) it is empty: the
-  replay up to 0063 matches production exactly (re-checked 2026-10-16 after
-  applying 0063, against a fresh read-only production query: 563 lines, md5
-  `d64ce8915b69c05d3de67eac556d11bd`).
+  production (see above). Entries that no longer differ fail as stale. It is
+  currently empty: the replay matches production exactly (re-checked
+  2026-10-16 after applying 0064 and 0065, against a fresh read-only
+  production query: 591 lines, md5 `d438f1ae53748103fde1baab4ab11ee3`).
 - Not fingerprinted: sequence privileges, column-level privileges, MAINTAIN,
   foreign-table privileges and default privileges (`pg_default_acl`); the
   `relpriv` lines cover only `arwdDxt` on tables and views. Whenever
