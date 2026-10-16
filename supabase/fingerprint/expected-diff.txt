@@ -48,3 +48,14 @@
 > trg public.whatsapp_messages CREATE TRIGGER trg_org_broadcast_del AFTER DELETE ON public.whatsapp_messages REFERENCING OLD TABLE AS old_rows FOR EACH STATEMENT EXECUTE FUNCTION private.broadcast_org_changes()
 > trg public.whatsapp_messages CREATE TRIGGER trg_org_broadcast_ins AFTER INSERT ON public.whatsapp_messages REFERENCING NEW TABLE AS new_rows FOR EACH STATEMENT EXECUTE FUNCTION private.broadcast_org_changes()
 > trg public.whatsapp_messages CREATE TRIGGER trg_org_broadcast_upd AFTER UPDATE ON public.whatsapp_messages REFERENCING NEW TABLE AS new_rows FOR EACH STATEMENT EXECUTE FUNCTION private.broadcast_org_changes()
+
+# pending production apply: 0065_push_register_rpc
+# (tracker 1.5, owner decision D19, audit KUA-5: the push device follows the
+# signed-in user through register_push_subscription;
+# push_subscriptions_endpoint_key stays global). Additive: apply BEFORE
+# deploying the subscribe route change (the route on main needs no function),
+# then refresh production.txt and delete this block.
+> fn public.register_push_subscription(p_org uuid, p_endpoint text, p_p256dh text, p_auth text, p_user_agent text) returns=void lang=plpgsql volatile=v secdef=t config=search_path="" owner=postgres body_md5=fe3633363525bfd60a040159363f1ce7
+> fnexec public.register_push_subscription(p_org uuid, p_endpoint text, p_p256dh text, p_auth text, p_user_agent text) anon=f
+> fnexec public.register_push_subscription(p_org uuid, p_endpoint text, p_p256dh text, p_auth text, p_user_agent text) authenticated=t
+> fnexec public.register_push_subscription(p_org uuid, p_endpoint text, p_p256dh text, p_auth text, p_user_agent text) service_role=t

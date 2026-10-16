@@ -2,7 +2,7 @@
 -- vector-search functions stay inside the caller's org (tracker 1.2, audit
 -- KUA-13 / KEA-5 / KEA-25).
 begin;
-select plan(46);
+select plan(48);
 
 select tests.create_two_orgs();
 
@@ -29,6 +29,12 @@ from unnest(array['public.match_documents(extensions.vector, double precision, i
 select is(has_function_privilege(r, 'private.is_org_member(uuid)', 'execute'),
           r <> 'anon',
           format('private.is_org_member: executable by %s = %s', r, r <> 'anon'))
+from unnest(array['anon', 'authenticated']) r;
+
+-- Push device registration (0065; behaviour in 160_push_device_owner).
+select is(has_function_privilege(r, 'public.register_push_subscription(uuid, text, text, text, text)', 'execute'),
+          r <> 'anon',
+          format('register_push_subscription: executable by %s = %s', r, r <> 'anon'))
 from unnest(array['anon', 'authenticated']) r;
 
 -- Org Realtime bus (0064; behaviour in 150_realtime_org_broadcast): the topic

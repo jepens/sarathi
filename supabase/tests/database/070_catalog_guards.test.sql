@@ -2,7 +2,7 @@
 -- future migration must keep, so a new table / function / bucket policy that
 -- forgets tenant isolation fails CI even before it gets its own test.
 begin;
-select plan(12);
+select plan(13);
 
 -- 1. RLS is on for every table in public.
 select is_empty(
@@ -75,7 +75,8 @@ select results_eq(
        where p.pronamespace in ('public'::regnamespace, 'private'::regnamespace)
          and p.prosecdef and has_function_privilege('authenticated', p.oid, 'execute')
        order by 1 $$,
-    array['delete_contact_cascade(uuid,text)', 'private.is_org_member(uuid)'],
+    array['delete_contact_cascade(uuid,text)', 'private.is_org_member(uuid)',
+          'register_push_subscription(uuid,text,text,text,text)'],
     'authenticated can call only the reviewed SECURITY DEFINER functions');
 
 -- 8. Such a function that takes an org (p_org) must check membership itself.
@@ -139,6 +140,29 @@ select is_empty(
                   and coalesce(qual, '') like '%topic = ( SELECT realtime.topic() AS topic)%'
                   and coalesce(qual, '') like '%private.is_org_member(private.realtime_topic_org_id(%') $$,
     'every realtime.messages policy is SELECT for authenticated, bound to the joined topic and org-scoped');
+
+-- 13. Unique keys are per org (KUA-5): a non-primary unique index on a public
+--     table with org_id includes org_id, except these reviewed global keys:
+--       push_subscriptions_endpoint_key: one row per browser endpoint, owned
+--         by whoever is signed in on it now (D19, register_push_subscription,
+--         0065);
+--       whatsapp_integrations_phone_number_id_key: a WhatsApp number belongs
+--         to one org (inbound routing by phone_number_id).
+--     A new global key must be reviewed and added here on purpose.
+select results_eq(
+    $$ select ic.relname::text collate "default" from pg_index i
+       join pg_class c on c.oid = i.indrelid
+       join pg_class ic on ic.oid = i.indexrelid
+       where c.relnamespace = 'public'::regnamespace
+         and i.indisunique and not i.indisprimary
+         and exists (select 1 from pg_attribute a
+                     where a.attrelid = c.oid and a.attname = 'org_id' and not a.attisdropped)
+         and not exists (select 1 from pg_attribute a
+                         where a.attrelid = c.oid and a.attname = 'org_id'
+                           and a.attnum = any (i.indkey))
+       order by 1 $$,
+    array['push_subscriptions_endpoint_key', 'whatsapp_integrations_phone_number_id_key'],
+    'the only unique keys without org_id on org_id tables are the reviewed global ones');
 
 select * from finish();
 rollback;

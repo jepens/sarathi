@@ -42,10 +42,15 @@ policy scoped only to `user_id = auth.uid()` must be on the reviewed allowlist
 in guard 4, so e.g. `auth.uid() IS NOT NULL` fails), a SECURITY DEFINER
 function is executable by anon or is new to the reviewed list for
 `authenticated`, an app function has no pinned `search_path`, anon holds
-any privilege on a table, view or sequence in `public` (guard 11), or a
+any privilege on a table, view or sequence in `public` (guard 11), a
 `realtime.messages` policy is more than "members receive their joined org
-topic" (guard 12, see "Realtime org bus" below), so a forgotten test is
-often caught anyway.
+topic" (guard 12, see "Realtime org bus" below) or a unique key on an org_id
+table leaves out `org_id` (guard 13), so a forgotten test is often caught
+anyway. Guard 13 has two reviewed global keys: `push_subscriptions_endpoint_key`
+(one row per browser endpoint: the device follows whoever is signed in on it
+now, owner decision D19; `register_push_subscription`, 0065, moves it) and
+`whatsapp_integrations_phone_number_id_key` (a WhatsApp number belongs to one
+org).
 
 ## Run the stack and the tests locally
 
@@ -264,11 +269,12 @@ line to `production.txt`.
   (`<` only in production, `>` only in the replay), each with a reason:
   permanent ones, or *pending* lines of a migration not yet applied to
   production (see above). Entries that no longer differ fail as stale. Apart
-  from the pending block `0064_realtime_org_broadcast` (2 functions, their 6
-  EXECUTE lines, the `realtime.messages` policy and 15 triggers) it is
-  empty: the replay up to 0063 matches production exactly (re-checked
-  2026-10-16 after applying 0063, against a fresh read-only production query:
-  563 lines, md5 `d64ce8915b69c05d3de67eac556d11bd`).
+  from the pending blocks `0064_realtime_org_broadcast` (2 functions, their
+  6 EXECUTE lines, the `realtime.messages` policy and 15 triggers) and
+  `0065_push_register_rpc` (1 function, 3 EXECUTE lines) it is empty: the
+  replay up to 0063 matches production exactly (re-checked 2026-10-16 after
+  applying 0063, against a fresh read-only production query: 563 lines, md5
+  `d64ce8915b69c05d3de67eac556d11bd`).
 - Not fingerprinted: sequence privileges, column-level privileges, MAINTAIN,
   foreign-table privileges and default privileges (`pg_default_acl`); the
   `relpriv` lines cover only `arwdDxt` on tables and views. Whenever
