@@ -6,8 +6,7 @@ import {
 import { makeWhatsAppApiError } from '@/lib/whatsapp/client';
 import type { SendWhatsAppResult } from '@/lib/whatsapp/client';
 import { buildRecipient } from '@/lib/whatsapp/recipient';
-
-const WHATSAPP_API_URL = 'https://graph.facebook.com/v21.0';
+import { graphUrl } from '@/lib/whatsapp/graph';
 
 // ---------------------------------------------------------------------------
 // Template message support — for re-engagement OUTSIDE the 24-hour customer
@@ -56,7 +55,7 @@ export async function listApprovedTemplates(limit = 100): Promise<WhatsAppTempla
     const accessToken = await getWhatsAppAccessToken();
     const wabaId = await getWhatsAppBusinessAccountId();
 
-    const url = `${WHATSAPP_API_URL}/${wabaId}/message_templates?status=APPROVED&limit=${limit}`;
+    const url = graphUrl(`${wabaId}/message_templates?status=APPROVED&limit=${limit}`);
     const response = await fetch(url, {
         headers: {
             Authorization: `Bearer ${accessToken}`,
@@ -86,7 +85,8 @@ export async function listApprovedTemplates(limit = 100): Promise<WhatsAppTempla
  * Fetch ONE template by exact name + language from the WABA. Used to detect
  * FLOW buttons before sending: Meta requires templates that carry a Flow
  * button to be sent WITH a `button` component (sub_type "flow"), otherwise
- * the send fails with 131009 "Components sub_type invalid".
+ * the send fails with 131009 "Components sub_type invalid" (from Graph v23.0
+ * template parameter errors may come back as 132018 instead).
  * Returns null when not found or on any error (caller falls back gracefully).
  */
 async function getTemplateDefinition(
@@ -96,7 +96,7 @@ async function getTemplateDefinition(
     try {
         const accessToken = await getWhatsAppAccessToken();
         const wabaId = await getWhatsAppBusinessAccountId();
-        const url = `${WHATSAPP_API_URL}/${wabaId}/message_templates?name=${encodeURIComponent(name)}&limit=25`;
+        const url = graphUrl(`${wabaId}/message_templates?name=${encodeURIComponent(name)}&limit=25`);
         const response = await fetch(url, {
             headers: { Authorization: `Bearer ${accessToken}` },
             cache: 'no-store',
@@ -224,7 +224,7 @@ export async function sendTemplateMessage(opts: SendTemplateOptions): Promise<Se
         },
     };
 
-    const response = await fetch(`${WHATSAPP_API_URL}/${phoneNumberId}/messages`, {
+    const response = await fetch(graphUrl(`${phoneNumberId}/messages`), {
         method: 'POST',
         headers: {
             Authorization: `Bearer ${accessToken}`,

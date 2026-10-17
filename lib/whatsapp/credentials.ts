@@ -4,7 +4,10 @@ import { getDefaultOrgId } from '@/lib/settings/org-context';
 // WhatsApp credential resolution. Single-tenant: credentials come from the
 // server environment (WHATSAPP_PHONE_NUMBER_ID / WHATSAPP_ACCESS_TOKEN /
 // WHATSAPP_APP_SECRET). The per-tenant whatsapp_integrations lookup is gone —
-// there is one number, configured via env.
+// there is one number, configured via env. Fase 2 (owner decision D6: one Meta
+// app per client) replaces this with per-app credentials in Supabase Vault and
+// routing by phone_number_id (tasks 2.1b/2.2, docs/FASE2_DESIGN.md); until
+// then whatsapp_integrations is service-role only and unused (0069).
 
 export interface WhatsAppSendCreds {
     phoneNumberId: string;

@@ -5,6 +5,8 @@
 > sudah dibuang (signup publik, kredensial WhatsApp per-tenant, pembuatan org).
 > Kolom `org_id`/RLS sengaja dipertahankan sebagai jaring pengaman, selalu
 > menunjuk satu org Sailendra. Dokumen ini disimpan sebagai catatan sejarah.
+> Rencana SaaS yang berlaku: [SAAS_PROGRESS.md](SAAS_PROGRESS.md) (pelacak) dan
+> [FASE2_DESIGN.md](FASE2_DESIGN.md) (WhatsApp per tenant, keputusan D6/D8).
 
 > **Tujuan dokumen:** titik masuk tunggal untuk melanjutkan pengembangan Sarathi
 > sebagai SaaS multi-tenant. Berisi status terkini, ringkasan arsitektur, apa
@@ -46,8 +48,8 @@ end-to-end dengan tenant kedua nyata**, lalu melengkapi kebutuhan self-serve
 | **Tenant model** | `organizations` + `organization_members` (role owner/admin/staff); helper `private.is_org_member(org_id)` SECURITY DEFINER | migrasi `0025`, `0029` |
 | **Isolasi data** | `org_id` di 12 tabel + RLS `is_org_member(org_id)` (pola "no-join" + helper) | `0027`–`0030` |
 | **Resolusi org (UI)** | `requireOrgContext()` → `{ supabase, userId, orgId, role }` dari membership user (1 user = 1 org; sesi via `getClaims()`, di-cache per render); 401/403 seragam di semua route & server action | [lib/settings/org-context.ts](../lib/settings/org-context.ts) |
-| **Resolusi org (service-role)** | webhook/queue resolve via `phone_number_id` → org; fallback env = Sailendra | [lib/whatsapp/credentials.ts](../lib/whatsapp/credentials.ts) |
-| **WhatsApp per-tenant** | `whatsapp_integrations` (phone_number_id unik, access_token, **app_secret**, waba_id); webhook routing by phone_number_id + verifikasi signature pakai app_secret org tsb | `0032`, [app/api/webhook/whatsapp/route.ts](../app/api/webhook/whatsapp/route.ts) |
+| **Resolusi org (service-role)** | **Saat ini:** webhook/queue memakai kredensial env dan org default (Sailendra); routing via `phone_number_id` dicabut saat revert single-tenant (cb709bc) dan dikerjakan ulang di Fase 2 (2.2, `docs/FASE2_DESIGN.md`) | [lib/whatsapp/credentials.ts](../lib/whatsapp/credentials.ts) |
+| **WhatsApp per-tenant** | *(historis: dibuang saat revert 2026-06-20; `whatsapp_integrations` kini hanya untuk service role, 0069; dikerjakan ulang di Fase 2)* `whatsapp_integrations` (phone_number_id unik, access_token, **app_secret**, waba_id); webhook routing by phone_number_id + verifikasi signature pakai app_secret org tsb | `0032`, [app/api/webhook/whatsapp/route.ts](../app/api/webhook/whatsapp/route.ts) |
 | **Kunci chat** | `whatsapp_chats` PK = **composite `(org_id, phone_number)`** (dua tenant bisa punya kontak dengan nomor sama) | `0033`–`0036` (expand/contract) |
 | **Storage/KB per-org** | objek `documents` di-prefix `<org_id>/…` + RLS path-scoped; `documents`/`kb_sources` ber-`org_id` | `0038` |
 | **Identitas AI per-tenant** | `business_profiles` (per-org; persona, hand-off, dll) → system message + tool descriptions di-template per tenant | `0039`, [lib/settings/business-profile.ts](../lib/settings/business-profile.ts) |
@@ -65,8 +67,8 @@ verify-token = env/app_settings global.
 | **0** | Rebrand → Helat (nama kini Sarathi); identitas Sailendra jadi BusinessProfile yang dapat dikonfigurasi | — |
 | **1a/1c** | Fondasi isolasi: org + members + helper + `org_id` 11 tabel + RLS; `match_*` filter org | `0025`–`0030` |
 | **1b** | Signup auto-buat org + owner; `/signup` + `/auth/confirm` | `0031` |
-| **2a** | Kredensial WhatsApp per-org (entry manual, bukan Embedded Signup) | `0032` |
-| **2b** | Webhook routing by phone_number_id + signature per-tenant + threading org_id | — |
+| **2a** | Kredensial WhatsApp per-org (entry manual, bukan Embedded Signup) *(dibuang saat revert; Fase 2 baru)* | `0032` |
+| **2b** | Webhook routing by phone_number_id + signature per-tenant + threading org_id *(dibuang saat revert; Fase 2 baru)* | — |
 | **2c** | `whatsapp_chats` → composite PK `(org_id, phone_number)` (expand/contract, zero-downtime) | `0033`–`0036` |
 | **Sec** | Advisor fixes: revoke `handle_new_user` EXECUTE; `documents` bucket private | `0037` |
 | **Storage** | Storage/KB per-org (`<org_id>/` prefix + RLS) | `0038` |

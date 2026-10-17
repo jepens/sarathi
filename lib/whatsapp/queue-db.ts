@@ -177,8 +177,9 @@ async function processConversation(jobs: QueueJob[], supabase: SupabaseClient): 
     const { org_id: orgId, phone_number: phoneNumber } = jobs[0];
     const ids = jobs.map((j) => j.id);
 
-    // Per-tenant send credentials (env fallback). Resolved up-front so the catch
-    // block's fallback message can use them too.
+    // Send credentials: the env credentials of the default org until Fase 2
+    // task 2.2b threads each org's own. Resolved up-front so the catch block's
+    // fallback message can use them too.
     const creds = await getWhatsAppSendCreds();
     try {
         whatsappLogger.info(`Processing ${jobs.length} message(s) for ${phoneNumber}`);

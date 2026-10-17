@@ -1,8 +1,7 @@
 import { getWhatsAppAccessToken, getWhatsAppPhoneNumberId } from '@/lib/settings/app-settings';
 import { toWhatsAppText } from './format';
 import { buildRecipient } from './recipient';
-
-const WHATSAPP_API_URL = 'https://graph.facebook.com/v21.0';
+import { graphUrl } from './graph';
 
 // Subset of the Meta error shape — we only project the fields we care about
 // up to the caller. Full payload still gets logged for diagnostics.
@@ -78,7 +77,7 @@ export async function sendWhatsAppMessage(
         throw new Error('WhatsApp not configured. Please configure in /dashboard/settings');
     }
 
-    const response = await fetch(`${WHATSAPP_API_URL}/${phoneNumberId}/messages`, {
+    const response = await fetch(graphUrl(`${phoneNumberId}/messages`), {
         method: 'POST',
         headers: {
             'Authorization': `Bearer ${accessToken}`,
@@ -90,6 +89,9 @@ export async function sendWhatsAppMessage(
             // BSUID in `to`). See lib/whatsapp/recipient.ts.
             ...buildRecipient(to),
             ...(contextMessageId ? { context: { message_id: contextMessageId } } : {}),
+            // Explicit: Meta's current reference marks `type` required with no
+            // default (Graph v25.0 bump, tracker 2.7).
+            type: 'text',
             // Normalise Markdown → WhatsApp formatting so customers never see
             // stray "**bold**" / "# heading" syntax (the model leaks it even
             // with the prompt rule in place).
@@ -187,7 +189,7 @@ export async function uploadWhatsAppMedia(
     form.append('type', mimeType);
     form.append('file', file, filename);
 
-    const response = await fetch(`${WHATSAPP_API_URL}/${phoneNumberId}/media`, {
+    const response = await fetch(graphUrl(`${phoneNumberId}/media`), {
         method: 'POST',
         headers: { Authorization: `Bearer ${accessToken}` },
         body: form,
@@ -232,7 +234,7 @@ export async function sendWhatsAppMedia(
         };
     }
 
-    const response = await fetch(`${WHATSAPP_API_URL}/${phoneNumberId}/messages`, {
+    const response = await fetch(graphUrl(`${phoneNumberId}/messages`), {
         method: 'POST',
         headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -284,7 +286,7 @@ export async function downloadWhatsAppMedia(
     }
 
     // Step 1 — resolve the media id to a temporary download URL.
-    const metaRes = await fetch(`${WHATSAPP_API_URL}/${mediaId}`, {
+    const metaRes = await fetch(graphUrl(mediaId), {
         headers: { Authorization: `Bearer ${accessToken}` },
     });
     if (!metaRes.ok) {
@@ -305,7 +307,8 @@ export async function downloadWhatsAppMedia(
     const binRes = await fetch(url, {
         headers: {
             Authorization: `Bearer ${accessToken}`,
-            'User-Agent': 'Sarathi/1.0 (+https://sailendra.co.id)',
+            // Neutral: the same code serves every tenant.
+            'User-Agent': 'Sarathi/1.0',
         },
     });
     if (!binRes.ok) {
@@ -335,6 +338,9 @@ export function describeWhatsAppError(err: WhatsAppApiError): string {
             return 'Access token Meta expired/invalid. Generate ulang di Meta Developer Dashboard → WhatsApp → API Setup. (Kode 190)';
         case 100:
             return `Parameter tidak valid: ${err.details ?? 'tidak ada detail'}. (Kode 100)`;
+        // From Graph v23.0, template parameter problems at send time.
+        case 132018:
+            return 'Parameter template ditolak Meta: jumlah atau isi variabel, atau tombol Flow, tidak cocok dengan template yang disetujui. (Kode 132018)';
         default:
             return err.message;
     }

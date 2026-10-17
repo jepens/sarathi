@@ -327,10 +327,11 @@ export async function POST(request: Request) {
         const skipSignatureVerification =
             process.env.WHATSAPP_WEBHOOK_SKIP_SIGNATURE === 'true';
 
-        // Parse BEFORE verifying: multi-tenant signatures use the sending org's
-        // app_secret, which we only know after reading phone_number_id from the
-        // body. Parsing is side-effect-free; nothing acts on the payload until
-        // the signature is verified below (right after we resolve the org).
+        // Parsed before the signature check below. Today the app secret comes
+        // from env (one Meta app, the default org), so the order is not needed;
+        // Fase 2 task 2.2a moves the check before parsing (docs/FASE2_DESIGN.md).
+        // Parsing is side-effect-free; nothing acts on the payload until the
+        // signature is verified.
         const body = JSON.parse(rawBody);
 
         // What arrived, never the payload itself: it holds customers' phone
@@ -357,9 +358,9 @@ export async function POST(request: Request) {
             // Single-tenant: org + credentials come from env.
             const waCtx = await resolveWhatsAppContext(supabase);
 
-            // Verify the signature with THIS org's app_secret now that we know
-            // which org the payload claims to come from. Nothing above acted on
-            // the body, so this is still a pre-action gate.
+            // Verify the signature with the env app secret (single Meta app
+            // until Fase 2 task 2.2). Nothing above acted on the body, so this
+            // is still a pre-action gate.
             if (skipSignatureVerification) {
                 whatsappLogger.warn(
                     '⚠️  Webhook signature verification SKIPPED via WHATSAPP_WEBHOOK_SKIP_SIGNATURE=true. ' +

@@ -19,15 +19,15 @@ describe('isDialablePhone', () => {
 });
 
 describe('buildRecipient', () => {
-    it('puts a dialable phone in `to` (and never `recipient`)', () => {
+    it('puts a dialable phone in `to` with recipient_type (and never `recipient`)', () => {
         const r = buildRecipient('6281314942012');
-        expect(r).toEqual({ to: '6281314942012' });
+        expect(r).toEqual({ recipient_type: 'individual', to: '6281314942012' });
         expect(r).not.toHaveProperty('recipient');
     });
 
     it('normalizes a formatted phone (+, spaces, dashes) into bare-digit `to`', () => {
-        expect(buildRecipient('+62 813-1494-2012')).toEqual({ to: '6281314942012' });
-        expect(buildRecipient('+6281234567890')).toEqual({ to: '6281234567890' });
+        expect(buildRecipient('+62 813-1494-2012')).toEqual({ recipient_type: 'individual', to: '6281314942012' });
+        expect(buildRecipient('+6281234567890')).toEqual({ recipient_type: 'individual', to: '6281234567890' });
     });
 
     it('puts a BSUID in `recipient` with recipient_type (and never `to`)', () => {
