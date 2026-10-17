@@ -31,6 +31,11 @@ export function UploadZone({ onUploadComplete }: UploadZoneProps = {}) {
     }
 
     const processFile = async (file: File) => {
+        // An empty file yields no text, so no KB entry: never upload it.
+        if (file.size === 0) {
+            toast.error("File kosong — tidak ada yang bisa diunggah.")
+            return
+        }
         setIsUploading(true)
         // One evolving toast across the two phases (upload → embed) instead of
         // separate info/success toasts.
@@ -54,14 +59,40 @@ export function UploadZone({ onUploadComplete }: UploadZoneProps = {}) {
 
             toast.loading("Memproses embedding AI…", { id: toastId })
 
-            // 2. Trigger Ingestion API
-            const response = await fetch('/api/ingest', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ filePath, fileType: file.type }),
-            })
+            // An upload without a documents row is never listed, so nobody
+            // could delete it later (tracker 3.9). /api/ingest removes it on
+            // its own failures; here only when the request never reached it
+            // (network error, or the proxy / app answering 502 / 503). Not on a
+            // timeout: the server may still be storing the rows.
+            const discardUpload = async () => {
+                try {
+                    await supabase.storage.from('documents').remove([filePath])
+                } catch {
+                    // best-effort
+                }
+            }
 
-            if (!response.ok) throw new Error('Ingestion failed')
+            // 2. Trigger Ingestion API
+            let response: Response
+            try {
+                response = await fetch('/api/ingest', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ filePath, fileType: file.type }),
+                })
+            } catch {
+                await discardUpload()
+                throw new Error('Gagal menghubungi server. Silakan coba lagi.')
+            }
+
+            if (!response.ok) {
+                if (response.status === 502 || response.status === 503) await discardUpload()
+                // A 4xx reason is meant for the user (e.g. an empty or unreadable
+                // file); anything else gets a generic message.
+                const body = await response.json().catch(() => null) as { error?: unknown } | null
+                const reason = response.status < 500 && typeof body?.error === 'string' ? body.error : null
+                throw new Error(reason ?? 'Gagal memproses dokumen. Silakan coba lagi.')
+            }
 
             const data = await response.json()
             toast.success(`Berhasil — ${data.chunks} potongan diproses.`, { id: toastId })
