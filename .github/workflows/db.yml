@@ -1,0 +1,65 @@
+name: Database
+
+# Database tests (tracker 1.1 / 1.2 / 1.14, audit KUA-1 / KUA-13): replay
+# every supabase/migrations file on a fresh local Postgres, run the pgTAP
+# tenant-isolation suite (supabase/tests/database) and compare the resulting
+# schema with the committed production fingerprint. No secrets, no network
+# access to production. See supabase/README.md.
+#
+# Runs only when something under supabase/ (migrations, tests, fingerprint,
+# config) or this file changes: app code cannot change the outcome, and this
+# job is the most expensive one (moved out of ci.yml on 2026-10-17 to save
+# Actions minutes).
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'supabase/**'
+      - '.github/workflows/db.yml'
+  pull_request:
+    paths:
+      - 'supabase/**'
+      - '.github/workflows/db.yml'
+
+concurrency:
+  group: db-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  db-tests:
+    name: Database (migrations · pgTAP · fingerprint)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Pinned CLI: migration ordering and `test db` behaviour were verified
+      # with this exact version (supabase/README.md). Bump deliberately.
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: 2.121.0
+
+      # `db start` leaves ONLY the Postgres container running (no auth,
+      # storage, realtime, rest, kong, studio, ...). During setup the CLI still
+      # initialises the auth, storage and realtime schemas the migrations and
+      # tests depend on (with [realtime] enabled in config.toml it runs the
+      # Realtime image once: realtime.messages, realtime.send / topic and the
+      # daily realtime.messages partitions from yesterday to +3 days), then
+      # applies supabase/migrations in order. 150_realtime_org_broadcast
+      # FAILS, not skips, when today's partition is missing (e.g. after a CLI
+      # bump that stops creating them), so the Realtime tests cannot silently
+      # drop out of CI.
+      - name: Start local database (applies all migrations)
+        run: supabase db start
+
+      - name: Run pgTAP tests
+        run: supabase test db
+
+      # Blocking. A migration PR passes before production is touched by listing
+      # its lines as "pending" in supabase/fingerprint/expected-diff.txt; the
+      # production.txt refresh after apply_migration removes them again
+      # (stale entries fail too). See supabase/README.md.
+      - name: Compare schema with the production fingerprint
+        run: bash supabase/fingerprint/compare.sh
