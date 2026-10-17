@@ -5,11 +5,14 @@
 -- update, delete or re-home rows of any other org; a member of org B sees
 -- nothing outside org B; anon holds no table privilege at all (0063), so every
 -- statement is refused before RLS. message_queue and rate_limits are
--- service-role only. organizations / organization_members are read-only for
--- members (no self-service membership or role escalation).
+-- service-role only through RLS; whatsapp_integrations, which keeps tenant
+-- secrets, grants a member no table privilege at all (0069), so every
+-- statement is refused before RLS as for anon. organizations /
+-- organization_members are read-only for members (no self-service membership
+-- or role escalation).
 -- chat_labels and push_subscriptions have their own files (extra rules).
 begin;
-select plan(321);
+select plan(317);
 
 select tests.create_two_orgs();
 
@@ -59,9 +62,8 @@ insert into public.quick_replies (org_id, shortcut, content) values
 -- fixture; the org A member creates its own row in the matrix below.
 insert into public.business_profiles (org_id, business_name) values
     (tests.org_b(), 'fixture B');
--- whatsapp_integrations: one row per org as well (org_id is the primary key).
--- The seed org row is the foreign row org B must not see once org A's own row
--- is deleted at the end of section 1.
+-- whatsapp_integrations (service role only since 0069): rows for org B and the
+-- seed org, so every refusal below is checked against rows that exist.
 insert into public.whatsapp_integrations (org_id, phone_number_id, access_token) values
     (tests.org_b(), 'fixture-b', 'token-palsu'),
     (tests.seed_org(), 'fixture-seed', 'token-palsu');
@@ -77,7 +79,7 @@ insert into public.rate_limits (identifier) values
     (tests.org_a()::text || ':628111');
 
 -- ---------------------------------------------------------------------------
--- 1. Member of org A: full access to org A, none to other orgs (14 x 10)
+-- 1. Member of org A: full access to org A, none to other orgs (13 x 10)
 -- ---------------------------------------------------------------------------
 select tests.authenticate_as(tests.user_a1());
 select is(current_user::text, 'authenticated', 'acting as a member: role is authenticated (RLS applies)');
@@ -135,10 +137,6 @@ select * from tests.check_tenant_table('business_profiles',
     'org_id, business_name', $$ {org}, 'tst-new' $$,
     $$ website = 'diubah' $$, $$ business_name = 'tst-new' $$,
     tests.org_a(), tests.org_b());
-select * from tests.check_tenant_table('whatsapp_integrations',
-    'org_id, phone_number_id, access_token', $$ {org}, 'tst-new-' || gen_random_uuid(), 'token-palsu' $$,
-    $$ display_phone = 'diubah' $$, $$ phone_number_id like 'tst-new-%' $$,
-    tests.org_a(), tests.org_b());
 
 -- Service-role-only tables: even the member's own org rows are invisible.
 select * from tests.check_no_access('message_queue',
@@ -147,6 +145,11 @@ select * from tests.check_no_access('message_queue',
 select * from tests.check_no_access('rate_limits',
     'identifier', $$ 'tst' $$,
     $$ request_count = 99 $$, 'a member of org A');
+-- whatsapp_integrations keeps tenant secrets (0069): no table privilege, so a
+-- member's statements are refused before RLS, even on its own org's row.
+select * from tests.check_no_privilege('whatsapp_integrations',
+    'org_id, phone_number_id, access_token', $$ tests.org_a(), 'tst-new', 'token-palsu' $$,
+    $$ display_phone = 'diubah' $$, 'a member of org A');
 
 -- organizations: read own org only; no client-side writes at all.
 select results_eq(
@@ -191,7 +194,7 @@ select is_empty(
     'organization_members: a member deletes no membership');
 
 -- ---------------------------------------------------------------------------
--- 2. Member of org B: blind to org A and the seed org (14 x 4)
+-- 2. Member of org B: blind to org A and the seed org (13 x 4)
 -- ---------------------------------------------------------------------------
 select tests.authenticate_as(tests.user_b1());
 select is(auth.uid(), tests.user_b1(), 'acting as a member of org B: auth.uid() is user b1');
@@ -209,7 +212,9 @@ select * from tests.check_cross_org_blind('app_settings', $$ description = 'diub
 select * from tests.check_cross_org_blind('labels', $$ color = 'red' $$, tests.org_b());
 select * from tests.check_cross_org_blind('quick_replies', $$ content = 'diubah' $$, tests.org_b());
 select * from tests.check_cross_org_blind('business_profiles', $$ website = 'diubah' $$, tests.org_b());
-select * from tests.check_cross_org_blind('whatsapp_integrations', $$ display_phone = 'diubah' $$, tests.org_b());
+select * from tests.check_no_privilege('whatsapp_integrations',
+    'org_id, phone_number_id, access_token', $$ tests.org_b(), 'tst-new-b', 'token-palsu' $$,
+    $$ display_phone = 'diubah' $$, 'a member of org B');
 
 -- ---------------------------------------------------------------------------
 -- 3. anon: no privilege on any app table (0063), every statement refused with

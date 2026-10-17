@@ -24,6 +24,12 @@ tenant data that means at least:
   (anon must not execute anything that reads or writes tenant data);
 - a new storage bucket/policy: `040_storage.test.sql` (bucket settings such
   as chat-media's privacy and limits: `180_chat_media_bucket.test.sql`).
+- a table that keeps tenant secrets (service role only): revoke every table
+  privilege from `anon` and `authenticated` in the migration and add the
+  deny policy, then check both orgs' members with `tests.check_no_privilege`
+  in `010` (every statement refused with 42501 before RLS) and pin the
+  catalog in a dedicated test (`whatsapp_integrations`, 0069:
+  `190_whatsapp_integrations_locked.test.sql`).
 
 **anon gets no table privileges (since 0063).** A table, view or sequence that
 `postgres` creates in `public` (migrations run as `postgres`) gives `anon`
