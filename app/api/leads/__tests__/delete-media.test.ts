@@ -1,11 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // DELETE /api/leads/[phone] (owner decision D21): deleting a contact also
-// removes its chat-media files. The keys are read before the rows go (the
-// keys its messages name + the older files of its own folder), the files
-// removed through the Storage API with the member's client only once the
-// cascade succeeded; if the keys cannot be read, nothing is deleted. Fake ids
-// and phone numbers only.
+// removes its chat-media files and its uploaded proposal PDFs. The keys are
+// read before the rows go (the keys its messages name + the older files of
+// its own folder; the file_path of its proposals), the files removed through
+// the Storage API with the member's client only once the cascade succeeded;
+// if the keys cannot be read, nothing is deleted. Fake ids and phone numbers
+// only.
 
 const ORG = '5a11e024-0001-4000-8000-000000000001';
 const OTHER = '0b0e6c1e-1111-4222-8333-444455556666';
@@ -29,19 +30,32 @@ const h = vi.hoisted(() => ({
     removeError: false,
     rpcResult: { deleted: true } as Record<string, unknown>,
     rpcError: null as null | { message: string },
+    proposalRows: [] as { file_path: string | null }[],
+    proposalReadError: null as null | { code: string },
+    /** The proposals query's filters. */
+    proposalFilters: [] as string[],
+    removedProposals: [] as string[][],
 }));
 
 const fakeSupabase = {
     from: (table: string) => {
-        expect(table).toBe('whatsapp_messages');
+        expect(['whatsapp_messages', 'proposals']).toContain(table);
+        const proposals = table === 'proposals';
+        const filters = proposals ? h.proposalFilters : h.filters;
         const q: Record<string, unknown> = {};
         for (const m of ['select', 'eq', 'not']) {
             q[m] = (...args: unknown[]) => {
-                h.filters.push(`${m}(${args.map((a) => JSON.stringify(a)).join(',')})`);
+                filters.push(`${m}(${args.map((a) => JSON.stringify(a)).join(',')})`);
                 return q;
             };
         }
         q.then = (resolve: (v: unknown) => unknown) => {
+            if (proposals) {
+                h.order.push('read proposals');
+                return resolve(
+                    h.proposalReadError ? { data: null, error: h.proposalReadError } : { data: h.proposalRows, error: null }
+                );
+            }
             h.order.push('read messages');
             return resolve(h.readError ? { data: null, error: h.readError } : { data: h.messageRows, error: null });
         };
@@ -49,6 +63,15 @@ const fakeSupabase = {
     },
     storage: {
         from: (bucket: string) => {
+            if (bucket === 'proposals') {
+                return {
+                    remove: async (keys: string[]) => {
+                        h.order.push('remove proposals');
+                        h.removedProposals.push(keys);
+                        return { data: [], error: null };
+                    },
+                };
+            }
             expect(bucket).toBe('chat-media');
             return {
                 list: async (folder: string, opts: { limit: number; offset: number }) => {
@@ -96,6 +119,10 @@ beforeEach(() => {
     h.removeError = false;
     h.rpcResult = { deleted: true };
     h.rpcError = null;
+    h.proposalRows = [];
+    h.proposalReadError = null;
+    h.proposalFilters = [];
+    h.removedProposals = [];
     vi.spyOn(console, 'error').mockImplementation(() => {});
 });
 
@@ -115,7 +142,7 @@ describe("DELETE /api/leads/[phone]: the contact's media files go with it (D21)"
         ];
         const res = await del();
         expect(res.status).toBe(200);
-        expect(h.order).toEqual(['read messages', 'list', 'cascade', 'remove']);
+        expect(h.order).toEqual(['read messages', 'list', 'read proposals', 'cascade', 'remove']);
         // Only this org's rows of this phone that hold media.
         expect(h.filters).toEqual([
             'select("media_url")',
@@ -140,10 +167,31 @@ describe("DELETE /api/leads/[phone]: the contact's media files go with it (D21)"
 
     it('a contact with bookings is refused and keeps its files', async () => {
         h.messageRows = [{ media_url: key('a.jpg') }];
+        h.proposalRows = [{ file_path: `${ORG}/${PHONE}/p.pdf` }];
         h.rpcResult = { deleted: false, reason: 'has_bookings', orders: 1 };
         const res = await del();
         expect(res.status).toBe(409);
         expect(h.removed).toEqual([]);
+        expect(h.removedProposals).toEqual([]);
+    });
+
+    it('its uploaded proposal PDFs go too: read before the cascade, removed after, only in its org', async () => {
+        h.proposalRows = [
+            { file_path: `${ORG}/${PHONE}/p1.pdf` },
+            { file_path: `${ORG}/${PHONE}/p1.pdf` }, // the same file twice
+            { file_path: `${OTHER}/${PHONE}/x.pdf` }, // another org's key: never
+            { file_path: `${ORG}/../${OTHER}/y.pdf` }, // a traversal: never
+        ];
+        const res = await del();
+        expect(res.status).toBe(200);
+        expect(h.proposalFilters).toEqual([
+            'select("file_path")',
+            `eq("org_id","${ORG}")`,
+            `eq("lead_phone","${PHONE}")`,
+            'not("file_path","is",null)',
+        ]);
+        expect(h.order).toEqual(['read messages', 'list', 'read proposals', 'cascade', 'remove proposals']);
+        expect(h.removedProposals).toEqual([[`${ORG}/${PHONE}/p1.pdf`]]);
     });
 
     it('a contact that is already gone removes nothing', async () => {
@@ -169,7 +217,7 @@ describe("DELETE /api/leads/[phone]: the contact's media files go with it (D21)"
     it('no media: no Storage remove call', async () => {
         const res = await del();
         expect(res.status).toBe(200);
-        expect(h.order).toEqual(['read messages', 'list', 'cascade']);
+        expect(h.order).toEqual(['read messages', 'list', 'read proposals', 'cascade']);
     });
 
     it('removes in batches of 100 and pages through a large folder', async () => {
@@ -210,6 +258,17 @@ describe('DELETE /api/leads/[phone]: nothing is deleted when the keys cannot be 
         expect(res.status).toBe(503);
         expect(h.order).toEqual(['read messages', 'list']);
         expect(h.removed).toEqual([]);
+    });
+
+    it('the proposal read fails: 503, no cascade, no remove', async () => {
+        h.messageRows = [{ media_url: key('a.jpg') }];
+        h.proposalRows = [{ file_path: `${ORG}/${PHONE}/p.pdf` }];
+        h.proposalReadError = { code: '57014' };
+        const res = await del();
+        expect(res.status).toBe(503);
+        expect(h.order).toEqual(['read messages', 'list', 'read proposals']);
+        expect(h.removed).toEqual([]);
+        expect(h.removedProposals).toEqual([]);
     });
 
     it('the cascade fails: 500 and the files stay', async () => {

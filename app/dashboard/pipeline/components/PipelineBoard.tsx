@@ -332,9 +332,9 @@ export function PipelineBoard() {
                                 {deleteLead?.contact_name || deleteLead?.phone_number}
                             </span>{' '}
                             akan dihapus permanen beserta riwayat chat, file media
-                            (foto, dokumen, pesan suara), dan data lead-nya. Lead yang
-                            punya booking tidak bisa dihapus. Tindakan ini tidak bisa
-                            dibatalkan.
+                            (foto, dokumen, pesan suara), proposal (termasuk PDF yang
+                            diunggah), dan data lead-nya. Lead yang punya booking tidak
+                            bisa dihapus. Tindakan ini tidak bisa dibatalkan.
                         </DialogDescription>
                     </DialogHeader>
                     <DialogFooter>

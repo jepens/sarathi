@@ -907,8 +907,9 @@ export function ContactList() {
                                 {deleteContact?.contact_name || deleteContact?.phone_number}
                             </span>{' '}
                             akan dihapus permanen beserta riwayat chat, file media
-                            (foto, dokumen, pesan suara), dan data lead-nya. Kontak yang
-                            punya booking tidak bisa dihapus.
+                            (foto, dokumen, pesan suara), proposal (termasuk PDF yang
+                            diunggah), dan data lead-nya. Kontak yang punya booking tidak
+                            bisa dihapus.
                         </DialogDescription>
                     </DialogHeader>
                     <DialogFooter>

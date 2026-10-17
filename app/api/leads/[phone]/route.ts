@@ -3,6 +3,9 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { LEAD_STAGES, type LeadStage } from '@/lib/ai/tools';
 import { accessDeniedResponse, requireOrgContext } from '@/lib/settings/org-context';
 import { CHAT_MEDIA_BUCKET, chatMediaObjectPath, contactMediaFolder } from '@/lib/storage/chat-media';
+import { isOrgScopedObjectPath } from '@/lib/storage/object-paths';
+
+const PROPOSALS_BUCKET = 'proposals';
 
 const LIST_PAGE = 1000;
 const REMOVE_BATCH = 100;
@@ -58,15 +61,41 @@ async function contactMediaKeys(supabase: SupabaseClient, orgId: string, phone: 
     return [...keys];
 }
 
+/**
+ * The keys of the contact's uploaded proposal PDFs in the proposals bucket
+ * (D21, extended by the owner on 2026-10-17), or null when they could not be
+ * read. The cascade deletes the proposals rows (FK on whatsapp_chats), and
+ * their PDFs (customer name, company, event details) would stay behind with
+ * nothing naming them. file_path is set exactly for source 'uploaded'
+ * (proposals_source_filepath_check); generated proposals have no file.
+ */
+async function contactProposalKeys(supabase: SupabaseClient, orgId: string, phone: string): Promise<string[] | null> {
+    const { data: rows, error } = await supabase
+        .from('proposals')
+        .select('file_path')
+        .eq('org_id', orgId)
+        .eq('lead_phone', phone)
+        .not('file_path', 'is', null);
+    if (error) {
+        console.error('Contact delete: reading the proposal files failed', { code: error.code });
+        return null;
+    }
+    const keys = new Set<string>();
+    for (const row of (rows ?? []) as { file_path: string | null }[]) {
+        if (isOrgScopedObjectPath(row.file_path, orgId)) keys.add(row.file_path);
+    }
+    return [...keys];
+}
+
 /** Best-effort: the contact is already gone; a failure only leaves files behind (logged, without keys). */
-async function removeContactMedia(supabase: SupabaseClient, keys: string[]): Promise<void> {
+async function removeContactFiles(supabase: SupabaseClient, bucket: string, keys: string[]): Promise<void> {
     let failed = 0;
     for (let i = 0; i < keys.length; i += REMOVE_BATCH) {
         const batch = keys.slice(i, i + REMOVE_BATCH);
-        const { error } = await supabase.storage.from(CHAT_MEDIA_BUCKET).remove(batch);
+        const { error } = await supabase.storage.from(bucket).remove(batch);
         if (error) failed += batch.length;
     }
-    if (failed) console.error(`Contact delete: ${failed} of ${keys.length} media file(s) could not be removed`);
+    if (failed) console.error(`Contact delete: ${failed} of ${keys.length} ${bucket} file(s) could not be removed`);
 }
 
 // Mirror the DB CHECK constraint so we reject bad input before hitting Postgres.
@@ -161,13 +190,13 @@ export async function PATCH(
 // AI's "memory"), pending queue items, rate-limit rows, and the contact row
 // itself (which cascades proposals and unlinks any vendor). Atomic, via the
 // delete_contact_cascade RPC (migration 0047). REFUSES with 409 when the contact
-// has bookings, so financial records are never wiped. Its chat-media files go
-// too (owner decision D21): Storage objects cannot be deleted in SQL, so their
-// keys are read first (if that fails, nothing is deleted: 503, a retry is
-// safe) and the files removed through the Storage API once the rows are gone.
-// What can still stay behind without a row (a remove that fails, a reply lost
-// after the cascade committed, an upload racing the delete) is left to a
-// periodic sweep of unreferenced chat-media objects (tracker 5.3).
+// has bookings, so financial records are never wiped. Its chat-media files and
+// uploaded proposal PDFs go too (owner decision D21): Storage objects cannot
+// be deleted in SQL, so their keys are read first (if that fails, nothing is
+// deleted: 503, a retry is safe) and the files removed through the Storage API
+// once the rows are gone. What can still stay behind without a row (a remove
+// that fails, a reply lost after the cascade committed, an upload racing the
+// delete) is left to a periodic sweep of unreferenced objects (tracker 5.3).
 export async function DELETE(
     _request: Request,
     { params }: { params: Promise<{ phone: string }> }
@@ -181,9 +210,11 @@ export async function DELETE(
         return NextResponse.json({ error: 'Phone number required' }, { status: 400 });
     }
 
-    // Before the rows go: afterwards the keys the messages name are lost.
+    // Before the rows go: afterwards the keys the messages and proposals name
+    // are lost.
     const mediaKeys = await contactMediaKeys(supabase, orgId, phone);
-    if (!mediaKeys) {
+    const proposalKeys = mediaKeys ? await contactProposalKeys(supabase, orgId, phone) : null;
+    if (!mediaKeys || !proposalKeys) {
         return NextResponse.json(
             { error: 'Gagal membaca file media kontak ini. Tidak ada yang dihapus, silakan coba lagi.' },
             { status: 503 }
@@ -221,7 +252,8 @@ export async function DELETE(
         return NextResponse.json({ error: 'Gagal menghapus kontak.' }, { status: 500 });
     }
 
-    if (mediaKeys.length > 0) await removeContactMedia(supabase, mediaKeys);
+    if (mediaKeys.length > 0) await removeContactFiles(supabase, CHAT_MEDIA_BUCKET, mediaKeys);
+    if (proposalKeys.length > 0) await removeContactFiles(supabase, PROPOSALS_BUCKET, proposalKeys);
 
     return NextResponse.json({ ok: true });
 }
