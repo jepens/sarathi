@@ -1379,7 +1379,7 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
                     <DialogHeader>
                         <DialogTitle>Hapus kontak ini?</DialogTitle>
                         <DialogDescription>
-                            Seluruh <strong>chat, memori AI, dan data kontak</strong> untuk{' '}
+                            Seluruh <strong>chat, file media (foto, dokumen, pesan suara), proposal, memori AI, dan data kontak</strong> untuk{' '}
                             <strong>{contactName || phoneNumber}</strong> akan dihapus permanen
                             dan tidak bisa dikembalikan. Bila kontak punya booking, penghapusan
                             ditolak demi menjaga data pesanan.

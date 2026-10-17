@@ -9,7 +9,7 @@ import {
 } from '@/lib/whatsapp/client';
 import { whatsappLogger } from '@/lib/utils/logger';
 import { accessDeniedResponse, requireEnvIntegration } from '@/lib/settings/org-context';
-import { CHAT_MEDIA_BUCKET, CHAT_MEDIA_MAX_BYTES, storageContentType } from '@/lib/storage/chat-media';
+import { CHAT_MEDIA_BUCKET, CHAT_MEDIA_MAX_BYTES, safePhoneSegment, storageContentType } from '@/lib/storage/chat-media';
 
 // Extension for the storage object path — keep the original where sane, else map
 // from a couple of common mimes.
@@ -95,7 +95,7 @@ export async function POST(request: Request) {
         if (file.size > CHAT_MEDIA_MAX_BYTES) {
             whatsappLogger.info('Outbound media above the chat-media size limit: storage copy skipped (D20)');
         } else {
-            const safePhone = phone_number.replace(/[^a-zA-Z0-9._-]/g, '_');
+            const safePhone = safePhoneSegment(phone_number);
             const path = `${orgId}/${safePhone}/${crypto.randomUUID()}.${safeExt(filename, mime)}`;
             const { error: upErr } = await supabase.storage
                 .from(CHAT_MEDIA_BUCKET)
