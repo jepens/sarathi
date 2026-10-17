@@ -19,13 +19,3 @@
 # CONTRACT (tracker 1.11, KEA-4): applied only after this PR's build is live and every dashboard tab is reloaded, so the block stays pending through the merge; delete it when production.txt is refreshed after 0067.
 < bucket chat-media public=t size_limit=- mime=-
 > bucket chat-media public=f size_limit=52428800 mime=image/jpeg,image/png,image/webp,audio/aac,audio/amr,audio/mpeg,audio/mp4,audio/ogg,video/mp4,video/3gpp,application/pdf,text/plain,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/octet-stream
-
-# pending production apply: 0069_whatsapp_integrations_service_role_only
-# (tracker 2.1a, KEA-16: whatsapp_integrations is for the service role only).
-# Compatible with the deployed code (nothing reads the table), so it is
-# applied right after the owner's review; delete these lines when
-# production.txt is refreshed after applying 0069.
-< pol public.whatsapp_integrations "org members manage their whatsapp integration" PERMISSIVE cmd=ALL roles=authenticated using=private.is_org_member(org_id) check=private.is_org_member(org_id)
-< relpriv public.whatsapp_integrations authenticated=rawdDxt
-> pol public.whatsapp_integrations "service_role only" PERMISSIVE cmd=ALL roles=anon,authenticated using=false check=false
-> relpriv public.whatsapp_integrations authenticated=

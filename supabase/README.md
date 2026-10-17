@@ -466,8 +466,8 @@ line to `production.txt`.
   currently holds one pending block, the contract 0067 (the 2 `bucket
   chat-media` lines; applied after the deploy of its PR). Apart from that the
   replay matches production exactly (re-checked 2026-10-17 after applying
-  0068, against a fresh read-only production query: 587 lines, md5
-  `befcf085af6d0caeef0b34ad50bab88a`).
+  0069, against a fresh read-only production query: 587 lines, md5
+  `287d4582fac9a846d1bc3f4bf82e044d`).
 - Not fingerprinted: sequence privileges, column-level privileges, MAINTAIN,
   foreign-table privileges and default privileges (`pg_default_acl`); the
   `relpriv` lines cover only `arwdDxt` on tables and views. Whenever

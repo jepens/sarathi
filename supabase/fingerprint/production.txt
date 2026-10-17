@@ -461,7 +461,7 @@ pol public.rate_limits "service_role only" PERMISSIVE cmd=ALL roles=anon,authent
 pol public.system_message "org members full access" PERMISSIVE cmd=ALL roles=authenticated using=private.is_org_member(org_id) check=private.is_org_member(org_id)
 pol public.vendors "org members full access" PERMISSIVE cmd=ALL roles=authenticated using=private.is_org_member(org_id) check=private.is_org_member(org_id)
 pol public.whatsapp_chats "org members full access" PERMISSIVE cmd=ALL roles=authenticated using=private.is_org_member(org_id) check=private.is_org_member(org_id)
-pol public.whatsapp_integrations "org members manage their whatsapp integration" PERMISSIVE cmd=ALL roles=authenticated using=private.is_org_member(org_id) check=private.is_org_member(org_id)
+pol public.whatsapp_integrations "service_role only" PERMISSIVE cmd=ALL roles=anon,authenticated using=false check=false
 pol public.whatsapp_messages "org members full access" PERMISSIVE cmd=ALL roles=authenticated using=private.is_org_member(org_id) check=private.is_org_member(org_id)
 pol realtime.messages "org members receive org broadcasts" PERMISSIVE cmd=SELECT roles=authenticated using=((extension = 'broadcast'::text) AND (topic = ( SELECT realtime.topic() AS topic)) AND private.is_org_member(private.realtime_topic_org_id(( SELECT realtime.topic() AS topic)))) check=-
 pol storage.objects "chat-media org members" PERMISSIVE cmd=ALL roles=authenticated using=((bucket_id = 'chat-media'::text) AND CASE WHEN ((storage.foldername(name))[1] ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'::text) THEN private.is_org_member(((storage.foldername(name))[1])::uuid) ELSE false END) check=((bucket_id = 'chat-media'::text) AND CASE WHEN ((storage.foldername(name))[1] ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'::text) THEN private.is_org_member(((storage.foldername(name))[1])::uuid) ELSE false END)
@@ -546,7 +546,7 @@ relpriv public.whatsapp_chats anon=
 relpriv public.whatsapp_chats authenticated=rawdDxt
 relpriv public.whatsapp_chats service_role=rawdDxt
 relpriv public.whatsapp_integrations anon=
-relpriv public.whatsapp_integrations authenticated=rawdDxt
+relpriv public.whatsapp_integrations authenticated=
 relpriv public.whatsapp_integrations service_role=rawdDxt
 relpriv public.whatsapp_messages anon=
 relpriv public.whatsapp_messages authenticated=rawdDxt
