@@ -28,7 +28,7 @@
 
 ### 2. 📝 Enhanced Webhook Logging
 
-**Fungsi**: Log detail semua data yang diterima webhook
+**Fungsi**: Log ringkas setiap data yang diterima webhook (tanpa isi pesan, payload, atau nomor utuh; audit KEA-21)
 
 **Cara Akses**:
 - Lihat terminal tempat `npm run dev` berjalan
@@ -36,20 +36,18 @@
 
 **Output Log**:
 ```
-[WhatsApp] Webhook received: {
-  "object": "whatsapp_business_account",
-  "entry": [...],
-  ...
-}
-[WhatsApp] Message details - From: 62812XXXXXXXX, Type: text
-[WhatsApp] Received message from 62812XXXXXXXX: Halo
-[WhatsApp] Message from 62812XXXXXXXX added to queue
+[WhatsApp] Webhook received: object=whatsapp_business_account entries=1 changes=1 fields=messages messages=1 statuses=0
+[WhatsApp] Message details - From: 6281*****789, Type: text
+[WhatsApp] Received text message from 6281*****789 (4 chars)
+[WhatsApp] Message from 6281*****789 added to queue
 ```
+
+Nomor pelanggan selalu disamarkan (4 digit awal + 3 digit akhir) dan wamid tampil sebagai `wamid#h<hash>`; label yang sama berarti nomor atau pesan yang sama. Isi pesan dan payload tidak pernah dicetak.
 
 **Kapan Digunakan**:
 - Cek apakah webhook benar-benar menerima data dari WhatsApp
-- Debug format data yang dikirim WhatsApp
-- Verifikasi nomor telepon pengirim
+- Debug alur pesan (jumlah pesan/status per webhook)
+- Mencocokkan nomor pengirim lewat 4 digit awal + 3 digit akhir
 - Troubleshoot masalah webhook
 
 ---
@@ -124,8 +122,8 @@ WEBHOOK_URL=https://your-domain.com/api/webhook/whatsapp TEST_PHONE=628123456789
 ```bash
 # Kirim pesan dari WhatsApp
 # Lihat terminal, harusnya ada log:
-[WhatsApp] Webhook received: ...
-[WhatsApp] Received message from 62812XXXXXXXX: ...
+[WhatsApp] Webhook received: object=whatsapp_business_account ... messages=1
+[WhatsApp] Received text message from 6281*****789 (N chars)
 ```
 
 **Hasil**:

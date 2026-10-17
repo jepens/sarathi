@@ -29,10 +29,19 @@ describe('webhookSummary', () => {
         expect(line).not.toMatch(/628|Budi|rahasia|100000000000001/);
     });
 
+    it('never writes raw strings from the (still unverified) body: no forged or broken log lines', () => {
+        const line = webhookSummary({
+            object: 'whatsapp_business_account\n[WhatsApp] Admin sent message to 628123456789',
+            entry: [{ changes: [{ field: 'messages\nFAKE LINE' }, { field: 'statuses' }] }],
+        });
+        expect(line).toBe('object=? entries=1 changes=2 fields=?,statuses messages=0 statuses=0');
+        expect(line).not.toMatch(/\n|FAKE|628/);
+    });
+
     it('never throws on an odd body', () => {
         expect(webhookSummary(null)).toBe('object=- entries=0 changes=0 fields=- messages=0 statuses=0');
         expect(webhookSummary({ object: 1, entry: [null, { changes: 'x' }, { changes: [null] }] })).toBe(
-            'object=- entries=3 changes=1 fields=- messages=0 statuses=0'
+            'object=? entries=3 changes=1 fields=- messages=0 statuses=0'
         );
     });
 });

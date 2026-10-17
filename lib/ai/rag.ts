@@ -4,6 +4,7 @@ import { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
 import { getActiveSystemMessage } from './system-message';
 import { getBusinessProfile } from '@/lib/settings/business-profile';
 import { getDefaultOrgId } from '@/lib/settings/org-context';
+import { redactForLog, redactPII } from '@/lib/utils/logger';
 import {
     buildTools,
     checkAvailability,
@@ -215,7 +216,7 @@ export async function createOrder(
                 });
 
             if (createChatError) {
-                console.error('Error creating new contact:', createChatError);
+                console.error('Error creating new contact:', redactForLog(createChatError));
             } else {
                 customerName = 'New Customer';
             }
@@ -243,7 +244,7 @@ export async function createOrder(
         if (!inserted) throw new Error('Order insert returned no row.');
 
         console.log(
-            `Order created for ${phoneNumber} — id=${inserted.id} total Rp ${(repriced.total_amount ?? 0).toLocaleString('id-ID')}`
+            `Order created for ${redactPII(phoneNumber)} — id=${inserted.id} total Rp ${(repriced.total_amount ?? 0).toLocaleString('id-ID')}`
         );
 
         return {
@@ -257,7 +258,7 @@ export async function createOrder(
             })),
         };
     } catch (error) {
-        console.error('Error creating order:', error);
+        console.error('Error creating order:', redactForLog(error));
         // Re-throw error so AI can inform customer
         throw error;
     }

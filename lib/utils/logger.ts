@@ -5,31 +5,59 @@
 
 type LogLevel = 'info' | 'warn' | 'error' | 'debug';
 
-/**
- * Masks what looks like a phone number or another long number id (a wa_id,
- * a BSUID) in log text: every run of 8 or more digits keeps its first 4 and
- * last 3 digits (628123456789 -> 6281*****789), enough to tell two numbers
- * apart in the logs. Customer phone numbers must not sit in plaintext in the
- * container logs (audit KEA-21, UU PDP). Message text and request payloads
- * are never logged at all; this catches the numbers in what is.
- */
-export function redactPII(text: string): string {
-    return text.replace(/\d{8,}/g, (digits) => `${digits.slice(0, 4)}${'*'.repeat(digits.length - 7)}${digits.slice(-3)}`);
+// A WhatsApp message id: 'wamid.' + base64 of a struct that holds the
+// customer's full number in plain digits, so masking digits never sees it.
+const WAMID = /wamid\.[A-Za-z0-9+/=_-]+/g;
+// 8+ digits standing alone: not part of a uuid ('5a11e024-0001-...'), a hash
+// or another identifier made of letters, digits and dashes.
+const LONG_DIGITS = /(?<![0-9A-Za-z-])\d{8,}(?![0-9A-Za-z-])/g;
+
+/** FNV-1a (32 bit) as 8 hex digits: a stable, non-reversible label, the same in every log line. */
+function shortHash(text: string): string {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < text.length; i++) {
+        h ^= text.charCodeAt(i);
+        h = Math.imul(h, 0x01000193) >>> 0;
+    }
+    return h.toString(16).padStart(8, '0');
 }
 
-/** redactPII applied to every string inside a logged value (errors, PostgREST error objects, arrays). */
-function redactValue(value: unknown, depth = 0): unknown {
+/**
+ * Masks customer identifiers in log text (audit KEA-21, UU PDP):
+ * - a wamid becomes 'wamid#h<hash>': the same message keeps the same label
+ *   across its sent / delivered / read lines, but the number inside is gone;
+ * - a phone number or another long number id (wa_id, BSUID) keeps its first
+ *   4 and last 3 digits (628123456789 -> 6281*****789), enough to tell two
+ *   numbers apart.
+ * Message text and request payloads are never logged at all; this catches the
+ * identifiers in what is. Idempotent: redacting twice changes nothing.
+ */
+export function redactPII(text: string): string {
+    return text
+        .replace(WAMID, (id) => `wamid#h${shortHash(id)}`)
+        .replace(LONG_DIGITS, (digits) => `${digits.slice(0, 4)}${'*'.repeat(digits.length - 7)}${digits.slice(-3)}`);
+}
+
+/**
+ * redactPII applied to every string inside a logged value: nested objects,
+ * arrays, PostgREST error objects (their `details` can name a phone number)
+ * and Errors, including `cause`.
+ */
+export function redactForLog(value: unknown, depth = 0): unknown {
     if (typeof value === 'string') return redactPII(value);
     if (value === null || typeof value !== 'object' || depth > 5) return value;
     if (value instanceof Error) {
         const out: Record<string, unknown> = { name: value.name, message: redactPII(value.message) };
         if (value.stack) out.stack = redactPII(value.stack);
-        for (const [k, v] of Object.entries(value)) out[k] = redactValue(v, depth + 1);
+        for (const [k, v] of Object.entries(value)) out[k] = redactForLog(v, depth + 1);
+        if (value.cause !== undefined) out.cause = redactForLog(value.cause, depth + 1);
         return out;
     }
-    if (Array.isArray(value)) return value.map((v) => redactValue(v, depth + 1));
-    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, redactValue(v, depth + 1)]));
+    if (Array.isArray(value)) return value.map((v) => redactForLog(v, depth + 1));
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, redactForLog(v, depth + 1)]));
 }
+
+const redactValue = redactForLog;
 
 interface LogEntry {
     timestamp: string;
