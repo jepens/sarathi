@@ -13,8 +13,10 @@ const h = vi.hoisted(() => ({
     fileText: '' as string,
     downloadError: null as null | { message: string },
     insertErrors: [] as boolean[], // per insert call: true = error
+    committedDespiteError: false, // an insert whose reply was lost but which committed
     removed: [] as string[][],
     inserts: 0,
+    committed: 0,
     generateEmbedding: vi.fn(async () => [0.1, 0.2]),
 }));
 
@@ -29,17 +31,24 @@ const fakeSupabase = {
                         : { data: new Blob([h.fileText]), error: null },
                 remove: async (keys: string[]) => {
                     h.removed.push(keys);
-                    return { data: [], error: null };
+                    return { data: keys.map((name) => ({ name })), error: null };
                 },
             };
         },
     },
     from: (table: string) => {
         expect(table).toBe('documents');
+        // The row check before a removal: select('id').eq(org).eq(source).limit(1).
+        const lookup = {
+            eq: () => lookup,
+            limit: async () => ({ data: Array.from({ length: Math.min(h.committed, 1) }, () => ({ id: 'r' })), error: null }),
+        };
         return {
+            select: () => lookup,
             insert: async () => {
                 const failed = h.insertErrors[h.inserts] ?? false;
                 h.inserts++;
+                if (!failed || h.committedDespiteError) h.committed++;
                 return { error: failed ? { message: 'insert failed' } : null };
             },
         };
@@ -62,8 +71,10 @@ beforeEach(() => {
     h.fileText = '';
     h.downloadError = null;
     h.insertErrors = [];
+    h.committedDespiteError = false;
     h.removed = [];
     h.inserts = 0;
+    h.committed = 0;
     h.generateEmbedding.mockReset();
     h.generateEmbedding.mockImplementation(async () => [0.1, 0.2]);
     vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -107,12 +118,22 @@ describe('POST /api/ingest: no upload without a documents row', () => {
         expect(h.removed).toEqual([[PATH]]);
     });
 
-    it('the first embedding throws: 500 and the object is removed', async () => {
+    it('the first embedding throws: 500 with a fixed message (no internal detail) and the object is removed', async () => {
         h.fileText = 'Satu potongan.';
-        h.generateEmbedding.mockRejectedValueOnce(new Error('OpenAI down'));
+        h.generateEmbedding.mockRejectedValueOnce(new Error('401 Incorrect API key provided: sk-proj-****WXYZ'));
         const res = await ingest();
         expect(res.status).toBe(500);
+        expect(await res.json()).toEqual({ error: 'Gagal memproses dokumen. Silakan coba lagi.' });
         expect(h.removed).toEqual([[PATH]]);
+    });
+
+    it('an insert that reported an error but committed keeps the object (the entry is listed)', async () => {
+        h.fileText = 'Satu potongan.';
+        h.insertErrors = [true];
+        h.committedDespiteError = true;
+        const res = await ingest();
+        expect(res.status).toBe(500);
+        expect(h.removed).toEqual([]);
     });
 
     it('a failure after a row was stored keeps the object (the entry is listed and deletable)', async () => {
