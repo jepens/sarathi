@@ -14,15 +14,3 @@
 #    migration is applied to production with apply_migration, refresh
 #    production.txt and delete these lines in the same commit.
 #
-
-# pending production apply: 0068_realtime_drop_publication_tables
-# (tracker 1.9, KEA-15: supabase_realtime publishes no table any more; live
-# updates go through the private org broadcast of 0064). CONTRACT: applied
-# only AFTER the client of the same PR (OrgRealtimeProvider) is deployed
-# (Easypanel, manual), every dashboard tab is reloaded and
-# realtime.subscription is empty, so the block stays pending through the
-# merge. Delete it when production.txt is refreshed after applying 0068.
-< pub supabase_realtime public.chat_labels
-< pub supabase_realtime public.labels
-< pub supabase_realtime public.whatsapp_chats
-< pub supabase_realtime public.whatsapp_messages

@@ -260,6 +260,16 @@ tenants; only an empty publication closes it.
      `expected-diff.txt`, tracker 1.9 to done. This closes the Realtime half
      of the tenant-2 gate; a second tenant may get real data only once 0067
      (chat-media private) is live as well.
+
+  Done 2026-10-17: probe delivered before the merge; build
+  `rHmYsrHIQbCBiNKtiPV0N` verified (open tabs, `realtime.subscription` 0);
+  0068 applied as version `20261017120623` (stored text = the LF git blob,
+  md5 checked); "Allow public access" turned off through the Management API
+  (`PATCH /v1/projects/{ref}/config/realtime` with `{"private_only": true}`,
+  the same switch as the dashboard; `{"private_only": false}` turns it back
+  on for a rollback). Afterwards an anon public join is refused
+  (`PrivateOnly`), the private org channel still delivers, an open tab
+  reconnected by itself, and step 0 still answers 406 PGRST106.
 - **Tenant-2 rule.** After a second tenant has real data, 0068 is never
   rolled back by re-adding tables to `supabase_realtime` (every signed-in
   user of every org would receive the other orgs' DELETE keys again): roll
@@ -390,11 +400,9 @@ line to `production.txt`.
   (`<` only in production, `>` only in the replay), each with a reason:
   permanent ones, or *pending* lines of a migration not yet applied to
   production (see above). Entries that no longer differ fail as stale. It
-  currently holds one pending block, the contract 0068 (the 4 `< pub
-  supabase_realtime ...` lines; applied after the client deploy). Apart from
-  that the replay matches production exactly (re-checked 2026-10-16 after
-  applying 0066, against a fresh read-only production query: 591 lines, md5
-  `21e9979435c772701da8c85417fba71f`).
+  currently holds no entry: the replay matches production exactly
+  (re-checked 2026-10-17 after applying 0068, against a fresh read-only
+  production query: 587 lines, md5 `befcf085af6d0caeef0b34ad50bab88a`).
 - Not fingerprinted: sequence privileges, column-level privileges, MAINTAIN,
   foreign-table privileges and default privileges (`pg_default_acl`); the
   `relpriv` lines cover only `arwdDxt` on tables and views. Whenever
