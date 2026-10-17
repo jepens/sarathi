@@ -8,8 +8,9 @@ import { join } from 'node:path';
 //   - no session / no membership → refused before any message or Storage call;
 //   - every failure (bad id, no row, null or foreign media_url, signing error)
 //     → the same bare 404, nothing signed, nothing identifying logged;
-//   - success → createSignedUrl(key, 600) on the USER's client, then a 302 to
-//     the signed URL with Cache-Control: private, max-age=300.
+//   - success → createSignedUrl(key, 600 s, or 3600 s for a voice note or a
+//     video) on the USER's client, then a 302 to the signed URL with
+//     Cache-Control: private, max-age=300 and Vary: Cookie.
 // Fake ids and phone segments only.
 
 const ORG = 'aaaaaaaa-0000-4000-8000-00000000000a';
@@ -89,7 +90,7 @@ beforeEach(() => {
     h.calls = [];
     h.tables = [];
     h.buckets = [];
-    h.row = { media_url: PUBLIC_URL };
+    h.row = { media_url: PUBLIC_URL, media_type: 'image' };
     h.rowError = null;
     h.createSignedUrl.mockResolvedValue({ data: { signedUrl: SIGNED_URL }, error: null });
     logs = (['log', 'info', 'warn', 'error'] as const).map((level) =>
@@ -136,12 +137,14 @@ describe('GET /api/chat-media/[id]: success', () => {
         ['a bare key (rows written since 1.11)', KEY],
         ['a signed URL', SIGNED_URL],
     ])('302 to a fresh signed URL for %s', async (_label, mediaUrl) => {
-        h.row = { media_url: mediaUrl };
+        h.row = { media_url: mediaUrl, media_type: 'image' };
         const res = await get(MSG_ID);
 
         expect(res.status).toBe(302);
         expect(res.headers.get('location')).toBe(SIGNED_URL);
         expect(res.headers.get('cache-control')).toBe('private, max-age=300');
+        // A browser must not reuse the redirect once the session cookie changed (sign-out).
+        expect(res.headers.get('vary')).toBe('Cookie');
         // The member's own client signs the key of THEIR org, for 600 s.
         expect(h.buckets).toEqual(['chat-media']);
         expect(h.createSignedUrl).toHaveBeenCalledTimes(1);
@@ -149,12 +152,28 @@ describe('GET /api/chat-media/[id]: success', () => {
         expect(h.createServiceOrServerClient).not.toHaveBeenCalled();
     });
 
-    it('reads only media_url of that id, filtered to the member org', async () => {
+    it.each([
+        ['image', 600],
+        ['document', 600],
+        [null, 600],
+        // A media element sends its later range requests straight to the signed
+        // URL (ChatMediaPlayer renews it), so voice notes and videos get an hour.
+        ['audio', 3600],
+        ['video', 3600],
+    ])('signs a %s for %i s', async (mediaType, seconds) => {
+        h.row = { media_url: KEY, media_type: mediaType };
+        const res = await get(MSG_ID);
+
+        expect(res.status).toBe(302);
+        expect(h.createSignedUrl).toHaveBeenCalledWith(KEY, seconds);
+    });
+
+    it('reads only media_url and media_type of that id, filtered to the member org', async () => {
         await get(MSG_ID);
 
         expect(h.tables).toEqual(['organization_members', 'whatsapp_messages']);
         expect(h.calls.filter((c) => c.startsWith('whatsapp_messages.'))).toEqual([
-            'whatsapp_messages.select("media_url")',
+            'whatsapp_messages.select("media_url, media_type")',
             `whatsapp_messages.eq("org_id","${ORG}")`,
             `whatsapp_messages.eq("id","${MSG_ID}")`,
         ]);
@@ -181,6 +200,8 @@ describe('GET /api/chat-media/[id]: every failure is the same bare 404', () => {
         ["another org's key", { media_url: `${OTHER_ORG}/${PHONE}/x.jpg` }],
         ["another org's public URL", { media_url: `${ORIGIN}/storage/v1/object/public/chat-media/${OTHER_ORG}/${PHONE}/x.jpg` }],
         ['a traversal out of the org folder', { media_url: `${ORG}/../${OTHER_ORG}/x.jpg` }],
+        // storage-js would send the decoded '%3F' unencoded: Storage reads it as '?'.
+        ['a key that still holds an escape after one decode', { media_url: `${ORG}/${PHONE}/a%253Fb.jpg` }],
         ['another bucket', { media_url: `${ORIGIN}/storage/v1/object/public/documents/${KEY}` }],
         ['an unrelated URL', { media_url: `https://example.com/${KEY}` }],
     ])('for %s, without signing', async (_label, row) => {

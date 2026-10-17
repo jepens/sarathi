@@ -18,7 +18,8 @@
 --   * public = false: Storage then serves an object only to a request whose
 --     JWT the policy admits, or through a signed URL. The dashboard renders
 --     /api/chat-media/<message id> (app/api/chat-media/[id]/route.ts), which
---     signs the object for 600 s in the member's own session, so the 0058
+--     signs the object in the member's own session (600 s; voice notes and
+--     videos 1 h, renewed by the player before they run out), so the 0058
 --     policy re-checks the org folder; outbound media reaches Meta by upload
 --     + media id, so delivery never depends on the bucket;
 --   * file_size_limit = 52428800 (50 MiB, the Free plan's global cap; D20):
@@ -53,24 +54,31 @@
 -- 104857600 together with the project's global upload limit (Dashboard >
 -- Storage > Settings; SQL cannot read it) and CHAT_MEDIA_MAX_BYTES.
 --
--- Pre-flip check (read-only; expect both counts equal, i.e. every stored
--- media_url names an existing object):
---   select count(*) as with_media, count(o.id) as resolvable
---     from public.whatsapp_messages m
---     left join storage.objects o
---       on o.bucket_id = 'chat-media'
---      and o.name = case when m.media_url ~ '^https?://'
---                        then regexp_replace(split_part(m.media_url, '?', 1),
---                             '^https?://[^/]+/storage/v1/object/(public|sign)/chat-media/', '')
---                        else m.media_url end
---    where m.media_url is not null;
+-- Pre-flip check (read-only; expect all three counts equal: every stored
+-- media_url names an existing object, by a key in the character set the
+-- route accepts, [A-Za-z0-9._-] after the org folder; 2026-10-17: 23/23/23):
+--   with m as (
+--     select case when media_url ~ '^https?://'
+--                 then regexp_replace(split_part(media_url, '?', 1),
+--                      '^https?://[^/]+/storage/v1/object/(public|sign)/chat-media/', '')
+--                 else media_url end as key
+--       from public.whatsapp_messages
+--      where media_url is not null)
+--   select count(*) as with_media, count(o.id) as resolvable,
+--          count(*) filter (where m.key ~ '^[0-9a-f-]{36}(/[A-Za-z0-9._-]+)+$') as route_safe
+--     from m
+--     left join storage.objects o on o.bucket_id = 'chat-media' and o.name = m.key;
 --
 -- Rollback of the bucket (the code of this PR works with a public bucket too):
 --   update storage.buckets set public = true, file_size_limit = null, allowed_mime_types = null
 --    where id = 'chat-media';
--- If the CODE must also go back to a build before this PR: first rewrite the
--- rows written since the deploy (bare keys) to the public form, then
--- redeploy (the old code needs the bucket public):
+-- If the CODE must also go back to a build before this PR (the old code
+-- renders media_url as a URL and needs the bucket public): redeploy the old
+-- build, confirm its build id, and only THEN rewrite the bare keys to the
+-- public form. This build keeps writing bare keys until the swap, so a
+-- rewrite run only before the redeploy misses the media that arrives while
+-- Easypanel builds. The statement is idempotent (rewritten rows no longer
+-- match), so running it before as well, or twice, is harmless:
 --   update public.whatsapp_messages
 --      set media_url = '<project API URL>/storage/v1/object/public/chat-media/' || media_url
 --    where media_url is not null and media_url !~ '^https?://';

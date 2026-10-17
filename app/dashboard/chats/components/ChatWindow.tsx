@@ -33,6 +33,7 @@ import { EmojiPickerPanel } from './EmojiPicker';
 import { HighlightedText } from './HighlightedText';
 import { QuotedMessage } from './QuotedMessage';
 import { ChatLabelsBar } from './ChatLabelsBar';
+import { ChatMediaPlayer } from './ChatMediaPlayer';
 import {
     applyQuickReplyVars,
     parseSlashQuery,
@@ -1040,10 +1041,9 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
                                             ))}
                                         {msg.media_type === 'audio' &&
                                             (msg.media_url ? (
-                                                <audio
-                                                    controls
-                                                    preload="none"
-                                                    src={chatMediaHref(msg.id)}
+                                                <ChatMediaPlayer
+                                                    messageId={msg.id}
+                                                    kind="audio"
                                                     className="mb-1 h-10 w-56 max-w-full"
                                                 />
                                             ) : (
@@ -1057,10 +1057,9 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
                                             ))}
                                         {msg.media_type === 'video' &&
                                             (msg.media_url ? (
-                                                <video
-                                                    controls
-                                                    preload="metadata"
-                                                    src={chatMediaHref(msg.id)}
+                                                <ChatMediaPlayer
+                                                    messageId={msg.id}
+                                                    kind="video"
                                                     className="mb-1 max-h-64 w-auto max-w-full rounded-md"
                                                 />
                                             ) : (

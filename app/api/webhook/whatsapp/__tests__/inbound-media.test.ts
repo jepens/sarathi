@@ -21,6 +21,8 @@ const h = vi.hoisted(() => ({
     insertError: null as unknown,
     inserts: [] as Array<{ table: string; row: Record<string, unknown> }>,
     rpcs: [] as string[],
+    /** The bucket of every storage.from() call. */
+    buckets: [] as string[],
     logs: [] as unknown[][],
     sendPushToOrg: vi.fn(),
 }));
@@ -43,7 +45,12 @@ function serviceClient() {
             h.rpcs.push(fn);
             return { data: null, error: null };
         },
-        storage: { from: () => ({ upload: h.upload, remove: h.remove }) },
+        storage: {
+            from: (bucket: string) => {
+                h.buckets.push(bucket);
+                return { upload: h.upload, remove: h.remove };
+            },
+        },
     };
 }
 
@@ -117,6 +124,7 @@ beforeEach(() => {
     vi.clearAllMocks();
     h.inserts = [];
     h.rpcs = [];
+    h.buckets = [];
     h.logs = [];
     h.insertError = null;
     h.upload.mockResolvedValue({ data: { path: 'ignored' }, error: null });
@@ -130,6 +138,7 @@ describe('webhook inbound media: the chat-media copy', () => {
         const row = await deliver(inbound('audio', { voice: true, mime_type: 'audio/ogg; codecs=opus' }));
 
         expect(h.upload).toHaveBeenCalledTimes(1);
+        expect(h.buckets).toEqual(['chat-media']); // the private bucket /api/chat-media signs from
         const [path, bytes, options] = h.upload.mock.calls[0];
         expect(path).toMatch(new RegExp(`^${ORG}/${PHONE}/${UUID}\\.ogg$`));
         expect(bytes).toBeInstanceOf(Uint8Array);
@@ -193,5 +202,6 @@ describe('webhook inbound media: the chat-media copy', () => {
 
         await vi.waitFor(() => expect(h.remove).toHaveBeenCalledTimes(1));
         expect(h.remove).toHaveBeenCalledWith([h.upload.mock.calls[0][0]]);
+        expect(h.buckets).toEqual(['chat-media', 'chat-media']); // upload, then remove, same bucket
     });
 });

@@ -387,8 +387,10 @@ deploying a revert commit of `main`.
 
 **Contract 0067 runbook (chat-media private, tracker 1.11, KEA-4; owner
 decisions D18 / D20).** The PR moves every reader to
-`/api/chat-media/<message id>` (a 302 to a signed URL made for 600 s in the
-member's own session, cached privately for 300 s) and makes both writers
+`/api/chat-media/<message id>` (a 302 to a signed URL made in the member's
+own session, cached privately for 300 s with `Vary: Cookie`; 600 s for photos
+and documents, 1 h for voice notes and videos, whose player renews the
+source before it runs out) and makes both writers
 store the bare object key `<org>/<safe phone>/<uuid>.<ext>` instead of the
 public URL; old rows keep their public URL, which the route parses. 0067
 then makes the bucket private with a 50 MiB limit and a 19-type allowlist
@@ -404,12 +406,14 @@ then makes the bucket private with a 50 MiB limit and a 19-type allowlist
 3. With the bucket still public, open a chat with an old image, an old PDF
    and the voice note: each loads through `/api/chat-media/<id>` with a 302
    to `/storage/v1/object/sign/chat-media/...` (browser network panel; the
-   Storage logs show the `object/sign` requests), and the PDF opens inline
-   in a new tab. This also proves signing works in production.
+   Storage logs show the `object/sign` requests), the PDF opens inline in a
+   new tab, and the voice note plays and seeks. This also proves signing
+   works in production.
 4. Send a new image from the dashboard and receive a new inbound image from
    a test phone: both render, and their rows hold a bare key
    (`media_url` starts with the org uuid, no `https://`).
-5. Run the pre-flip check of the 0067 header (read-only): both counts equal.
+5. Run the pre-flip check of the 0067 header (read-only): all three counts
+   equal.
 6. Apply 0067 with `apply_migration` (name `0067_chat_media_private`, the LF
    git blob). Verify `select public, file_size_limit,
    cardinality(allowed_mime_types) from storage.buckets where id =
@@ -428,11 +432,13 @@ null, the chat shows "Salinan tidak disimpan"); after the Pro upgrade
 together with the project's global upload limit and `CHAT_MEDIA_MAX_BYTES`
 (`lib/storage/chat-media.ts`). Rollback: the bucket statement in the 0067
 header restores today's public bucket, and the code of this PR works with it.
-Going back to a build before this PR first needs the rewrite of the bare
-keys written since the deploy (also in the header), because the old code
-renders `media_url` as a URL. After the flip the default is to roll forward
-with a patch build, and once a second tenant has real data the bucket is
-never made public again (above).
+Going back to a build before this PR also needs the rewrite of the bare keys
+(also in the header), because the old code renders `media_url` as a URL: run
+it once the old build is live (confirm the build id), since this build keeps
+writing bare keys until the swap; the statement is idempotent, so an extra
+run before the redeploy is harmless. After the flip the default is to roll
+forward with a patch build, and once a second tenant has real data the
+bucket is never made public again (above).
 
 ## Schema fingerprint (production vs replay)
 

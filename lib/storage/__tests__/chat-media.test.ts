@@ -5,8 +5,13 @@ import {
     CHAT_MEDIA_ALLOWED_MIME,
     CHAT_MEDIA_BUCKET,
     CHAT_MEDIA_MAX_BYTES,
+    CHAT_MEDIA_REDIRECT_MAX_AGE,
+    CHAT_MEDIA_SIGNED_SECONDS,
+    CHAT_MEDIA_STREAM_FRESH_MS,
+    CHAT_MEDIA_STREAM_SIGNED_SECONDS,
     chatMediaHref,
     chatMediaObjectPath,
+    chatMediaSignedSeconds,
     storageContentType,
 } from '@/lib/storage/chat-media';
 import { OUTBOUND_MEDIA_MIMES, classifyMedia } from '@/lib/whatsapp/client';
@@ -65,15 +70,23 @@ describe('chatMediaObjectPath', () => {
     });
 
     it('decodes percent-encoding exactly once', () => {
-        // getPublicUrl encodes the key with encodeURI: a space → %20, a literal % → %25.
-        const raw = `${ORG}/620000000000/nama file 100%.pdf`;
-        expect(publicUrl(encodeURI(raw))).toContain('nama%20file%20100%25.pdf');
-        expect(chatMediaObjectPath(publicUrl(encodeURI(raw)), ORG)).toBe(raw);
-        // Once, not twice: %2520 → %20 (a literal "%20" in the name), not a space.
-        expect(chatMediaObjectPath(publicUrl(`${ORG}/620000000000/a%2520b.pdf`), ORG)).toBe(
-            `${ORG}/620000000000/a%20b.pdf`
-        );
+        expect(chatMediaObjectPath(publicUrl(`${ORG}/620000000000/a%2Db.pdf`), ORG)).toBe(`${ORG}/620000000000/a-b.pdf`);
+        // Once, not twice: %252D → %2D (a literal "%2D", refused below), never '-'.
+        expect(chatMediaObjectPath(publicUrl(`${ORG}/620000000000/a%252Db.pdf`), ORG)).toBeNull();
         expect(chatMediaObjectPath(publicUrl(`${ORG}/620000000000/%E0%A4%A.pdf`), ORG)).toBeNull(); // malformed
+    });
+
+    it("refuses any character outside the writers' set [A-Za-z0-9._-] after the org folder", () => {
+        // storage-js sends the key unencoded, so Storage would read these again.
+        for (const name of ['a%3Fb.jpg', 'a%23b.jpg', 'a%2520b.jpg', 'a%253Fb.jpg', 'nama%20file.pdf', 'a+b.jpg', 'a@b.jpg', 'caf%C3%A9.jpg']) {
+            expect(chatMediaObjectPath(publicUrl(`${ORG}/620000000000/${name}`), ORG), name).toBeNull();
+            expect(chatMediaObjectPath(`${ORG}/620000000000/${name}`, ORG), name).toBeNull();
+        }
+        expect(chatMediaObjectPath(publicUrl(encodeURI(`${ORG}/620000000000/nama file.pdf`)), ORG)).toBeNull();
+        // Everything the writers produce passes: a BSUID-style segment, dots, dashes, underscores.
+        expect(chatMediaObjectPath(`${ORG}/US.1234_abc-9/5e1f0000-0000-4000-8000-000000000001.ogg`, ORG)).toBe(
+            `${ORG}/US.1234_abc-9/5e1f0000-0000-4000-8000-000000000001.ogg`
+        );
     });
 
     it('drops the query string and the fragment', () => {
@@ -144,6 +157,27 @@ describe('migration 0067 matches the code', () => {
         expect(CHAT_MEDIA_MAX_BYTES).toBe(50 * 1024 * 1024);
         expect(sql).toMatch(/set\s+public\s*=\s*false/i);
         expect(sql).toMatch(new RegExp(`where\\s+id\\s*=\\s*'${CHAT_MEDIA_BUCKET}'`));
+    });
+});
+
+describe('signed URL lifetimes', () => {
+    it('signs photos and documents for 10 minutes, voice notes and videos for an hour', () => {
+        expect(chatMediaSignedSeconds('image')).toBe(CHAT_MEDIA_SIGNED_SECONDS);
+        expect(chatMediaSignedSeconds('document')).toBe(CHAT_MEDIA_SIGNED_SECONDS);
+        expect(chatMediaSignedSeconds(null)).toBe(CHAT_MEDIA_SIGNED_SECONDS);
+        expect(chatMediaSignedSeconds('audio')).toBe(CHAT_MEDIA_STREAM_SIGNED_SECONDS);
+        expect(chatMediaSignedSeconds('video')).toBe(CHAT_MEDIA_STREAM_SIGNED_SECONDS);
+        expect([CHAT_MEDIA_SIGNED_SECONDS, CHAT_MEDIA_STREAM_SIGNED_SECONDS]).toEqual([600, 3600]);
+    });
+
+    it('a cached redirect never outlives its token', () => {
+        expect(CHAT_MEDIA_REDIRECT_MAX_AGE).toBeLessThan(CHAT_MEDIA_SIGNED_SECONDS);
+    });
+
+    it('a stream renewed at the end of its fresh window keeps 10 minutes of token, even from a cached redirect', () => {
+        expect(CHAT_MEDIA_STREAM_FRESH_MS).toBe(45 * 60 * 1000);
+        const tokenLeftMs = CHAT_MEDIA_STREAM_SIGNED_SECONDS * 1000 - CHAT_MEDIA_REDIRECT_MAX_AGE * 1000 - CHAT_MEDIA_STREAM_FRESH_MS;
+        expect(tokenLeftMs).toBe(10 * 60 * 1000);
     });
 });
 
