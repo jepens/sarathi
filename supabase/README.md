@@ -24,6 +24,12 @@ tenant data that means at least:
   (anon must not execute anything that reads or writes tenant data);
 - a new storage bucket/policy: `040_storage.test.sql` (bucket settings such
   as chat-media's privacy and limits: `180_chat_media_bucket.test.sql`).
+- a table that keeps tenant secrets (service role only): revoke every table
+  privilege from `anon` and `authenticated` in the migration and add the
+  deny policy, then check both orgs' members with `tests.check_no_privilege`
+  in `010` (every statement refused with 42501 before RLS) and pin the
+  catalog in a dedicated test (`whatsapp_integrations`, 0069:
+  `190_whatsapp_integrations_locked.test.sql`).
 
 **anon gets no table privileges (since 0063).** A table, view or sequence that
 `postgres` creates in `public` (migrations run as `postgres`) gives `anon`
@@ -460,8 +466,8 @@ line to `production.txt`.
   currently holds one pending block, the contract 0067 (the 2 `bucket
   chat-media` lines; applied after the deploy of its PR). Apart from that the
   replay matches production exactly (re-checked 2026-10-17 after applying
-  0068, against a fresh read-only production query: 587 lines, md5
-  `befcf085af6d0caeef0b34ad50bab88a`).
+  0069, against a fresh read-only production query: 587 lines, md5
+  `287d4582fac9a846d1bc3f4bf82e044d`).
 - Not fingerprinted: sequence privileges, column-level privileges, MAINTAIN,
   foreign-table privileges and default privileges (`pg_default_acl`); the
   `relpriv` lines cover only `arwdDxt` on tables and views. Whenever

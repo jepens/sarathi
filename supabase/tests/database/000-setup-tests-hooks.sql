@@ -370,6 +370,47 @@ begin
 end;
 $$;
 
+-- The same for a signed-in role on a table it holds no privilege on (0069:
+-- whatsapp_integrations, which keeps tenant secrets, is for the service role
+-- only): every statement is refused by the privilege check with 42501
+-- "permission denied for table <t>", before RLS is consulted, so the set fails
+-- if a grant comes back (an RLS refusal has another message). Call as the
+-- member. Emits 5 assertions (the first is the precondition that the table
+-- has rows).
+create function tests.check_no_privilege(
+    p_table text,
+    p_cols text,
+    p_vals text,
+    p_set text,
+    p_who text
+) returns setof text
+language plpgsql
+as $$
+declare
+    v_denied text := format('permission denied for table %s', p_table);
+begin
+    return next ok(
+        tests.rows_ignoring_rls(p_table) > 0,
+        format('%s: precondition: the table has rows', p_table));
+    return next throws_ok(
+        format('select 1 from public.%I', p_table),
+        '42501', v_denied,
+        format('%s: %s cannot read (no table privilege)', p_table, p_who));
+    return next throws_ok(
+        format('insert into public.%I (%s) values (%s)', p_table, p_cols, p_vals),
+        '42501', v_denied,
+        format('%s: %s cannot insert (no table privilege)', p_table, p_who));
+    return next throws_ok(
+        format('update public.%I set %s', p_table, p_set),
+        '42501', v_denied,
+        format('%s: %s cannot update (no table privilege)', p_table, p_who));
+    return next throws_ok(
+        format('delete from public.%I', p_table),
+        '42501', v_denied,
+        format('%s: %s cannot delete (no table privilege)', p_table, p_who));
+end;
+$$;
+
 grant execute on all functions in schema tests to anon, authenticated, service_role;
 
 -- Always-green check that the hooks ran (Supabase pgTAP guide pattern).
