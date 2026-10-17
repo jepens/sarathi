@@ -14,6 +14,7 @@ import { handleFlowReply } from '@/lib/whatsapp/flow-response';
 import { CHAT_MEDIA_BUCKET, CHAT_MEDIA_MAX_BYTES, safePhoneSegment, storageContentType } from '@/lib/storage/chat-media';
 
 import { checkVerifyToken } from '@/lib/settings/app-settings';
+import { describeErrorForOps, recordOpsEvent } from '@/lib/ops/events';
 
 // Resolve the canonical contact key for the whatsapp_chats PK.
 //
@@ -369,6 +370,9 @@ export async function POST(request: Request) {
                 const valid = await verifyWhatsAppSignature(rawBody, signature, waCtx.appSecret);
                 if (!valid) {
                     whatsappLogger.warn('Rejected webhook with invalid/missing signature');
+                    await recordOpsEvent(supabase, 'webhook_signature_invalid', {
+                        detail: signature ? 'tanda tangan tidak cocok' : 'header X-Hub-Signature-256 tidak ada',
+                    });
                     return new NextResponse('Forbidden', { status: 403 });
                 }
             }
@@ -778,6 +782,15 @@ export async function POST(request: Request) {
 
     } catch (error) {
         whatsappLogger.error('Error processing webhook', error);
+        // Team alert (3.5): Meta retries the delivery, but a webhook that keeps
+        // failing loses messages once Meta gives up.
+        if (process.env.SUPABASE_SERVICE_ROLE_KEY) {
+            await recordOpsEvent(
+                createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY),
+                'webhook_error',
+                { detail: describeErrorForOps(error) },
+            );
+        }
         return new NextResponse('Internal Server Error', { status: 500 });
     }
 }

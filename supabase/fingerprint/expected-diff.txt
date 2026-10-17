@@ -19,3 +19,33 @@
 # CONTRACT (tracker 1.11, KEA-4): applied only after this PR's build is live and every dashboard tab is reloaded, so the block stays pending through the merge; delete it when production.txt is refreshed after 0067.
 < bucket chat-media public=t size_limit=- mime=-
 > bucket chat-media public=f size_limit=52428800 mime=image/jpeg,image/png,image/webp,audio/aac,audio/amr,audio/mpeg,audio/mp4,audio/ogg,video/mp4,video/3gpp,application/pdf,text/plain,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/octet-stream
+
+# pending production apply: 0070_ops_events
+# (tracker 3.5 minimal: ops events for the team's alert emails; service role
+# only). Expand: nothing uses the table before its PR is deployed; applied
+# after the owner's review. Delete these lines when production.txt is
+# refreshed after applying 0070.
+> col public.ops_events.alerted_at type=timestamp with time zone notnull=f default=- identity=- generated=-
+> col public.ops_events.created_at type=timestamp with time zone notnull=t default=now() identity=- generated=-
+> col public.ops_events.detail type=text notnull=t default=''::text identity=- generated=-
+> col public.ops_events.id type=bigint notnull=t default=- identity=a generated=-
+> col public.ops_events.kind type=text notnull=t default=- identity=- generated=-
+> col public.ops_events.org_id type=uuid notnull=f default=- identity=- generated=-
+> con public.ops_events ops_events_detail_check CHECK ((char_length(detail) <= 500))
+> con public.ops_events ops_events_kind_check CHECK ((kind ~ '^[a-z][a-z0-9_]{0,62}$'::text))
+> con public.ops_events ops_events_org_id_fkey FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
+> con public.ops_events ops_events_pkey PRIMARY KEY (id)
+> fn public.cleanup_old_ops_events() returns=void lang=sql volatile=v secdef=f config=search_path="" owner=postgres body_md5=894541bc78568a49632a3e6231e40e7a
+> fnexec public.cleanup_old_ops_events() anon=f
+> fnexec public.cleanup_old_ops_events() authenticated=f
+> fnexec public.cleanup_old_ops_events() service_role=t
+> idx public.ops_events CREATE INDEX ops_events_created_at_idx ON public.ops_events USING btree (created_at)
+> idx public.ops_events CREATE INDEX ops_events_org_id_idx ON public.ops_events USING btree (org_id)
+> idx public.ops_events CREATE INDEX ops_events_unsent_idx ON public.ops_events USING btree (kind, created_at) WHERE (alerted_at IS NULL)
+> idx public.ops_events CREATE UNIQUE INDEX ops_events_pkey ON public.ops_events USING btree (id)
+> pol public.ops_events "service_role only" PERMISSIVE cmd=ALL roles=anon,authenticated using=false check=false
+> rel public.ops_events kind=r owner=postgres rls=t force_rls=f
+> rel public.ops_events_id_seq kind=S owner=postgres rls=f force_rls=f
+> relpriv public.ops_events anon=
+> relpriv public.ops_events authenticated=
+> relpriv public.ops_events service_role=rawdDxt

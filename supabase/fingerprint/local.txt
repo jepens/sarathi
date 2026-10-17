@@ -53,6 +53,12 @@ col public.message_queue.retries type=integer notnull=t default=0 identity=- gen
 col public.message_queue.status type=text notnull=t default='pending'::text identity=- generated=-
 col public.message_queue.updated_at type=timestamp with time zone notnull=f default=now() identity=- generated=-
 col public.message_queue.wa_message_id type=text notnull=f default=- identity=- generated=-
+col public.ops_events.alerted_at type=timestamp with time zone notnull=f default=- identity=- generated=-
+col public.ops_events.created_at type=timestamp with time zone notnull=t default=now() identity=- generated=-
+col public.ops_events.detail type=text notnull=t default=''::text identity=- generated=-
+col public.ops_events.id type=bigint notnull=t default=- identity=a generated=-
+col public.ops_events.kind type=text notnull=t default=- identity=- generated=-
+col public.ops_events.org_id type=uuid notnull=f default=- identity=- generated=-
 col public.orders.created_at type=timestamp with time zone notnull=f default=now() identity=- generated=-
 col public.orders.customer_name type=text notnull=f default=- identity=- generated=-
 col public.orders.customer_phone type=text notnull=f default=- identity=- generated=-
@@ -230,6 +236,10 @@ con public.labels labels_org_id_id_key UNIQUE (org_id, id)
 con public.labels labels_pkey PRIMARY KEY (id)
 con public.message_queue message_queue_org_id_fkey FOREIGN KEY (org_id) REFERENCES organizations(id)
 con public.message_queue message_queue_pkey PRIMARY KEY (id)
+con public.ops_events ops_events_detail_check CHECK ((char_length(detail) <= 500))
+con public.ops_events ops_events_kind_check CHECK ((kind ~ '^[a-z][a-z0-9_]{0,62}$'::text))
+con public.ops_events ops_events_org_id_fkey FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
+con public.ops_events ops_events_pkey PRIMARY KEY (id)
 con public.orders orders_org_customer_phone_fkey FOREIGN KEY (org_id, customer_phone) REFERENCES whatsapp_chats(org_id, phone_number)
 con public.orders orders_org_id_fkey FOREIGN KEY (org_id) REFERENCES organizations(id)
 con public.orders orders_pkey PRIMARY KEY (id)
@@ -289,6 +299,7 @@ fn private.is_org_member(check_org uuid) returns=boolean lang=sql volatile=s sec
 fn private.realtime_topic_org_id(p_topic text) returns=uuid lang=sql volatile=i secdef=f config=search_path="" owner=postgres body_md5=c259bedfefd90dbe69f92d1c1891b720
 fn public.bump_unread(p_org uuid, p_phone text) returns=void lang=sql volatile=v secdef=t config=search_path=public, pg_temp owner=postgres body_md5=801a5b00f2d861e5f1cf8c494ca28d1a
 fn public.claim_queue_jobs(p_limit integer, p_stale_seconds integer, p_debounce_seconds integer) returns=SETOF message_queue lang=plpgsql volatile=v secdef=t config=search_path="" owner=postgres body_md5=99a6fdfaf148a6f605bdb985f5f6585d
+fn public.cleanup_old_ops_events() returns=void lang=sql volatile=v secdef=f config=search_path="" owner=postgres body_md5=894541bc78568a49632a3e6231e40e7a
 fn public.cleanup_old_queue_entries() returns=void lang=plpgsql volatile=v secdef=f config=search_path=public owner=postgres body_md5=a7d64dbb496e09e97c364d3192821b7d
 fn public.cleanup_old_rate_limits() returns=void lang=plpgsql volatile=v secdef=f config=search_path=public owner=postgres body_md5=a6d1df4122575a9aa573d126891a17ea
 fn public.cleanup_vendor_on_untag() returns=trigger lang=plpgsql volatile=v secdef=t config=search_path="" owner=postgres body_md5=e7fd5cbdf2d558909f82057d3fdd1f2b
@@ -319,6 +330,9 @@ fnexec public.bump_unread(p_org uuid, p_phone text) service_role=t
 fnexec public.claim_queue_jobs(p_limit integer, p_stale_seconds integer, p_debounce_seconds integer) anon=f
 fnexec public.claim_queue_jobs(p_limit integer, p_stale_seconds integer, p_debounce_seconds integer) authenticated=f
 fnexec public.claim_queue_jobs(p_limit integer, p_stale_seconds integer, p_debounce_seconds integer) service_role=t
+fnexec public.cleanup_old_ops_events() anon=f
+fnexec public.cleanup_old_ops_events() authenticated=f
+fnexec public.cleanup_old_ops_events() service_role=t
 fnexec public.cleanup_old_queue_entries() anon=t
 fnexec public.cleanup_old_queue_entries() authenticated=t
 fnexec public.cleanup_old_queue_entries() service_role=t
@@ -384,6 +398,10 @@ idx public.message_queue CREATE INDEX idx_message_queue_status ON public.message
 idx public.message_queue CREATE INDEX message_queue_org_id_idx ON public.message_queue USING btree (org_id)
 idx public.message_queue CREATE UNIQUE INDEX message_queue_pkey ON public.message_queue USING btree (id)
 idx public.message_queue CREATE UNIQUE INDEX uniq_message_queue_org_wamid ON public.message_queue USING btree (org_id, wa_message_id) WHERE (wa_message_id IS NOT NULL)
+idx public.ops_events CREATE INDEX ops_events_created_at_idx ON public.ops_events USING btree (created_at)
+idx public.ops_events CREATE INDEX ops_events_org_id_idx ON public.ops_events USING btree (org_id)
+idx public.ops_events CREATE INDEX ops_events_unsent_idx ON public.ops_events USING btree (kind, created_at) WHERE (alerted_at IS NULL)
+idx public.ops_events CREATE UNIQUE INDEX ops_events_pkey ON public.ops_events USING btree (id)
 idx public.orders CREATE INDEX idx_orders_created_at ON public.orders USING btree (created_at DESC)
 idx public.orders CREATE INDEX idx_orders_customer_phone ON public.orders USING btree (customer_phone)
 idx public.orders CREATE INDEX idx_orders_event_date ON public.orders USING btree (event_date) WHERE (event_date IS NOT NULL)
@@ -450,6 +468,7 @@ pol public.documents "org members full access" PERMISSIVE cmd=ALL roles=authenti
 pol public.kb_sources "org members full access" PERMISSIVE cmd=ALL roles=authenticated using=private.is_org_member(org_id) check=private.is_org_member(org_id)
 pol public.labels "org members full access" PERMISSIVE cmd=ALL roles=authenticated using=private.is_org_member(org_id) check=private.is_org_member(org_id)
 pol public.message_queue "service_role only" PERMISSIVE cmd=ALL roles=anon,authenticated using=false check=false
+pol public.ops_events "service_role only" PERMISSIVE cmd=ALL roles=anon,authenticated using=false check=false
 pol public.orders "org members full access" PERMISSIVE cmd=ALL roles=authenticated using=private.is_org_member(org_id) check=private.is_org_member(org_id)
 pol public.organization_members "read own memberships" PERMISSIVE cmd=SELECT roles=authenticated using=(user_id = ( SELECT auth.uid() AS uid)) check=-
 pol public.organizations "members read their org" PERMISSIVE cmd=SELECT roles=authenticated using=private.is_org_member(id) check=-
@@ -474,6 +493,8 @@ rel public.documents kind=r owner=postgres rls=t force_rls=f
 rel public.kb_sources kind=r owner=postgres rls=t force_rls=f
 rel public.labels kind=r owner=postgres rls=t force_rls=f
 rel public.message_queue kind=r owner=postgres rls=t force_rls=f
+rel public.ops_events kind=r owner=postgres rls=t force_rls=f
+rel public.ops_events_id_seq kind=S owner=postgres rls=f force_rls=f
 rel public.orders kind=r owner=postgres rls=t force_rls=f
 rel public.organization_members kind=r owner=postgres rls=t force_rls=f
 rel public.organizations kind=r owner=postgres rls=t force_rls=f
@@ -509,6 +530,9 @@ relpriv public.labels service_role=rawdDxt
 relpriv public.message_queue anon=
 relpriv public.message_queue authenticated=rawdDxt
 relpriv public.message_queue service_role=rawdDxt
+relpriv public.ops_events anon=
+relpriv public.ops_events authenticated=
+relpriv public.ops_events service_role=rawdDxt
 relpriv public.orders anon=
 relpriv public.orders authenticated=rawdDxt
 relpriv public.orders service_role=rawdDxt

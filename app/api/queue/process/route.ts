@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { processQueue } from '@/lib/whatsapp/queue-db';
 import { maybeSendFollowupDigest } from '@/lib/followup/digest';
 import { whatsappLogger } from '@/lib/utils/logger';
+import { maybeSendOpsAlerts } from '@/lib/ops/alerts';
 
 /**
  * Queue worker endpoint
@@ -53,6 +54,15 @@ export async function GET(request: Request) {
             whatsappLogger.error('Follow-up digest check failed', digestError);
         }
 
+        // Team alerts (tracker 3.5): at most one email per kind per hour. Never
+        // let it break the queue.
+        try {
+            const alert = await maybeSendOpsAlerts(supabase);
+            if (alert.sent) whatsappLogger.info(`Ops alert emailed: ${alert.kinds.join(', ')}`);
+        } catch (alertError) {
+            whatsappLogger.error('Ops alert check failed', alertError);
+        }
+
         // Prune old completed/failed queue rows (and stale rate-limit rows) so
         // the table and the wamid idempotency indexes don't grow unbounded.
         // Guarded to ~once/hour (this endpoint runs every minute); never let it
@@ -62,6 +72,7 @@ export async function GET(request: Request) {
             try {
                 await supabase.rpc('cleanup_old_queue_entries');
                 await supabase.rpc('cleanup_old_rate_limits');
+                await supabase.rpc('cleanup_old_ops_events');
                 whatsappLogger.info('Hourly queue/rate-limit cleanup done');
             } catch (cleanupError) {
                 whatsappLogger.error('Queue cleanup failed', cleanupError);
