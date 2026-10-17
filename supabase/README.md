@@ -204,7 +204,11 @@ tenants; only an empty publication closes it.
   opened while the socket is still disconnecting retries `connect()`. A
   connect attempt still pending a whole stall period later (a network that
   swallows packets) is closed and redone, like realtime-js does after a
-  heartbeat timeout, and so is a pending one when the tab wakes up. Views
+  heartbeat timeout, and so is a pending one when the tab wakes up. A
+  re-create runs one task after the status callback that asked for it:
+  realtime-js can close a channel from inside its own rejoin, and dropping
+  it right there would leave a stray rejoining channel that closes every
+  new one (found in review round 4; simulated with realtime-js 2.86). Views
   that also apply rows by id (the open chat, Bookings) guard their
   whole-list reads (`lib/realtime/list-guard.ts`), so a slow read never
   undoes a newer merge or delete. `useOrgRealtimeStatus()` gives `live` / `paused`; the console logs

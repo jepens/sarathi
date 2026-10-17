@@ -96,6 +96,10 @@ class FakeChannel implements OrgChannel {
     statusCallback?: (status: string, err?: Error) => void;
     messageCallback?: (message: unknown) => void;
     removed = false;
+    /** Inside realtime-js's own _rejoin (see selfLeaveDuringRejoin). */
+    inRejoin = false;
+    /** Dropped but still 'joining' with a live rejoin timer: it would close every later channel of the topic. */
+    zombie = false;
     constructor(
         readonly socket: FakeSocket,
         readonly topic: string,
@@ -112,6 +116,9 @@ class FakeChannel implements OrgChannel {
         return this;
     }
     async unsubscribe() {
+        // An unsubscribe from outside the rejoin cancels the resent join and
+        // the rejoin timer (realtime-js: joinPush.destroy, rejoinTimer.reset).
+        if (!this.inRejoin) this.zombie = false;
         this.socket.push(`leave ${this.topic}`);
         this.removed = true;
         this.socket.channels = this.socket.channels.filter((c) => c !== this);
@@ -121,6 +128,18 @@ class FakeChannel implements OrgChannel {
     /** What the server / realtime-js reports for this channel. */
     status(status: string, err?: Error) {
         this.statusCallback?.(status, err);
+    }
+    /**
+     * realtime-js 2.86 when a rejoin reply is late: _rejoinUntilConnected ->
+     * _rejoin -> socket._leaveOpenTopic(topic) finds this very channel
+     * (joining) and unsubscribes it (CLOSED to the callback); then _rejoin
+     * goes on: state 'joining', the join is resent, the rejoin timer runs.
+     */
+    selfLeaveDuringRejoin() {
+        this.inRejoin = true;
+        void this.unsubscribe();
+        this.inRejoin = false;
+        this.zombie = true;
     }
     broadcast(message: unknown) {
         this.messageCallback?.(message);
@@ -281,6 +300,23 @@ describe('startOrgChannel', () => {
         expect(events).toEqual([]);
         await vi.advanceTimersByTimeAsync(60_000);
         expect(channels).toHaveLength(2);
+    });
+
+    it('a channel realtime-js closes inside its own rejoin is dropped one task later, so no zombie survives', async () => {
+        const { client, socket, channels } = fakeClient();
+        const { statuses } = start(client);
+        await vi.advanceTimersByTimeAsync(0);
+        socket.opened();
+        channels[0].status('SUBSCRIBED');
+
+        channels[0].selfLeaveDuringRejoin();
+        expect(channels[0].zombie).toBe(true); // realtime-js went on with the dropped channel
+        await vi.advanceTimersByTimeAsync(0);
+        expect(channels[0].zombie).toBe(false); // the provider's later unsubscribe cancelled that rejoin
+        await vi.advanceTimersByTimeAsync(1000);
+        expect(channels).toHaveLength(2);
+        channels[1].status('SUBSCRIBED');
+        expect(statuses).toEqual(['live', 'paused', 'live']);
     });
 
     it('backs off 1 s, 2 s, 4 s ... while the re-created channels keep closing, and resets after a join', async () => {
@@ -484,6 +520,23 @@ describe('startOrgChannel', () => {
         socket.opened();
         channels[1].status('SUBSCRIBED');
         expect(second.statuses).toEqual(['live']);
+    });
+
+    it('stop() during a re-create backoff still closes the socket (no channel left)', async () => {
+        const { client, socket, channels } = fakeClient();
+        const { controller } = start(client);
+        await vi.advanceTimersByTimeAsync(0);
+        socket.opened();
+        channels[0].status('SUBSCRIBED');
+        channels[0].status('CLOSED');
+        await vi.advanceTimersByTimeAsync(300); // inside the 1 s backoff: no channel
+        expect(socket.state).toBe('open');
+        controller.stop();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(client.removeChannel).toHaveBeenCalledWith(channels[0]);
+        expect(socket.disconnects).toBe(1);
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(channels).toHaveLength(1);
     });
 
     it('stop() during a backoff or before the first join creates no channel', async () => {

@@ -271,7 +271,9 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
             .eq('org_id', orgId)
             .eq('phone_number', phoneNumber)
             .order('created_at', { ascending: true });
-        if (phoneRef.current !== phoneNumber) return; // another chat is open now
+        // Another chat is open now, or this chat was left and opened again (a
+        // new guard): this read belongs to an earlier visit.
+        if (phoneRef.current !== phoneNumber || listGuardRef.current !== guard) return;
 
         if (error) {
             console.error('Error fetching messages:', error);

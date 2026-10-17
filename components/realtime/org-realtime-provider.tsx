@@ -147,6 +147,8 @@ export function startOrgChannel(
     let followupTimer: ReturnType<typeof setTimeout> | undefined;
     // The socket connection seen 'connecting' at the last stall check.
     let connectingConn: unknown = null;
+    // The last channel a re-create dropped (see stop()).
+    let retired: OrgChannel | null = null;
     let status: OrgRealtimeStatus = 'connecting';
 
     const report = (next: OrgRealtimeStatus, detail: string) => {
@@ -247,6 +249,7 @@ export function startOrgChannel(
         if (stopped) return;
         const ch = client.channel(topic, { config: { private: true } });
         channel = ch;
+        retired = null;
         failures = 0;
         ch.on('broadcast', { event: '*' }, (message) => {
             if (ch !== channel) return;
@@ -261,12 +264,32 @@ export function startOrgChannel(
         clearTimers();
         const old = channel;
         channel = null;
-        if (old) await drop(old, 'unsubscribe');
+        if (old) {
+            await drop(old, 'unsubscribe');
+            // Kept for stop(): during the backoff there is no channel, and
+            // removing this one is what closes the socket on unmount.
+            retired = old;
+        }
         if (stopped) return;
         const delay = rejoinDelay(attempt);
         attempt += 1;
         console.info(`[realtime] ${topic} re-joining in ${delay / 1000} s`);
         retryTimer = setTimeout(() => void open(), delay);
+    };
+
+    // A status callback runs inside realtime-js (e.g. its own rejoin closing
+    // the channel through _leaveOpenTopic); re-creating right there lets that
+    // call go on with the dropped channel (state 'joining', unlisted) and its
+    // rejoin timer later closes every new channel of the topic. One task
+    // later, the drop cancels that rejoin for good.
+    let recreateScheduledFor: OrgChannel | null = null;
+    const recreateSoon = (ch: OrgChannel) => {
+        if (recreateScheduledFor === ch) return;
+        recreateScheduledFor = ch;
+        setTimeout(() => {
+            recreateScheduledFor = null;
+            if (!stopped && ch === channel) void recreate();
+        }, 0);
     };
 
     const onChannelStatus = (ch: OrgChannel, st: string, err?: Error) => {
@@ -287,7 +310,7 @@ export function startOrgChannel(
         }
         report('paused', err?.message ? `${st}: ${err.message}` : st);
         if (st === 'CLOSED') {
-            void recreate();
+            recreateSoon(ch);
             return;
         }
         // CHANNEL_ERROR / TIMED_OUT: realtime-js rejoins by itself. Re-create
@@ -296,7 +319,7 @@ export function startOrgChannel(
         if (socket.isConnected()) {
             failures += 1;
             if (failures >= RECREATE_AFTER_FAILURES) {
-                void recreate();
+                recreateSoon(ch);
                 return;
             }
         }
@@ -324,8 +347,11 @@ export function startOrgChannel(
             clearTimers();
             clearTimeout(followupTimer);
             followupTimer = undefined;
-            const old = channel;
+            // During a re-create backoff there is no channel: removing the
+            // retired one still closes the socket when no channel is left.
+            const old = channel ?? retired;
             channel = null;
+            retired = null;
             if (old) void drop(old, 'remove');
         },
     };
