@@ -29,6 +29,7 @@ vi.mock('@/components/nav-progress', () => ({ NavProgress: () => null }));
 vi.mock('@/components/notifications/notification-provider', () => ({
     NotificationProvider: () => null,
 }));
+vi.mock('@/components/realtime/org-realtime-provider', () => ({ OrgRealtimeProvider: () => null }));
 vi.mock('@/components/current-org-provider', () => ({ CurrentOrgProvider: () => null }));
 
 import DashboardLayout from '@/app/dashboard/layout';

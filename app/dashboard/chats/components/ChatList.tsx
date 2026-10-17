@@ -2,6 +2,8 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { createClient } from '@/lib/supabase/client';
+import { useCurrentOrgId } from '@/components/current-org-provider';
+import { useOrgRefetch } from '@/components/realtime/org-realtime-provider';
 import { Input } from '@/components/ui/input';
 import { Search, Clock, Store, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -21,6 +23,7 @@ interface Chat {
 }
 
 const WINDOW_MS = 24 * 60 * 60 * 1000; // Meta 24-hour customer service window
+const LABEL_TABLES = ['labels', 'chat_labels'] as const;
 
 // Returns true when free-form replies are blocked by Meta — i.e. the customer
 // either never messaged us (no window ever opened) or last replied >24h ago.
@@ -54,14 +57,22 @@ export function ChatList({ selectedPhone, onSelect }: ChatListProps) {
     const [labelsByPhone, setLabelsByPhone] = useState<Map<string, Label[]>>(new Map());
     const [activeLabelId, setActiveLabelId] = useState<string | null>(null);
     const supabase = createClient();
+    // The org of the tab's live channel: every read below is scoped to it
+    // (RLS admits the member's orgs; this keeps lists and events in step).
+    const orgId = useCurrentOrgId();
 
     const fetchChats = useCallback(async () => {
+        if (!orgId) {
+            setLoading(false);
+            return;
+        }
         const { data, error } = await supabase
             .from('whatsapp_chats')
             // Only conversations that actually exist. Manually added / imported
             // leads have last_message_at = null until they message us, so they
             // stay out of the Inbox (they live in Pipeline / Contacts instead).
             .select('*')
+            .eq('org_id', orgId)
             .not('last_message_at', 'is', null)
             .order('last_message_at', { ascending: false });
 
@@ -71,14 +82,15 @@ export function ChatList({ selectedPhone, onSelect }: ChatListProps) {
             setChats(data || []);
         }
         setLoading(false);
-    }, [supabase]);
+    }, [supabase, orgId]);
 
     const fetchLabelData = useCallback(async () => {
+        if (!orgId) return;
         // Labels are few — one query. Assignments scale with chats × labels and
         // can exceed PostgREST's default 1000-row cap; page through them so the
         // chips + filter stay complete instead of silently truncating (a dropped
         // assignment would make a labeled chat vanish from its filter).
-        const labelsRes = await supabase.from('labels').select('id, name, color');
+        const labelsRes = await supabase.from('labels').select('id, name, color').eq('org_id', orgId);
         const sorted = sortLabels(labelsRes.data ?? []);
         setLabels(sorted);
         const byId = new Map(sorted.map((l) => [l.id, l] as const));
@@ -89,6 +101,7 @@ export function ChatList({ selectedPhone, onSelect }: ChatListProps) {
             const { data, error } = await supabase
                 .from('chat_labels')
                 .select('phone_number, label_id')
+                .eq('org_id', orgId)
                 .range(from, from + PAGE - 1);
             if (error || !data) break;
             for (const row of data) {
@@ -103,27 +116,13 @@ export function ChatList({ selectedPhone, onSelect }: ChatListProps) {
         // Stable per-row order (by name) regardless of assignment insert order.
         for (const [phone, arr] of byPhone) byPhone.set(phone, sortLabels(arr));
         setLabelsByPhone(byPhone);
-    }, [supabase]);
+    }, [supabase, orgId]);
 
     useEffect(() => {
         const load = async () => {
             await Promise.all([fetchChats(), fetchLabelData()]);
         };
         load();
-
-        // Subscribe to real-time changes (chats + labels + assignments).
-        const channel = supabase
-            .channel('whatsapp_chats_changes')
-            .on('postgres_changes', { event: '*', schema: 'public', table: 'whatsapp_chats' }, () => {
-                fetchChats();
-            })
-            .on('postgres_changes', { event: '*', schema: 'public', table: 'labels' }, () => {
-                fetchLabelData();
-            })
-            .on('postgres_changes', { event: '*', schema: 'public', table: 'chat_labels' }, () => {
-                fetchLabelData();
-            })
-            .subscribe();
 
         // Polling fallback - refresh every 30 seconds
         const pollInterval = setInterval(() => {
@@ -132,10 +131,14 @@ export function ChatList({ selectedPhone, onSelect }: ChatListProps) {
         }, 30000);
 
         return () => {
-            supabase.removeChannel(channel);
             clearInterval(pollInterval);
         };
-    }, [fetchChats, fetchLabelData, supabase]);
+    }, [fetchChats, fetchLabelData]);
+
+    // Live: chats + labels + assignments of the org, from the org Realtime bus
+    // (coalesced refetch on every change and every RESYNC).
+    useOrgRefetch('whatsapp_chats', fetchChats);
+    useOrgRefetch(LABEL_TABLES, fetchLabelData);
 
     // Derive (don't store) the effective filter: a selection pointing at a
     // since-deleted label is treated as "show all", so we never need a

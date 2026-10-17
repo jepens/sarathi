@@ -41,7 +41,9 @@ off, a policy on an org_id table is not org-scoped (`is_org_member(...)`; a
 policy scoped only to `user_id = auth.uid()` must be on the reviewed allowlist
 in guard 4, so e.g. `auth.uid() IS NOT NULL` fails), a SECURITY DEFINER
 function is executable by anon or is new to the reviewed list for
-`authenticated`, an app function has no pinned `search_path`, anon holds
+`authenticated`, an app function has no pinned `search_path`, the
+`supabase_realtime` publication publishes any table, of any schema (guard 10,
+since the contract 0068), anon holds
 any privilege on a table, view or sequence in `public` (guard 11), a
 `realtime.messages` policy is more than "members receive their joined org
 topic" (guard 12, see "Realtime org bus" below) or a unique key on an org_id
@@ -119,14 +121,17 @@ stops the `supabase_*_sarathi` containers; never use `--all`.
   (production's default is `now()`, newer Realtime images use
   `clock_timestamp()`).
 
-## Realtime org bus (0064)
+## Realtime org bus (0064 expand, client, 0068 contract)
 
-Live dashboard updates are moving from `postgres_changes` to ONE private
-Broadcast topic per org, `org:<org uuid>` (lower-case uuid): 0064 is the
-expand step; the client (one org channel per tab) and the contract 0068
-(empty `supabase_realtime`) follow. Reason (KEA-15): `realtime.apply_rls`
-sends the key columns of every DELETE to every subscriber of every org, and
-filters chosen by the client do not isolate tenants.
+Live dashboard updates use ONE private Broadcast topic per org,
+`org:<org uuid>` (lower-case uuid), instead of Postgres Changes
+(`postgres_changes` on the `supabase_realtime` publication). 0064 is the
+expand step (applied 2026-10-16); the client (one org channel per tab, below)
+and the contract 0068 (empty `supabase_realtime`) ship in one PR, and 0068 is
+applied only after that build is live (runbook below). Reason (KEA-15):
+`realtime.apply_rls` sends the key columns of every DELETE to every
+subscriber of every org, and filters chosen by the client do not isolate
+tenants; only an empty publication closes it.
 
 - **Who receives.** The only policy on `realtime.messages`, "org members
   receive org broadcasts", is SELECT for `authenticated` on broadcast rows
@@ -164,8 +169,7 @@ filters chosen by the client do not isolate tenants.
   needs `"v": 2`.
 - A new table the dashboard shows live gets the same three triggers and a
   row in the trigger check of `150`; never add it to the `supabase_realtime`
-  publication (the contract migration 0068, after the client deploy,
-  empties it).
+  publication (guard 10 of `070` fails: 0068 emptied it).
 - **Verify after applying 0064** (read-only): 15 rows in `pg_trigger` with
   `tgname like 'trg_org_broadcast_%'`; exactly one policy on
   `realtime.messages`; `private.broadcast_org_changes` is SECURITY DEFINER
@@ -173,6 +177,94 @@ filters chosen by the client do not isolate tenants.
   `select count(*), count(distinct topic) from realtime.messages where topic
   like 'org:%' and inserted_at > now() - interval '15 minutes'` returns rows
   on one topic, and the queue jobs still complete (writes unaffected).
+- **Client: one channel per tab.** `components/realtime/org-realtime-provider.tsx`
+  (`OrgRealtimeProvider`, mounted in `app/dashboard/layout.tsx` inside
+  `CurrentOrgProvider`) is the only code that opens a Realtime channel
+  (`lib/realtime/__tests__/realtime-usage.test.ts` also fails on any
+  `postgres_changes`): after `realtime.setAuth()` it joins
+  `org:<orgId>` with `{ config: { private: true } }`, no channel without an
+  org. Views subscribe with `useOrgRealtime(tables, handler)` or
+  `useOrgRefetch(tables, refetch)` (coalesced: 400 ms quiet, at most every
+  2 s) and refetch through PostgREST with `.eq('org_id', orgId)`, under
+  RLS; a DELETE that names its ids drops those rows (the open chat,
+  Bookings), a truncated event refetches. The ChatList (30 s) and ChatWindow
+  (10 s) polls stay as a safety net. Every view gets a RESYNC on every
+  SUBSCRIBED (the first one included) and again 3 s later, when the tab
+  becomes visible and on `online`. realtime-js reconnects the socket and
+  rejoins an errored channel by itself. The provider re-creates the channel
+  (unsubscribe, setAuth, a new channel after 1 s, 2 s, 4 s ... 30 s) when the
+  server closes it (CLOSED: an expired token, revoked access, a rate limit;
+  realtime-js never rejoins a closed channel), after 3 failed joins while the
+  socket is connected, or when no join happened 20 s after a failure on a
+  connected socket. It never re-creates while the socket is down (each
+  re-creation would leave a join and a leave in realtime-js's send buffer,
+  flushed in one burst on reconnect); a socket drop reports CHANNEL_ERROR
+  twice and does not count as a failed join. Only unmounting uses
+  removeChannel (it closes the socket with the last channel); a channel
+  opened while the socket is still disconnecting retries `connect()`. A
+  connect attempt still pending a whole stall period later (a network that
+  swallows packets) is closed and redone, like realtime-js does after a
+  heartbeat timeout, and so is a pending one when the tab wakes up. A
+  re-create runs one task after the status callback that asked for it:
+  realtime-js can close a channel from inside its own rejoin, and dropping
+  it right there would leave a stray rejoining channel that closes every
+  new one (found in review round 4; simulated with realtime-js 2.86). Views
+  that also apply rows by id (the open chat, Bookings) guard their
+  whole-list reads (`lib/realtime/list-guard.ts`), so a slow read never
+  undoes a newer merge or delete. `useOrgRealtimeStatus()` gives `live` / `paused`; the console logs
+  status changes only (`[realtime] org:<uuid> live (SUBSCRIBED)`), never
+  payloads. Local end-to-end check (Realtime v2.143.4, supabase-js 2.86):
+  member join SUBSCRIBED, a label insert + delete as the member delivers
+  exactly two v1 messages without any text, a whatsapp_chats write carries
+  `ids: []` and no phone; another org's topic, anon and `org:not-a-uuid` are
+  refused ("Unauthorized: You do not have permissions to read from this
+  Channel topic"); a public channel with the same name receives nothing; at
+  token expiry the server sends "Token has expired" and closes the channel,
+  and the provider re-joins with a fresh token. The first join of an idle
+  Realtime tenant starts its broadcast replication: writes in that first
+  ~0.5 s were not delivered; the second RESYNC 3 s after every join reads
+  them.
+- **Contract 0068 runbook** (the same steps, with the same numbers, as in the
+  migration header):
+  0. the Data API must refuse the realtime schema: an anon
+     `GET /rest/v1/subscription` with `Accept-Profile: realtime` answers 406
+     PGRST106 (checked 2026-10-16); re-check it before any rollback;
+  1. before the merge, the first production check of private delivery:
+     either as a team-controlled test-tenant account (join `org:<test org>`
+     privately and expect SUBSCRIBED, create + delete a label and expect two
+     v1 broadcasts, join the seed org's topic and expect CHANNEL_ERROR), or,
+     with the owner's approval, a delivery probe: a service-role client joins
+     `org:<seed org>` privately and receives one `realtime.send` probe
+     message (no app data is written; authorization itself is covered by the
+     local end-to-end run and `150`);
+  2. merge; deploy this PR in its own Easypanel build (not together with
+     another contract such as the chat-media contract 0067), confirm the
+     build id changed, smoke-test with two tabs (SUBSCRIBED in the console,
+     inbox + open chat + alert on an inbound message, a label toggle across
+     tabs, a contact rename, a booking in Bookings);
+  3. ask every user to reload every open dashboard tab; `select count(*) from
+     realtime.subscription` must be 0 (no connected Postgres Changes
+     subscriber left). 0 does not prove that no old tab exists: a sleeping
+     laptop or a frozen mobile tab holds no socket and no row, and wakes up
+     without live updates after 0068 until it is reloaded;
+  4. apply 0068; `select count(*) from pg_publication_tables where pubname =
+     'supabase_realtime'` must be 0; repeat the smoke test, and ask every user
+     once more to reload any dashboard tab opened before the deploy. For the
+     next days, a failed Postgres Changes subscription in the Realtime logs
+     ("Unable to subscribe to changes ...") is an old tab to reload;
+  5. the owner turns off "Allow public access" (Dashboard > Realtime >
+     Settings), which disconnects every socket once: a tab that was NOT
+     reloaded must recover by itself; check also that a non-private join
+     with the anon key is now refused;
+  6. follow-up PR: refresh `production.txt`, delete the 0068 block of
+     `expected-diff.txt`, tracker 1.9 to done. This closes the Realtime half
+     of the tenant-2 gate; a second tenant may get real data only once 0067
+     (chat-media private) is live as well.
+- **Tenant-2 rule.** After a second tenant has real data, 0068 is never
+  rolled back by re-adding tables to `supabase_realtime` (every signed-in
+  user of every org would receive the other orgs' DELETE keys again): roll
+  forward, or degrade to polling by reverting only the failing client build,
+  or first close the tenant-2 gate again. See "Contract migrations".
 
 ## Migration naming and ordering
 
@@ -263,13 +355,23 @@ pending block stays in `expected-diff.txt` through the merge:
 Sailendra is the only tenant with real data, a contract can be rolled back
 by restoring what it removed. After a second tenant is onboarded, a rollback
 must never reopen a cross-tenant leak: never re-add tables to the
-`supabase_realtime` publication (planned contract 0068: every signed-in user
-of every org would receive the other orgs' DELETE keys again, KEA-15) and
+`supabase_realtime` publication (contract 0068: every signed-in user of
+every org would receive the other orgs' DELETE keys again, KEA-15) and
 never make the `chat-media` bucket public again (planned contract 0067,
 KEA-4). Degrade instead: revert only the failing client build and accept
 the reduced mode (ChatList and ChatWindow keep their polls; live updates
 elsewhere pause), or first close the tenant-2 gate again (suspend the other
 tenants' access). Expand migrations such as 0064 stay safe to roll back.
+
+**One contract per build.** Ship each contract's client PR in its own
+Easypanel build (e.g. the Realtime client + 0068 apart from the chat-media
+client + 0067): a build that carries several contracts can only be rolled
+back by undoing all of them, in reverse order, against a database that is
+already contracted. After a contract is applied, the default is to roll
+forward with a patch build; the rollback in the migration header is the
+exception (and only while Sailendra is the only tenant with real data).
+Deploying an older build is not documented for Easypanel: roll back by
+deploying a revert commit of `main`.
 
 ## Schema fingerprint (production vs replay)
 
@@ -287,10 +389,12 @@ line to `production.txt`.
 - `expected-diff.txt`: differences that are known and explained, one per line
   (`<` only in production, `>` only in the replay), each with a reason:
   permanent ones, or *pending* lines of a migration not yet applied to
-  production (see above). Entries that no longer differ fail as stale. It is
-  currently empty: the replay matches production exactly (re-checked
-  2026-10-16 after applying 0066, against a fresh read-only production query:
-  591 lines, md5 `21e9979435c772701da8c85417fba71f`).
+  production (see above). Entries that no longer differ fail as stale. It
+  currently holds one pending block, the contract 0068 (the 4 `< pub
+  supabase_realtime ...` lines; applied after the client deploy). Apart from
+  that the replay matches production exactly (re-checked 2026-10-16 after
+  applying 0066, against a fresh read-only production query: 591 lines, md5
+  `21e9979435c772701da8c85417fba71f`).
 - Not fingerprinted: sequence privileges, column-level privileges, MAINTAIN,
   foreign-table privileges and default privileges (`pg_default_acl`); the
   `relpriv` lines cover only `arwdDxt` on tables and views. Whenever

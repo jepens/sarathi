@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
 import { useCurrentOrgId } from '@/components/current-org-provider';
+import { useOrgRefetch } from '@/components/realtime/org-realtime-provider';
 import {
     DropdownMenu,
     DropdownMenuTrigger,
@@ -21,7 +22,8 @@ import { labelColor, sortLabels, type Label } from '@/lib/labels';
 
 // The label strip under the chat header: shows the chats's assigned labels (with
 // a quick "×" to detach) and a 🏷️ dropdown to toggle any label on/off. Self
-// contained — it owns its own fetch + realtime so ChatWindow only drops it in.
+// contained — it owns its own fetch + live refetch (org Realtime bus) so
+// ChatWindow only drops it in.
 export function ChatLabelsBar({ phoneNumber }: { phoneNumber: string }) {
     const supabase = createClient();
     // Explicit org: chat_labels' key is (org_id, phone_number, label_id), so
@@ -63,24 +65,15 @@ export function ChatLabelsBar({ phoneNumber }: { phoneNumber: string }) {
         setAssignedIds(new Set());
         fetchLabels();
         fetchAssignments();
+    }, [phoneNumber, fetchLabels, fetchAssignments]);
 
-        const channel = supabase
-            .channel(`chatlabels-${phoneNumber}`)
-            .on(
-                'postgres_changes',
-                { event: '*', schema: 'public', table: 'chat_labels', filter: `phone_number=eq.${phoneNumber}` },
-                () => fetchAssignments(),
-            )
-            // Any label edit (rename / recolor / delete) — refresh the palette so
-            // chips + the menu reflect it. A delete cascades chat_labels, which
-            // the first listener catches.
-            .on('postgres_changes', { event: '*', schema: 'public', table: 'labels' }, () => fetchLabels())
-            .subscribe();
-
-        return () => {
-            supabase.removeChannel(channel);
-        };
-    }, [phoneNumber, supabase, fetchLabels, fetchAssignments]);
+    // Live, from the org Realtime bus (coalesced, also on RESYNC). An
+    // assignment event does not name the chat (its key holds the phone
+    // number), so any one refetches this chat's assignments. Any label edit
+    // (rename / recolor / delete) refreshes the palette so chips + the menu
+    // reflect it; a delete also cascades chat_labels.
+    useOrgRefetch('chat_labels', fetchAssignments);
+    useOrgRefetch('labels', fetchLabels);
 
     const assigned = useMemo(() => labels.filter((l) => assignedIds.has(l.id)), [labels, assignedIds]);
 
