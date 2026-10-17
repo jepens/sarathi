@@ -35,6 +35,8 @@
 | D19 · Push di perangkat bersama | Perangkat mengikuti user yang sedang login; notifikasi user sebelumnya di perangkat itu berhenti (2026-10-16) |
 | D20 · Dokumen 50–100 MB | Diterima dulu: tetap terkirim ke pelanggan, dashboard menampilkan keterangan "salinan tidak disimpan"; batas dinaikkan ke 100 MB setelah upgrade Pro (0.15) (2026-10-16) |
 | D21 · Hapus kontak | File media kontak di storage ikut dihapus bersama kontaknya (PR kecil setelah `chat-media` privat) (2026-10-16). Diperluas 2026-10-17: PDF proposal yang diunggah untuk kontak itu juga ikut dihapus |
+| D6 · Model akun Meta (Fase 2) | **Aplikasi Meta per klien** untuk pilot: tiap tenant memiliki portofolio bisnis, WABA, nomor dan aplikasi Meta-nya sendiri dan membayar Meta langsung; tanpa App Review dan tanpa verifikasi badan usaha Sarathi. Syarat: kuasa tertulis + DPA dari tiap klien, akses tim atas nama orang dengan 2FA (dicabut saat klien berhenti), kuota AI per org. Ditinjau ulang sebelum tenant ke-6, untuk pendaftaran mandiri, atau bila tenant butuh coexistence (lalu aplikasi platform, 5.4). Brief: `docs/FASE2_BRIEF_D6_D8.md` (2026-10-17) |
+| D8 · Fitur khusus Sailendra | **Khusus Sailendra, sebagian dibuka nanti**: semua fitur milik Sailendra di balik saklar per org (mati untuk tenant baru) dan identitas Sailendra/MJ di preset/teks AI dinetralkan sebelum tenant ke-2; fitur umum (digest, notifikasi sales/order, booking meeting dengan "link menyusul") dibuka per tenant di Fase 4 setelah tenant punya template sendiri. Portal, proposal/FNA, Flow Brief Acara dan Zoom Sailendra tetap khusus Sailendra (2026-10-17) |
 
 ### Menunggu keputusan
 
@@ -43,9 +45,7 @@
 | D14 | Penanda dokumen KB internal vs publik (agar AI tak mengutip dokumen internal) | Fase 4 | ⏸️ |
 | D15 | CTA landing: tetap "Mulai gratis" → login, atau "Ajukan pilot" ke kanal kontak tim Sarathi (WA/email) | Fase 0 (0.14) / Fase 4 | ⏸️ |
 | D5 | Tipe bisnis 1–5 calon tenant pilot | Fase 4 | ⏸️ |
-| D6 | Model akun Meta (app per klien vs app platform Sarathi) & entitas legal pemilik Sarathi | Fase 2 | ⏸️ |
 | D7 | Kunci OpenAI milik platform (dengan metering) vs dibawa tenant; model default | Fase 3 | ⏸️ |
-| D8 | Fitur khusus Sailendra (Portal, proposal/FNA, Flow Brief Acara, Zoom) untuk tenant lain | Fase 2 / 4 | ⏸️ |
 | D10 | Branding "by Sailendra" di dashboard tenant | Fase 4 | ⏸️ |
 | D11 | Kebijakan retensi data (UU PDP) | Fase 3 / 5 | ⏸️ |
 
@@ -54,7 +54,7 @@
 | # | Tugas | Temuan | Status | PR / Catatan |
 |---|---|---|---|---|
 | 0.1 | Matikan "Allow new users to sign up" di Supabase Auth | KEA-1 | ✅ | 2026-10-15: `disable_signup=true` via Management API; terverifikasi di `GET /auth/v1/settings`. CAPTCHA Auth sudah aktif. Trigger `handle_new_user` tidak lagi auto-join → migrasi 0060 di [#36](https://github.com/jepens/sahabat_umkm/pull/36) |
-| 0.2 | Rotasi kunci OpenAI, token System User & App Secret WhatsApp, kunci Komerce | KEA-13 | 👤 | Kunci yang bocor = kunci aktif saat ini |
+| 0.2 | Rotasi kunci OpenAI, token System User & App Secret WhatsApp, kunci Komerce | KEA-13 | 👤 | Kunci yang bocor = kunci aktif saat ini. **Prioritas tertinggi** (kritik desain Fase 2): rotasi dulu, sebelum kredensial dipindah ke Vault; Meta mengirim ulang webhook yang sempat 403 selama jeda singkat |
 | 0.3 | Hapus `log_deploy.md` & nilai rahasia di `database/migrate_env_to_settings.sql`; pemindai secret di CI | KEA-13 | ✅ | [#35](https://github.com/jepens/sahabat_umkm/pull/35) merged: file dihapus, SQL diganti placeholder, job CI gitleaks. **Rotasi kunci tetap wajib (0.2)** |
 | 0.4 | Tangani 2 akun + org pilot sisa | KEA-2 | ✅ | D2: dipertahankan sebagai tenant uji. Setelah deploy #36: `getCurrentOrgId` berbasis keanggotaan; tiap akun pilot hanya anggota org-nya sendiri (diverifikasi di DB) |
 | 0.5 | Patch dependensi (Next.js ≥ 16.3.8, sharp, postcss) + Node 22 di `nixpacks.toml` | KEA-10, KEA-22 | ✅ | [#35](https://github.com/jepens/sahabat_umkm/pull/35): Next 16.3.8, audit 0, Node 22 — **live di produksi** (build Easypanel sukses) |
@@ -88,18 +88,22 @@
 | 1.13 | `filter_org_id` wajib di `match_*` (termasuk `/api/search`) | KEA-25 | ✅ | [#41](https://github.com/jepens/sahabat_umkm/pull/41): `match_documents`/`match_products` fail-closed untuk `filter_org_id` NULL (0061); semua pemanggil mengirim org |
 | 1.14 | Tes RLS/Storage dua-org di branch/staging Supabase | KUA-13 | ✅ | [#39](https://github.com/jepens/sahabat_umkm/pull/39): termasuk policy Storage. TODO 1.12 diselesaikan oleh 0066 dan TODO 1.11 oleh 0067 (PR 1.11); tidak ada tes TODO tersisa |
 
-## Fase 2 — WhatsApp & integrasi per tenant, model "dikelola tim" (±2–3 minggu)
+## Fase 2 — WhatsApp & integrasi per tenant, model "dikelola tim" (perkiraan ulang 2026-10-17: ±2–3 bulan)
+
+Keputusan D6 (aplikasi Meta per klien) dan D8 (khusus Sailendra, sebagian dibuka nanti) diambil 2026-10-17. Desain teknis, urutan rilis, tugas dan hasil kritik adversarial: `docs/FASE2_DESIGN.md`; brief untuk pemilik: `docs/FASE2_BRIEF_D6_D8.md`. Versi Graph API v21.0 yang dipakai sekarang berhenti 21 Jan 2027.
 
 | # | Tugas | Temuan | Status | PR / Catatan |
 |---|---|---|---|---|
-| 2.1 | `whatsapp_integrations` → secret di Vault + RLS deny-by-default | KEA-16 | ⬜ | |
-| 2.2 | Webhook routing per `phone_number_id` (fail-closed, loop semua `entry/changes`); semua jalur kirim pakai kredensial org | KEA-6 | ⬜ | |
-| 2.3 | Setting per org (Zoom, email pengirim, notifikasi, digest, aturan) + Vault | KUA-7 | ⬜ | |
-| 2.4 | Integrasi milik Sailendra (Portal, Zoom/email Sailendra) di balik flag per org | KEA-7 | ⬜ | |
-| 2.5 | Template & Flow per WABA + handler status template | KUA-17 | ⬜ | |
-| 2.6 | Zona waktu & aturan meeting per org | KUA-18 | ⬜ | |
-| 2.7 | Versi Graph API terpusat & dinaikkan | KUA-16 | ⬜ | |
-| 2.8 | Pendaftaran Meta Tech Provider (paralel, non-kode) | — | 👤 | |
+| 2.1 | `whatsapp_integrations` → secret di Vault + RLS deny-by-default | KEA-16 | ⬜ | 2.1a sekarang: kunci tabel `whatsapp_integrations` dari anggota org (0069). 2.1b setelah D6: skema aplikasi per klien (`whatsapp_apps`, tabel nomor, RPC Vault) + 2.1c alat provisioning/rotasi/kesehatan; rahasia diketik pemilik sendiri, tidak lewat Claude |
+| 2.2 | Webhook routing per `phone_number_id` (fail-closed, loop semua `entry/changes`); semua jalur kirim pakai kredensial org | KEA-6 | ⬜ | 2.2a sekarang: perkuat webhook di URL sekarang (HMAC atas byte mentah sebelum parse, proses semua entry/change, aman saat Meta mengirim ulang, tanpa fallback ke org default; ingest atomik: chat + pesan + antrean dalam satu transaksi). 2.2b: semua jalur kirim wajib kredensial org. 2.2c/d setelah D6: URL webhook per aplikasi + kredensial dari Vault (shadow lalu flip), pindah Sailendra, kontrak |
+| 2.3 | Setting per org (Zoom, email pengirim, notifikasi, digest, aturan) + Vault | KUA-7 | ⬜ | Pengaturan per org (notifikasi, digest, aturan) + rahasia integrasi (Zoom/Portal) di Vault |
+| 2.4 | Integrasi milik Sailendra (Portal, Zoom/email Sailendra) di balik flag per org | KEA-7 | ⬜ | D8: saklar fitur per org **wajib sebelum tenant ke-2** apa pun keputusannya; hari ini booking tenant lain akan membuat ruang Zoom Sailendra dan memberi tahu sales Sailendra (`lib/ai/tools.ts`). Netralkan identitas Sailendra/MJ di preset dan teks AI |
+| 2.5 | Template & Flow per WABA + handler status template | KUA-17 | ⬜ | Daftar template & Flow per WABA + handler status template; template Sailendra didaftarkan sebelum notifikasi/digest dipindah ke registry (urutan dari kritik) |
+| 2.6 | Zona waktu & aturan meeting per org | KUA-18 | ⬜ | S bila semua tenant pilot di WIB |
+| 2.7 | Versi Graph API terpusat & dinaikkan | KUA-16 | ⬜ | Satu tempat untuk versi Graph API, naik ke v25.0 (v21.0 berhenti 21 Jan 2027) |
+| 2.8 | Pendaftaran Meta Tech Provider (paralel, non-kode) | — | ➡️ | Tidak dibutuhkan di model D6 (aplikasi per klien); dipindah ke 5.4 |
+| 2.9 | Runbook onboarding tenant + gladi (bagian gerbang tenant ke-2) | — | ⬜ | Setelah 2.1b/2.2c: langkah tim untuk tenant baru (aplikasi Meta di portofolio klien, URL webhook, rahasia lewat alat provisioning), lalu gladi dengan tenant uji |
+| 2.10 | Dokumen dan komentar yang sesuai kode | — | ⬜ | Bagian kecil dari tiap PR Fase 2 |
 
 ## Fase 3 — Provisioning, operasi & kepatuhan pilot (±2–3 minggu)
 
@@ -108,8 +112,8 @@
 | 3.1 | Peran platform-admin + provisioning tenant + undangan + set/reset password | UXA-1, KEA-20 | ⬜ | |
 | 3.2 | Konteks tenant di shell dashboard; manajemen tim minimal | UXA-7, UXA-6 | ⬜ | |
 | 3.3 | Status tenant + saklar AI per org | KUA-8 | ⬜ | |
-| 3.4 | Metering `usage_events` (token OpenAI, pesan WA) + kuota endpoint AI | KUA-9, KEA-8 | ⬜ | |
-| 3.5 | Observabilitas: log ber-`org_id` tanpa PII + error monitoring | KUA-2, KEA-21 | 🔄 | Bagian PII (KEA-21) di PR kecil: nomor (deret ≥8 digit, kecuali di dalam uuid) dan wamid (berisi nomor dalam base64; jadi label hash) disamarkan di semua `console.*` server lewat `instrumentation.ts` dan di logger, webhook tidak lagi mencetak payload penuh, isi pesan dan argumen tool AI tidak dicetak. Sisa: log JSON terstruktur ber-`org_id`, error monitoring |
+| 3.4 | Metering `usage_events` (token OpenAI, pesan WA) + kuota endpoint AI | KUA-9, KEA-8 | ⬜ | Versi minimal (batas pesan masuk per menit, job dan token AI per hari per org, berhenti keras + alarm) masuk gerbang tenant ke-2: di model D6 klien bisa melihat app secret-nya sendiri, jadi bisa memalsukan webhook ke org-nya dan menguras anggaran AI |
+| 3.5 | Observabilitas: log ber-`org_id` tanpa PII + error monitoring | KUA-2, KEA-21 | 🔄 | Bagian PII (KEA-21) di PR kecil: nomor (deret ≥8 digit, kecuali di dalam uuid) dan wamid (berisi nomor dalam base64; jadi label hash) disamarkan di semua `console.*` server lewat `instrumentation.ts` dan di logger, webhook tidak lagi mencetak payload penuh, isi pesan dan argumen tool AI tidak dicetak. Sisa: log JSON terstruktur ber-`org_id`, error monitoring. Versi minimal alarm ke tim (webhook tak terutekan, gagal tanda tangan, 503, token tidak valid, job antrean gagal) masuk gerbang tenant ke-2 (kritik desain Fase 2) |
 | 3.6 | Staging + gerbang CI sebelum deploy + health check | PER-2 | ⬜ | |
 | 3.7 | Keandalan antrean: idempotensi retry, timeout OpenAI, fire-and-forget, paginasi | KUA-15, PER-3, PER-4, PER-5 | ⬜ | |
 | 3.8 | Ketentuan Layanan, Kebijakan Privasi, DPA, daftar sub-pemroses, cek PSE | KEA-11 | 👤 | |
@@ -133,7 +137,7 @@
 | 5.1 | Billing langganan + UI paket/pemakaian | KUA-19, UXA-8 | ⬜ | |
 | 5.2 | Skala: fairness antrean, rate limiter per tenant, RLS set-based, index ANN, higiene index | PER-6, PER-9, PER-7, PER-10, PER-11 | ⬜ | |
 | 5.3 | Siklus hidup data: retensi, ekspor/offboarding tenant, audit log | KUA-21 | ⬜ | |
-| 5.4 | Self-serve signup (org baru + CAPTCHA server-side) + Embedded Signup | — | ⬜ | |
+| 5.4 | Self-serve signup (org baru + CAPTCHA server-side) + Embedded Signup | — | ⬜ | Termasuk pendaftaran Meta Tech Provider (dipindah dari 2.8) dan perpindahan ke aplikasi platform bila D6 ditinjau ulang |
 | 5.5 | Perapian | KEA-26, KEA-28, KUA-23, KUA-24, KUA-25, UXA-9 | ⬜ | KEA-28 bagian tabel + default privileges selesai lewat 0063 ([#43](https://github.com/jepens/sahabat_umkm/pull/43)); sisa: EXECUTE anon/authenticated pada `cleanup_*` |
 
 ## Log progres
@@ -170,3 +174,4 @@
 | 2026-10-17 | Review putaran 4 #49 (D21; 4 minor terkonfirmasi + 3 nit), di-rebase ke #47 terbaru: (a) bila key media atau isi folder kontak gagal dibaca, penghapusan ditolak (503) sebelum ada yang dihapus, jadi aman diulang; (b) file di folder yang belum disebut pesan mana pun hanya dihapus bila berumur > 10 menit (upload yang barisnya sedang ditulis tidak ikut terhapus); (c) dialog hapus di Pipeline dan ChatWindow kini menyebut file media; (d) folder kontak hanya dipakai untuk nomor tanpa `_` (karakter pengganti `safePhoneSegment`), jadi pasti milik satu kontak; `safePhoneSegment` tidak pernah menghasilkan segmen kosong/`.`/`..`; tes rute memeriksa filter query dan jalur gagal. Sisa celah (remove gagal, balasan hilang setelah cascade, upload yang berpacu dengan penghapusan) untuk sapuan berkala objek tanpa baris (5.3). PDF proposal: lihat baris berikut. |
 | 2026-10-17 | D21 diperluas (keputusan pemilik): PDF proposal yang diunggah ikut dihapus bersama kontaknya. Barisnya sudah ikut cascade sejak #10, tetapi file di bucket `proposals` tertinggal tanpa jalan masuk dari UI. `DELETE /api/leads/[phone]` kini membaca `file_path` proposal kontak sebelum cascade (gagal baca → 503, tidak ada yang dihapus) dan menghapus PDF-nya setelah cascade berhasil; dialog hapus di Contacts, Pipeline dan ChatWindow menyebut proposal. #47 dan #49 di-rebase ke main setelah #46/#50/#48 di-merge; uji ulang #47: vitest 729, typecheck, lint, build, pgTAP 757 (19 file) dan fingerprint = produksi + 6 baris pending (0067 + 0068) di stack lokal terpisah. |
 | 2026-10-17 | CI hemat menit (atas persetujuan pemilik; CI di PR #46–#50 berstatus `unstable`, diduga kuota menit Actions habis; pemilik meng-upgrade akun GitHub ke Pro 2026-10-17 untuk kuota menit yang lebih besar): event `push` hanya untuk `main` (sebelumnya setiap push ke branch PR menjalankan CI dua kali), tes database dipindah ke `db.yml` dan hanya jalan bila `supabase/**` berubah, E2E digabung ke job utama (satu `npm ci` dan satu build). #46, #50, #48 di-merge setelah cek lokal lengkap atas hasil rebase (vitest 658, typecheck, lint, build; E2E #50 11/11). |
+| 2026-10-17 | Desain Fase 2 (workflow: 4 pemeta kode dan dokumen Meta/Supabase, 2 desain bersaing, kritik adversarial tiap desain, brief). Pemilik memutuskan **D6 = aplikasi Meta per klien** dan **D8 = khusus Sailendra, sebagian dibuka nanti**. Kritik desain terpilih: 0 blocker, 6 major (ingest atomik saat Meta mengirim ulang, urutan registry template, cek WABA env sebelum routing, rotasi kunci 0.2 dulu, alarm minimal, kuota AI per org) dan 7 minor, semuanya masuk rencana. Fase 2 diperkirakan ulang ±2–3 bulan. Dokumen: `docs/FASE2_DESIGN.md`, `docs/FASE2_BRIEF_D6_D8.md`. |
