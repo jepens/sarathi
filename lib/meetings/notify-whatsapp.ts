@@ -1,4 +1,5 @@
 import { sendTemplateMessage } from '@/lib/whatsapp/templates';
+import { redactPII } from '@/lib/utils/logger';
 import { MEETING_TZ } from './rules';
 
 // Notify the sales team on WhatsApp when a meeting is booked — in ADDITION to
@@ -92,7 +93,7 @@ export async function notifySalesWhatsApp(
             anySent = true;
         } catch (err) {
             const reason = err instanceof Error ? err.message : String(err);
-            console.error(`Sales WA notify to ${to} failed:`, reason);
+            console.error(`Sales WA notify to ${redactPII(to)} failed:`, redactPII(reason));
             failures.push({ to, reason });
         }
     }

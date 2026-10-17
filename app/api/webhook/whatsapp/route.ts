@@ -7,6 +7,7 @@ import { sendWhatsAppMessage, downloadWhatsAppMedia } from '@/lib/whatsapp/clien
 import { resolveSendTarget } from '@/lib/whatsapp/recipient';
 import { resolveWhatsAppContext } from '@/lib/whatsapp/credentials';
 import { whatsappLogger } from '@/lib/utils/logger';
+import { webhookSummary } from '@/lib/whatsapp/webhook-summary';
 import { logSystemMessage } from '@/lib/whatsapp/history';
 import { sendPushToOrg } from '@/lib/notifications/web-push';
 import { handleFlowReply } from '@/lib/whatsapp/flow-response';
@@ -102,7 +103,7 @@ async function handleUserIdUpdate(
             (uid && pick(uid, ['current'])) ||
             pick(u, ['new_user_id', 'current_user_id', 'new_wa_id', 'current_wa_id']);
         if (!oldId || !newId) {
-            whatsappLogger.warn(`user_id_update: could not parse old/new id from ${JSON.stringify(u)}`);
+            whatsappLogger.warn(`user_id_update: could not parse old/new id (fields: ${Object.keys(u ?? {}).join(',') || '-'})`);
             continue;
         }
 
@@ -324,8 +325,9 @@ export async function POST(request: Request) {
         // the signature is verified below (right after we resolve the org).
         const body = JSON.parse(rawBody);
 
-        // Enhanced logging for debugging
-        whatsappLogger.info('Webhook received:', JSON.stringify(body, null, 2));
+        // What arrived, never the payload itself: it holds customers' phone
+        // numbers, names and message text (audit KEA-21, UU PDP).
+        whatsappLogger.info(`Webhook received: ${webhookSummary(body)}`);
 
         // Initialize Supabase client with Service Role Key for backend operations
         // This bypasses RLS policies to ensure we can always log messages
@@ -608,7 +610,7 @@ export async function POST(request: Request) {
 
                 if (messageType === 'text') {
                     const messageBody = message.text.body;
-                    whatsappLogger.info(`Received message from ${contactKey}: ${messageBody}`);
+                    whatsappLogger.info(`Received text message from ${contactKey} (${messageBody.length} chars)`);
 
                     // Rate limiting (database-based). Namespace the identifier by
                     // org so two tenants who share a customer don't share a rate

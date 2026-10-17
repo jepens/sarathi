@@ -60,7 +60,8 @@ Cek apakah data benar-benar tersimpan:
 
 1. **Cek Webhook Logs**
    - Lihat terminal/console saat mengirim pesan
-   - Seharusnya ada log: `Webhook received:` dan `Received message from...`
+   - Seharusnya ada log: `Webhook received: object=whatsapp_business_account ... messages=1` dan `Received text message from 6281*****789 (N chars)`
+   - Log tidak memuat isi pesan, payload, atau nomor utuh (audit KEA-21): nomor tampil sebagai 4 digit awal + 3 digit akhir
    - Jika tidak ada log, webhook tidak menerima data
 
 2. **Cek Webhook Configuration**
