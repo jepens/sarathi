@@ -319,9 +319,9 @@ one migration per call, using the file's content and its name without the
 `.sql` extension (e.g. `0061_add_x`). The platform records it under a
 timestamp version (see `list_migrations`).
 
-The `db-tests` CI job (`.github/workflows/ci.yml`) runs `supabase db start`,
-`supabase test db` and `compare.sh` on every push and pull request; all three
-steps are blocking. Because `production.txt` describes production, a new
+The `db-tests` CI job (`.github/workflows/db.yml`) runs `supabase db start`,
+`supabase test db` and `compare.sh` on every pull request and push to `main`
+that changes something under `supabase/`; all three steps are blocking. Because `production.txt` describes production, a new
 migration is first an *expected, pending* difference. Order of work, all in
 one PR:
 

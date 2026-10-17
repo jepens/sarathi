@@ -1,10 +1,17 @@
 name: CI
 
-# Gate setiap push & pull request dengan lint, typecheck, unit test (Vitest),
-# dan build produksi — sehingga regresi (mis. pipeline WhatsApp, util uang, atau
-# utility Tailwind yang tak valid) ketahuan sebelum di-deploy, bukan saat deploy.
+# Gate setiap pull request (dan setiap push ke main) dengan lint, typecheck,
+# unit test (Vitest), build produksi dan smoke test Playwright — sehingga
+# regresi (mis. pipeline WhatsApp, util uang, atau utility Tailwind yang tak
+# valid) ketahuan sebelum di-deploy, bukan saat deploy.
+#
+# Hemat menit Actions (2026-10-17): push ke branch PR dulu menjalankan CI dua
+# kali (event push DAN pull_request). Kini event push hanya untuk main, branch
+# PR diuji lewat pull_request saja. Tes database ada di db.yml dan hanya jalan
+# bila ada yang berubah di supabase/.
 on:
   push:
+    branches: [main]
   pull_request:
 
 # Batalkan run lama pada ref yang sama saat ada push baru (hemat CI minutes).
@@ -14,7 +21,7 @@ concurrency:
 
 jobs:
   test:
-    name: Lint · Typecheck · Test · Build
+    name: Lint · Typecheck · Test · Build · E2E
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -46,15 +53,35 @@ jobs:
         run: npm test
 
       # Compile the app so changes that typecheck but break the build (e.g. an
-      # invalid Tailwind utility) are caught here, not at deploy. The NEXT_PUBLIC_*
-      # values are placeholders — the build only needs them to exist.
+      # invalid Tailwind utility) are caught here, not at deploy. One build
+      # serves both checks: the Playwright webServer below just runs
+      # `next start` on it. The NEXT_PUBLIC_* values are placeholders; an empty
+      # Turnstile key disables CAPTCHA so the login form is testable.
       - name: Build
         run: npm run build
         env:
           NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
           NEXT_PUBLIC_SUPABASE_ANON_KEY: placeholder-anon-key
-          NEXT_PUBLIC_APP_URL: https://example.com
-          NEXT_PUBLIC_TURNSTILE_SITE_KEY: 1x00000000000000000000AA
+          NEXT_PUBLIC_APP_URL: http://127.0.0.1:3100
+          NEXT_PUBLIC_TURNSTILE_SITE_KEY: ''
+
+      # Tier 3 — Playwright smoke tests against the PRODUCTION build.
+      # Unauthenticated (placeholder Supabase env, no secrets): proves the
+      # artifact boots & serves, the Sarathi rebrand is live, and the proxy
+      # auth-gate redirects to /login.
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Run E2E tests
+        run: npm run test:e2e
+
+      - name: Upload Playwright report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
 
   # Secret scan — fails the PR if any commit in it ADDS a credential (API key,
   # token, app secret). Scans only the PR's own commits: older history is
@@ -77,95 +104,3 @@ jobs:
 
       - name: Scan PR commits
         run: gitleaks git --redact --verbose --log-opts="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}" .
-
-  # Database tests (tracker 1.1 / 1.2 / 1.14, audit KUA-1 / KUA-13): replay
-  # every supabase/migrations file on a fresh local Postgres, run the pgTAP
-  # tenant-isolation suite (supabase/tests/database) and compare the resulting
-  # schema with the committed production fingerprint. No secrets, no network
-  # access to production. See supabase/README.md.
-  db-tests:
-    name: Database (migrations · pgTAP · fingerprint)
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      # Pinned CLI: migration ordering and `test db` behaviour were verified
-      # with this exact version (supabase/README.md). Bump deliberately.
-      - name: Setup Supabase CLI
-        uses: supabase/setup-cli@v1
-        with:
-          version: 2.121.0
-
-      # `db start` leaves ONLY the Postgres container running (no auth,
-      # storage, realtime, rest, kong, studio, ...). During setup the CLI still
-      # initialises the auth, storage and realtime schemas the migrations and
-      # tests depend on (with [realtime] enabled in config.toml it runs the
-      # Realtime image once: realtime.messages, realtime.send / topic and the
-      # daily realtime.messages partitions from yesterday to +3 days), then
-      # applies supabase/migrations in order. 150_realtime_org_broadcast
-      # FAILS, not skips, when today's partition is missing (e.g. after a CLI
-      # bump that stops creating them), so the Realtime tests cannot silently
-      # drop out of CI.
-      - name: Start local database (applies all migrations)
-        run: supabase db start
-
-      - name: Run pgTAP tests
-        run: supabase test db
-
-      # Blocking. A migration PR passes before production is touched by listing
-      # its lines as "pending" in supabase/fingerprint/expected-diff.txt; the
-      # production.txt refresh after apply_migration removes them again
-      # (stale entries fail too). See supabase/README.md.
-      - name: Compare schema with the production fingerprint
-        run: bash supabase/fingerprint/compare.sh
-
-  # Tier 3 — Playwright smoke tests against the PRODUCTION build. Unauthenticated
-  # (placeholder Supabase env, no secrets): proves the artifact boots & serves,
-  # the Sarathi rebrand is live, and the middleware auth-gate redirects to /login.
-  e2e:
-    name: E2E (Playwright)
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-
-      # Native `canvas` (node-canvas) needs these to install + build on Linux.
-      - name: Install canvas system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Install Playwright browser
-        run: npx playwright install --with-deps chromium
-
-      # Build once here; the Playwright webServer then just runs `next start`.
-      # Empty Turnstile key disables CAPTCHA so the login form is testable.
-      - name: Build
-        run: npm run build
-        env:
-          NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
-          NEXT_PUBLIC_SUPABASE_ANON_KEY: placeholder-anon-key
-          NEXT_PUBLIC_APP_URL: http://127.0.0.1:3100
-          NEXT_PUBLIC_TURNSTILE_SITE_KEY: ''
-
-      - name: Run E2E tests
-        run: npm run test:e2e
-
-      - name: Upload Playwright report
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: playwright-report
-          path: playwright-report/
-          retention-days: 7
