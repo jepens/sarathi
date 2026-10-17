@@ -151,6 +151,9 @@ const MEDIA_LIMITS = {
     },
 } as const;
 
+/** Every MIME type classifyMedia() accepts (the chat-media bucket must allow each). */
+export const OUTBOUND_MEDIA_MIMES: readonly string[] = [...MEDIA_LIMITS.image.mimes, ...MEDIA_LIMITS.document.mimes];
+
 export type WhatsAppMediaKind = 'image' | 'document';
 
 // Classify a MIME type into the WhatsApp message kind we support, or null when

@@ -10,11 +10,11 @@
 --
 -- Since 0066 all three buckets share the uuid CASE guard: a root-level name or
 -- a non-uuid folder is refused, also for the seed org (no more COALESCE
--- fallback; details in 170_documents_org_prefix.test.sql).
---
--- Known gap tracked elsewhere, recorded as a TODO test (it reports "not ok #
--- TODO" without failing the run and starts passing once fixed):
---   * 1.11: chat-media is still a PUBLIC bucket — public URLs bypass RLS.
+-- fallback; details in 170_documents_org_prefix.test.sql). Since 0067
+-- chat-media is a PRIVATE bucket (no public URL bypasses these policies any
+-- more; its size and type limits are pinned in 180_chat_media_bucket.test.sql).
+-- No known gap is left: 1.12 (0066) and 1.11 (0067) are closed, so this file
+-- has no TODO test any more.
 begin;
 select plan(45);
 
@@ -126,7 +126,7 @@ select isnt_empty(
 
 -- ---------------------------------------------------------------------------
 -- Org B's objects survived every attempt (1), no seed fallback left (1),
--- known gap as TODO (1)
+-- chat-media is private (1, 0067)
 -- ---------------------------------------------------------------------------
 select tests.clear_authentication();
 select is(
@@ -140,7 +140,6 @@ select is_empty(
            ~* '5a11e024-0001-4000-8000-000000000001|coalesce' $$,
     'no storage policy falls back to the seed org (no seed org uuid, no COALESCE in USING or WITH CHECK)');
 
-select todo('tracker 1.11: chat-media is still a public bucket (public URLs bypass RLS)', 1);
 select is(
     (select public from storage.buckets where id = 'chat-media'),
     false, 'chat-media bucket is private');
