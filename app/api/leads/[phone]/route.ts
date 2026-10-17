@@ -6,42 +6,54 @@ import { CHAT_MEDIA_BUCKET, chatMediaObjectPath, contactMediaFolder } from '@/li
 
 const LIST_PAGE = 1000;
 const REMOVE_BATCH = 100;
+// Both writers upload a file before they insert the message row that names
+// it, so a file in the folder that no message names yet may belong to a
+// message being written right now: only older ones are orphans to remove.
+const ORPHAN_MIN_AGE_MS = 10 * 60 * 1000;
 
 /**
- * The chat-media keys of one contact (owner decision D21): the keys its
- * messages name (old rows hold the public URL, newer ones the bare key), and
- * every object in its own folder '<org>/<phone>' (orphans of a failed insert
- * included) when that folder is the contact's alone (contactMediaFolder).
- * Read with the member's RLS client before the rows are deleted.
+ * The chat-media keys of one contact (owner decision D21), or null when they
+ * could not be read: then nothing may be deleted yet, so that a retry still
+ * finds them. The keys its messages name (old rows hold the public URL, newer
+ * ones the bare key), and the files in its own folder '<org>/<phone>' that no
+ * message names and that are older than ORPHAN_MIN_AGE_MS (uploads whose
+ * insert failed), when that folder is the contact's alone
+ * (contactMediaFolder). Read with the member's RLS client before the rows are
+ * deleted.
  */
-async function contactMediaKeys(supabase: SupabaseClient, orgId: string, phone: string): Promise<string[]> {
-    const keys = new Set<string>();
+async function contactMediaKeys(supabase: SupabaseClient, orgId: string, phone: string): Promise<string[] | null> {
     const { data: rows, error } = await supabase
         .from('whatsapp_messages')
         .select('media_url')
         .eq('org_id', orgId)
         .eq('phone_number', phone)
         .not('media_url', 'is', null);
-    if (error) console.error('Contact delete: reading the media keys failed', { code: error.code });
+    if (error) {
+        console.error('Contact delete: reading the media keys failed', { code: error.code });
+        return null;
+    }
+    const keys = new Set<string>();
     for (const row of (rows ?? []) as { media_url: string | null }[]) {
         const key = chatMediaObjectPath(row.media_url, orgId);
         if (key) keys.add(key);
     }
     const folder = contactMediaFolder(orgId, phone);
-    if (folder) {
-        for (let offset = 0; ; offset += LIST_PAGE) {
-            const { data: entries, error: listError } = await supabase.storage
-                .from(CHAT_MEDIA_BUCKET)
-                .list(folder, { limit: LIST_PAGE, offset });
-            if (listError) {
-                console.error('Contact delete: listing the media folder failed');
-                break;
-            }
-            for (const entry of entries ?? []) {
-                if (entry.id) keys.add(`${folder}/${entry.name}`); // files only, not sub-folders
-            }
-            if (!entries || entries.length < LIST_PAGE) break;
+    if (!folder) return [...keys];
+    const now = Date.now();
+    for (let offset = 0; ; offset += LIST_PAGE) {
+        const { data: entries, error: listError } = await supabase.storage
+            .from(CHAT_MEDIA_BUCKET)
+            .list(folder, { limit: LIST_PAGE, offset });
+        if (listError) {
+            console.error('Contact delete: listing the media folder failed');
+            return null;
         }
+        for (const entry of entries ?? []) {
+            if (!entry.id) continue; // a sub-folder, not a file
+            // A missing or odd date gives NaN: the file stays.
+            if (now - Date.parse(entry.created_at) > ORPHAN_MIN_AGE_MS) keys.add(`${folder}/${entry.name}`);
+        }
+        if (!entries || entries.length < LIST_PAGE) break;
     }
     return [...keys];
 }
@@ -151,8 +163,11 @@ export async function PATCH(
 // delete_contact_cascade RPC (migration 0047). REFUSES with 409 when the contact
 // has bookings, so financial records are never wiped. Its chat-media files go
 // too (owner decision D21): Storage objects cannot be deleted in SQL, so their
-// keys are read first and the files removed through the Storage API once the
-// rows are gone.
+// keys are read first (if that fails, nothing is deleted: 503, a retry is
+// safe) and the files removed through the Storage API once the rows are gone.
+// What can still stay behind without a row (a remove that fails, a reply lost
+// after the cascade committed, an upload racing the delete) is left to a
+// periodic sweep of unreferenced chat-media objects (tracker 5.3).
 export async function DELETE(
     _request: Request,
     { params }: { params: Promise<{ phone: string }> }
@@ -168,6 +183,12 @@ export async function DELETE(
 
     // Before the rows go: afterwards the keys the messages name are lost.
     const mediaKeys = await contactMediaKeys(supabase, orgId, phone);
+    if (!mediaKeys) {
+        return NextResponse.json(
+            { error: 'Gagal membaca file media kontak ini. Tidak ada yang dihapus, silakan coba lagi.' },
+            { status: 503 }
+        );
+    }
 
     const { data, error } = await supabase.rpc('delete_contact_cascade', {
         p_org: orgId,

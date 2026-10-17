@@ -199,13 +199,30 @@ describe("safePhoneSegment / contactMediaFolder (D21: a contact's files go with 
         expect(safePhoneSegment('+62 811/../x')).toBe('_62_811_.._x');
     });
 
-    it('names the contact folder only when the phone is a segment as it is', () => {
+    it("never yields an empty, '.' or '..' segment", () => {
+        expect(safePhoneSegment('..')).toBe('_');
+        expect(safePhoneSegment('.')).toBe('_');
+        expect(safePhoneSegment('')).toBe('_');
+        expect(safePhoneSegment('...')).toBe('...'); // an ordinary name
+    });
+
+    it('names the contact folder only when no other contact can write into it', () => {
         expect(contactMediaFolder(ORG, '620000000000')).toBe(`${ORG}/620000000000`);
-        // '+62811' and '_62811' would share '<org>/_62811': only their own keys are removed.
+        expect(contactMediaFolder(ORG, 'US.1234567890')).toBe(`${ORG}/US.1234567890`);
+        // '+62811' and '_62811' both write to '<org>/_62811': neither may list it,
+        // so only the keys each contact's own messages name are removed.
         expect(contactMediaFolder(ORG, '+62811')).toBeNull();
+        expect(contactMediaFolder(ORG, '_62811')).toBeNull();
+        expect(contactMediaFolder(ORG, 'manual_x')).toBeNull(); // 'manual:x' writes there too
         expect(contactMediaFolder(ORG, '..')).toBeNull();
         expect(contactMediaFolder(ORG, '.')).toBeNull();
         expect(contactMediaFolder(ORG, '')).toBeNull();
         expect(contactMediaFolder('', '620000000000')).toBeNull();
+    });
+
+    it('a folder it names is the safe segment of that phone and of no other', () => {
+        for (const phone of ['620000000000', 'US.1234567890', 'a-b.c']) {
+            expect(contactMediaFolder(ORG, phone)).toBe(`${ORG}/${safePhoneSegment(phone)}`);
+        }
     });
 });

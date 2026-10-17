@@ -67,22 +67,31 @@ export function storageContentType(mime: string | null | undefined): string {
 
 /**
  * The phone segment of a chat-media key, as both writers build it: every
- * character outside [a-zA-Z0-9._-] becomes '_', so nothing can add a '/' or
- * '..' to the key.
+ * character outside [a-zA-Z0-9._-] becomes '_', and a segment that would be
+ * empty, '.' or '..' becomes '_', so a phone can never add a '/' or a
+ * relative step to the key.
  */
 export function safePhoneSegment(phone: string): string {
-    return phone.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const segment = phone.replace(/[^a-zA-Z0-9._-]/g, '_');
+    return segment === '' || segment === '.' || segment === '..' ? '_' : segment;
 }
+
+// A phone whose folder can hold no other contact's files: '_' is what
+// safePhoneSegment puts in place of other characters, so a phone containing
+// it shares its folder with every phone that differs there ('+62811' and
+// '_62811' both write to '_62811').
+const OWN_FOLDER_PHONE = /^[A-Za-z0-9.-]+$/;
 
 /**
  * The folder that holds one contact's chat media, '<org>/<phone>', or null
- * when the phone is not a segment as it is (it had characters to replace, or
- * is '.' / '..'): two contacts could then share a folder, so only the keys
- * that contact's own messages name may be removed (owner decision D21).
+ * when another contact could write into the same folder (the phone contains
+ * '_' or a character safePhoneSegment replaces, or is '.' / '..'): then only
+ * the keys that contact's own messages name may be removed (owner decision
+ * D21).
  */
 export function contactMediaFolder(orgId: string, phone: string): string | null {
-    if (!orgId || !phone || phone === '.' || phone === '..') return null;
-    return safePhoneSegment(phone) === phone ? `${orgId}/${phone}` : null;
+    if (!orgId || !OWN_FOLDER_PHONE.test(phone) || phone === '.' || phone === '..') return null;
+    return `${orgId}/${phone}`;
 }
 
 /** The dashboard URL of a message's media: redirects to a short-lived signed URL. */
