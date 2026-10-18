@@ -97,7 +97,7 @@ describe('maybeSendOpsAlerts', () => {
         expect(await run()).toEqual({ sent: false, kinds: [] });
         expect(h.send).not.toHaveBeenCalled();
         expect(fns()).toEqual(['claim_ops_alerts']);
-        expect(fake.rpcCalls[0].args).toEqual({ p_cooldown_seconds: 3600, p_daily_kinds: [] });
+        expect(fake.rpcCalls[0].args).toEqual({ p_cooldown_seconds: 3600, p_daily_kinds: ['webhook_unrouted'] });
     });
 
     it('emails every claimed group once, then marks the events sent with the claim stamp', async () => {
@@ -119,6 +119,18 @@ describe('maybeSendOpsAlerts', () => {
         expect(fns()).toEqual(['claim_ops_alerts', 'mark_ops_alerts_sent']);
         expect(fake.rpcCalls[1].args).toEqual({ p_stamp: STAMP, p_cutoff: CUTOFF });
         expect(mail.text).toContain('paling cepat 1 jam lagi. ');
+    });
+
+    it('a number new to the WABA is emailed within the hour; its recurring traffic once a day', () => {
+        expect(DAILY_ALERT_KINDS).toContain('webhook_unrouted');
+        expect(DAILY_ALERT_KINDS).not.toContain('webhook_unrouted_new');
+        const { text } = buildOpsAlertEmail(
+            [group('webhook_unrouted_new', 1, null), group('webhook_unrouted', 7, null)],
+            new Map(),
+            NOW,
+        );
+        expect(text).toContain('pertama kali dalam 7 hari');
+        expect(text).toContain('paling cepat 1 jam lagi (1 hari lagi untuk: Webhook untuk nomor lain di WABA (bukan nomor org ini)). ');
     });
 
     it('the footer names the kinds that wait a day before the next email', () => {

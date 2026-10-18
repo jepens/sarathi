@@ -13,13 +13,14 @@ import { whatsappLogger } from '@/lib/utils/logger';
  * header, no configured app secret, malformed hex, length mismatch) return
  * `false` so callers can simply reject with 403 on a falsy result.
  *
- * @param payload   Raw request body as string. MUST be the exact bytes Meta
- *                  signed — do not re-stringify a parsed JSON object.
+ * @param payload   The raw request body: the exact bytes Meta signed (a
+ *                  Buffer, as the webhook passes it), or a string, which is
+ *                  hashed as UTF-8. Never a re-stringified parsed object.
  * @param signature Value of the `X-Hub-Signature-256` header (with or without
  *                  the `sha256=` prefix).
  */
 export async function verifyWhatsAppSignature(
-    payload: string,
+    payload: Buffer | string,
     signature: string | null,
     appSecretOverride?: string | null
 ): Promise<boolean> {
@@ -39,8 +40,7 @@ export async function verifyWhatsAppSignature(
     if (!appSecret) {
         whatsappLogger.warn(
             'WHATSAPP_APP_SECRET env var is not set — cannot verify webhook. ' +
-                'Set it (from Meta App Settings → Basic → App Secret) or, for local dev only, ' +
-                'set WHATSAPP_WEBHOOK_SKIP_SIGNATURE=true to bypass verification.'
+                'Set it (from Meta App Settings → Basic → App Secret).'
         );
         return false;
     }
@@ -61,10 +61,10 @@ export async function verifyWhatsAppSignature(
     let expectedBuf: Buffer;
     let providedBuf: Buffer;
     try {
-        expectedBuf = crypto
-            .createHmac('sha256', appSecret)
-            .update(payload, 'utf8')
-            .digest();
+        const hmac = crypto.createHmac('sha256', appSecret);
+        if (typeof payload === 'string') hmac.update(payload, 'utf8');
+        else hmac.update(payload);
+        expectedBuf = hmac.digest();
         providedBuf = Buffer.from(signatureHash, 'hex');
     } catch (error) {
         whatsappLogger.error('Failed to compute webhook HMAC', error);

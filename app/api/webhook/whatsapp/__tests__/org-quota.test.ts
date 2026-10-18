@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // The org's inbound quota in the WhatsApp webhook (tracker 3.4, migration
 // 0071): a text message to a chat with the AI on that would open a new AI
@@ -43,6 +43,7 @@ function serviceClient() {
 vi.mock('@supabase/supabase-js', () => ({ createClient: vi.fn(() => serviceClient()) }));
 vi.mock('@/lib/whatsapp/security', () => ({ verifyWhatsAppSignature: vi.fn(async () => true) }));
 vi.mock('@/lib/whatsapp/credentials', () => ({
+    envWebhookApp: () => ({ appSecret: 'app-secret', phoneNumberId: 'phone-number-id' }),
     resolveWhatsAppContext: vi.fn(async () => ({
         orgId: ORG,
         phoneNumberId: 'phone-number-id',
@@ -100,6 +101,9 @@ async function deliver(req: Request): Promise<Record<string, unknown>> {
 
 beforeEach(() => {
     vi.clearAllMocks();
+    // The webhook only works with the service-role client.
+    vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'http://localhost:54321');
+    vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', 'service-role-key');
     h.inserts = [];
     h.insertError = null;
     h.aiEnabled = true;
@@ -107,6 +111,10 @@ beforeEach(() => {
     h.rateOk.mockResolvedValue(true);
     h.queueState.mockResolvedValue({ duplicate: false, joinsBurst: false });
     h.consume.mockResolvedValue({ allowed: true, used: 3, refused: 0, limit: 30, firstRefusal: false });
+});
+
+afterEach(() => {
+    vi.unstubAllEnvs();
 });
 
 describe('webhook text message: the org inbound quota', () => {

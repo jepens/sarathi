@@ -46,26 +46,13 @@ curl "http://localhost:3000/api/webhook/whatsapp?hub.mode=subscribe&hub.verify_t
 }
 ```
 
-**How to Test**:
+**How to Test**: the webhook only accepts deliveries signed with the app
+secret (X-Hub-Signature-256) for the app's own number, so an unsigned `curl`
+now gets 403. Use the signed script, which reads `.env.local`. The server
+uses its own credentials, so the test message is stored in its database and its
+AI really tries to answer `TEST_PHONE`: use a number you own.
 ```bash
-curl -X POST http://localhost:3000/api/webhook/whatsapp \
-  -H "Content-Type: application/json" \
-  -d '{
-    "object": "whatsapp_business_account",
-    "entry": [{
-      "changes": [{
-        "value": {
-          "messages": [{
-            "from": "6281234567890",
-            "type": "text",
-            "text": {
-              "body": "Halo, apa saja produk yang tersedia?"
-            }
-          }]
-        }
-      }]
-    }]
-  }'
+TEST_PHONE=<your-number> node --env-file=.env.local scripts/test-webhook.js
 ```
 
 **Expected Result**:

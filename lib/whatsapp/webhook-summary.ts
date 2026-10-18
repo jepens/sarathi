@@ -1,9 +1,9 @@
 // The log line of an incoming WhatsApp webhook: counts and change fields
 // only. The payload itself is never logged: it holds customers' phone
 // numbers, names and message text (audit KEA-21, UU PDP). The line is written
-// before the signature is checked, so the two strings taken from the body are
-// limited to Meta's own vocabulary (lower case and '_'), never raw input that
-// could forge or break log lines.
+// for signed bodies only (Fase 2 task 2.2a), and the two strings taken from the
+// body are still limited to Meta's own vocabulary (lower case and '_'), never
+// raw input that could forge or break log lines.
 
 const WORD = /^[a-z_]{1,64}$/;
 const word = (v: unknown) => (typeof v === 'string' && WORD.test(v) ? v : '?');

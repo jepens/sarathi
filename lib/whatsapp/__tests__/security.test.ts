@@ -51,6 +51,16 @@ describe('verifyWhatsAppSignature', () => {
         expect(await verifyWhatsAppSignature(PAYLOAD, `${validHex}ab`, SECRET)).toBe(false);
     });
 
+    it('checks the exact raw bytes when given a Buffer (Fase 2 task 2.2a)', async () => {
+        // Not valid UTF-8: decoding to a string and re-encoding would change the
+        // bytes (0xff becomes U+FFFD), so only an HMAC over the raw bytes matches.
+        const raw = Buffer.concat([Buffer.from('{"x":"'), Buffer.from([0xff]), Buffer.from('"}')]);
+        const hex = crypto.createHmac('sha256', SECRET).update(raw).digest('hex');
+        expect(await verifyWhatsAppSignature(raw, hex, SECRET)).toBe(true);
+        expect(await verifyWhatsAppSignature(raw.toString('utf8'), hex, SECRET)).toBe(false);
+        expect(await verifyWhatsAppSignature(Buffer.from(PAYLOAD, 'utf8'), validHex, SECRET)).toBe(true);
+    });
+
     it('falls back to the env app secret when no override is given', async () => {
         getSecretMock.mockResolvedValue(SECRET);
         expect(await verifyWhatsAppSignature(PAYLOAD, validHex)).toBe(true);

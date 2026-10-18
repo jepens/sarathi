@@ -7,6 +7,7 @@ import { whatsappLogger } from '@/lib/utils/logger';
 import { logSystemMessage } from '@/lib/whatsapp/history';
 import { describeErrorForOps, isWhatsAppTokenError, recordOpsEvent } from '@/lib/ops/events';
 import { consumeOrgQuota } from '@/lib/quota/org-quota';
+import { isOtherNumberRow } from '@/lib/whatsapp/other-number';
 
 import { SupabaseClient } from '@supabase/supabase-js';
 
@@ -286,9 +287,12 @@ async function processConversation(jobs: QueueJob[], supabase: SupabaseClient): 
         // fetch here gives long WhatsApp threads real memory.
         const { data: historyData } = await supabase
             .from('whatsapp_messages')
-            .select('role, content, wa_message_id')
+            .select('role, content, wa_message_id, metadata')
             .eq('org_id', orgId)
             .eq('phone_number', phoneNumber)
+            // Not messages to another number of the WABA (below), so they do
+            // not take the 30 places either.
+            .is('metadata->>other_number', null)
             .order('created_at', { ascending: false })
             .limit(30);
 
@@ -299,10 +303,12 @@ async function processConversation(jobs: QueueJob[], supabase: SupabaseClient): 
         // block the burst-trim below (a trailing 'system' row stops the loop, so
         // the burst would be fed to the model twice).
         // Empty rows (a photo or voice note without a caption) carry nothing for
-        // the model and are skipped.
-        const chrono = ((historyData || []) as { role: string; content: string; wa_message_id: string | null }[])
+        // the model and are skipped, and so are messages the customer sent to
+        // another number of the WABA (kept for the operators by
+        // WHATSAPP_OTHER_NUMBER_EVENTS=process): not this number's conversation.
+        const chrono = ((historyData || []) as { role: string; content: string; wa_message_id: string | null; metadata?: unknown }[])
             .reverse()
-            .filter((msg) => (msg.role === 'user' || msg.role === 'assistant') && !!msg.content?.trim());
+            .filter((msg) => (msg.role === 'user' || msg.role === 'assistant') && !!msg.content?.trim() && !isOtherNumberRow(msg.metadata));
         // The inbound burst is already stored in whatsapp_messages and is fed
         // to the model as combinedMessage, so it must not be in the history
         // too. When every job knows its wamid, drop exactly those rows and cut

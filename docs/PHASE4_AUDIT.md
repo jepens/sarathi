@@ -19,7 +19,7 @@
 #### 2. WhatsApp Client Library
 - ✅ **`lib/whatsapp/client.ts`**
   - `sendWhatsAppMessage()` function
-  - Uses WhatsApp Business Graph API v21.0
+  - Uses WhatsApp Business Graph API v21.0 (catatan 2026-10-18: kini v25.0, dari `lib/whatsapp/graph.ts`)
   - Environment variable validation
   - Error handling with detailed logging
 
@@ -104,7 +104,7 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=✅
 - ✅ **`scripts/test-whatsapp-local.mjs`** - Local webhook testing
 - ✅ **`scripts/get-ngrok-url.mjs`** - Get public URL for webhook
 - ✅ **`scripts/check-ngrok-traffic.mjs`** - Analyze incoming requests
-- ✅ **`scripts/test-webhook-post.mjs`** - Manual POST testing
+- ✅ **`scripts/test-webhook-post.mjs (dihapus 2026-10-18; pakai scripts/test-webhook.js)`** - Manual POST testing
 
 ### ✅ Live Testing
 - ✅ Webhook verification - PASSED

@@ -37,7 +37,7 @@ Originally "Sahabat UMKM" (a generic retail/MSME sales assistant), the app was p
 - **Framework**: Next.js 16 (App Router, Turbopack) + React 19
 - **Database**: Supabase (PostgreSQL + pgvector + Storage + RLS)
 - **AI**: OpenAI (GPT models + `text-embedding-3-small`)
-- **Messaging**: WhatsApp Business Cloud API (Graph v21)
+- **Messaging**: WhatsApp Business Cloud API (Graph v25)
 - **PDF**: `@react-pdf/renderer` · **Email**: Resend (requires Node ≥ 22)
 - **Calendar**: Schedule X v4 (`temporal-polyfill`)
 - **UI**: Tailwind CSS + shadcn/ui
@@ -74,7 +74,7 @@ Idempotent SQL lives in [`supabase/migrations/`](./supabase/migrations) and is a
 
 - Never commit `.env.local`.
 - `whatsapp_chats` / `whatsapp_messages` are authenticated-only (RLS); the webhook writes via the service role. Anon clients have no access.
-- Webhook enforces `X-Hub-Signature-256` (set `WHATSAPP_APP_SECRET`); `WHATSAPP_WEBHOOK_SKIP_SIGNATURE=true` is local-dev only.
+- Webhook enforces `X-Hub-Signature-256` over the raw body before reading it (set `WHATSAPP_APP_SECRET`); there is no switch to skip it.
 - Use a Meta System User token in production.
 
 ## 🚀 Deployment

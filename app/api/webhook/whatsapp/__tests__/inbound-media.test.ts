@@ -1,11 +1,13 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Inbound media in the WhatsApp webhook (tracker 1.11, migration 0067, owner
 // decision D20): the customer's file is copied to the private chat-media
 // bucket under "<org>/<safe phone>/<uuid>.<ext>" with the bucket-allowed
 // content type, media_url holds that bare key and media_mime keeps Meta's
 // original type; a file above the bucket limit is not uploaded at all while
-// the message is still recorded (media_url null). Everything around the
+// the message is still recorded (media_url null); a file sent to another
+// number of the WABA in process mode is stored like any inbound file, marked
+// for the AI history, with a note that keeps the chat unanswered. Everything around the
 // webhook (signature, credentials, Meta download, push) is stubbed; the media
 // handler runs fire-and-forget after the 200, so the tests wait for its insert.
 // Fake ids and phones only.
@@ -20,6 +22,7 @@ const h = vi.hoisted(() => ({
     remove: vi.fn(),
     insertError: null as unknown,
     inserts: [] as Array<{ table: string; row: Record<string, unknown> }>,
+    upserts: [] as Array<{ table: string; row: Record<string, unknown> }>,
     rpcs: [] as string[],
     /** The bucket of every storage.from() call. */
     buckets: [] as string[],
@@ -30,7 +33,13 @@ const h = vi.hoisted(() => ({
 function serviceClient() {
     const builder = (table: string) => {
         const q: Record<string, unknown> = {};
-        for (const m of ['select', 'eq', 'is', 'upsert', 'update']) q[m] = () => q;
+        for (const m of ['select', 'eq', 'is', 'update', 'like', 'gte']) q[m] = () => q;
+        q.upsert = (row: Record<string, unknown>) => {
+            h.upserts.push({ table, row });
+            return q;
+        };
+        // The ops_events lookup for another number: reported before.
+        q.limit = async () => ({ data: [{ id: 1 }], error: null });
         q.insert = (row: Record<string, unknown>) => {
             h.inserts.push({ table, row });
             return Promise.resolve({ data: null, error: table === 'whatsapp_messages' ? h.insertError : null });
@@ -57,6 +66,7 @@ function serviceClient() {
 vi.mock('@supabase/supabase-js', () => ({ createClient: vi.fn(() => serviceClient()) }));
 vi.mock('@/lib/whatsapp/security', () => ({ verifyWhatsAppSignature: vi.fn(async () => true) }));
 vi.mock('@/lib/whatsapp/credentials', () => ({
+    envWebhookApp: () => ({ appSecret: 'app-secret', phoneNumberId: 'phone-number-id' }),
     resolveWhatsAppContext: vi.fn(async () => ({
         orgId: ORG,
         phoneNumberId: 'phone-number-id',
@@ -86,11 +96,13 @@ vi.mock('@/lib/utils/logger', () => {
 
 import { POST } from '@/app/api/webhook/whatsapp/route';
 import { CHAT_MEDIA_MAX_BYTES } from '@/lib/storage/chat-media';
+import { logSystemMessage } from '@/lib/whatsapp/history';
+import { resetOtherNumberState } from '@/lib/whatsapp/other-number';
 
 let seq = 0;
 
 /** A webhook delivery of one inbound media message. */
-function inbound(type: 'image' | 'document' | 'audio' | 'video', media: Record<string, unknown>): Request {
+function inbound(type: 'image' | 'document' | 'audio' | 'video', media: Record<string, unknown>, phoneNumberId = 'phone-number-id'): Request {
     seq += 1;
     const body = {
         object: 'whatsapp_business_account',
@@ -100,7 +112,7 @@ function inbound(type: 'image' | 'document' | 'audio' | 'video', media: Record<s
                     {
                         field: 'messages',
                         value: {
-                            metadata: { phone_number_id: 'phone-number-id' },
+                            metadata: { phone_number_id: phoneNumberId },
                             contacts: [{ wa_id: PHONE }],
                             messages: [{ from: PHONE, id: `wamid.fake-in-${seq}`, type, [type]: { id: `media-${seq}`, ...media } }],
                         },
@@ -122,13 +134,22 @@ async function deliver(req: Request): Promise<Record<string, unknown>> {
 
 beforeEach(() => {
     vi.clearAllMocks();
+    // The webhook only works with the service-role client.
+    vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'http://localhost:54321');
+    vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', 'service-role-key');
     h.inserts = [];
+    h.upserts = [];
     h.rpcs = [];
+    resetOtherNumberState();
     h.buckets = [];
     h.logs = [];
     h.insertError = null;
     h.upload.mockResolvedValue({ data: { path: 'ignored' }, error: null });
     h.remove.mockResolvedValue({ data: [], error: null });
+});
+
+afterEach(() => {
+    vi.unstubAllEnvs();
 });
 
 describe('webhook inbound media: the chat-media copy', () => {
@@ -151,6 +172,24 @@ describe('webhook inbound media: the chat-media copy', () => {
             media_url: path, // the key itself, never a URL
             media_mime: 'audio/ogg; codecs=opus', // Meta's original type
         });
+        expect(row).not.toHaveProperty('metadata');
+        // The customer wrote to this number: the 24-hour window opens.
+        expect(h.upserts.find((u) => u.table === 'whatsapp_chats')!.row).toHaveProperty('last_inbound_at');
+    });
+
+    it('a file sent to another number of the WABA (process mode): marked for the AI history, one note that keeps the chat unanswered', async () => {
+        vi.stubEnv('WHATSAPP_OTHER_NUMBER_EVENTS', 'process');
+        h.download.mockResolvedValue({ bytes: new Uint8Array([1, 2, 3]), mime: 'image/jpeg', size: 3 });
+
+        const row = await deliver(inbound('image', {}, 'other-number-id'));
+
+        expect(row).toMatchObject({ org_id: ORG, role: 'user', media_type: 'image', metadata: { other_number: expect.stringMatching(/^h[0-9a-f]{10}$/) } });
+        const chat = h.upserts.find((u) => u.table === 'whatsapp_chats')!.row;
+        expect(chat).toMatchObject({ org_id: ORG, phone_number: PHONE, last_inbound_at: expect.any(String) });
+        await vi.waitFor(() => expect(h.rpcs).toContain('bump_unread'));
+        expect(logSystemMessage).toHaveBeenCalledTimes(1);
+        expect(vi.mocked(logSystemMessage).mock.calls[0][2]).toContain('nomor WhatsApp lain');
+        expect(vi.mocked(logSystemMessage).mock.calls[0][3]).toEqual({ touchChat: false });
     });
 
     it('stores an unknown document type as application/octet-stream (a download), media_mime unchanged', async () => {

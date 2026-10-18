@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -45,13 +46,21 @@ async function testWebhookVerification() {
 async function testIncomingMessage() {
     console.log('\n--- Testing Incoming Message Flow ---');
 
-    // Mock WhatsApp Webhook Payload
+    // Mock WhatsApp Webhook Payload, signed like Meta signs it (the webhook
+    // refuses anything else) and addressed to the app's own number.
+    if (!env.WHATSAPP_APP_SECRET || !env.WHATSAPP_PHONE_NUMBER_ID) {
+        console.error('❌ WHATSAPP_APP_SECRET and WHATSAPP_PHONE_NUMBER_ID must be set in .env.local');
+        return;
+    }
     const payload = {
         object: 'whatsapp_business_account',
         entry: [{
             changes: [{
+                field: 'messages',
                 value: {
+                    metadata: { phone_number_id: env.WHATSAPP_PHONE_NUMBER_ID },
                     messages: [{
+                        id: `wamid.local-test-${Date.now()}`,
                         from: '6281234567890', // Mock number
                         type: 'text',
                         text: {
@@ -64,12 +73,15 @@ async function testIncomingMessage() {
     };
 
     try {
+        const raw = JSON.stringify(payload);
+        const signature = 'sha256=' + crypto.createHmac('sha256', env.WHATSAPP_APP_SECRET).update(raw).digest('hex');
         const response = await fetch(`${BASE_URL}/api/webhook/whatsapp`, {
             method: 'POST',
             headers: {
-                'Content-Type': 'application/json'
+                'Content-Type': 'application/json',
+                'X-Hub-Signature-256': signature
             },
-            body: JSON.stringify(payload)
+            body: raw
         });
 
         if (response.status === 200) {

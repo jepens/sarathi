@@ -39,7 +39,8 @@ vi.mock('@/lib/supabase/server', () => ({ createClient: vi.fn() }));
 vi.mock('@/lib/supabase/service', () => ({ createServiceOrServerClient: vi.fn() }));
 
 import { getPlatformSetting } from '@/lib/settings/platform-settings';
-import { getDefaultOrgId } from '@/lib/settings/org-context';
+import { getDefaultOrgId, getDefaultOrgIdStrict } from '@/lib/settings/org-context';
+import { describeErrorForOps } from '@/lib/ops/events';
 import { checkVerifyToken, getVerifyToken, getWebhookUrl } from '@/lib/settings/app-settings';
 
 beforeEach(() => {
@@ -89,6 +90,21 @@ describe('getDefaultOrgId', () => {
     it('falls back to the seed org when nothing is configured', async () => {
         const { client } = fakeClient({});
         expect(await getDefaultOrgId(client)).toBe(SEED);
+    });
+});
+
+describe('getDefaultOrgIdStrict (the WhatsApp webhook, Fase 2 task 2.2a)', () => {
+    it('returns the platform default org, and the seed org only when no row exists', async () => {
+        expect(await getDefaultOrgIdStrict(fakeClient({ platform_settings: { data: { value: 'org-x' }, error: null } }).client)).toBe('org-x');
+        expect(await getDefaultOrgIdStrict(fakeClient({}).client)).toBe(SEED);
+    });
+
+    it('throws on a read error instead of falling back to the seed org, keeping the code for the alert', async () => {
+        const { client } = fakeClient({ platform_settings: { data: null, error: { code: '57014', message: 'canceling statement' } } });
+        const err = await getDefaultOrgIdStrict(client).catch((e: unknown) => e);
+        expect(err).toBeInstanceOf(Error);
+        expect((err as Error).message).toMatch(/default_org_id could not be read \(57014\)/);
+        expect(describeErrorForOps(err)).toBe('database 57014');
     });
 });
 

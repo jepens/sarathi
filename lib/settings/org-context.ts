@@ -5,7 +5,7 @@ import { createClient } from '@/lib/supabase/server';
 import { createServiceOrServerClient } from '@/lib/supabase/service';
 import { isSessionCheckUnavailable } from '@/lib/supabase/session-errors';
 import { fetchMembership } from '@/lib/settings/membership';
-import { getPlatformSetting, SEED_ORG_ID } from '@/lib/settings/platform-settings';
+import { getPlatformSetting, getPlatformSettingStrict, SEED_ORG_ID } from '@/lib/settings/platform-settings';
 import {
     decideEnvIntegrationAccess,
     decideOrgContext,
@@ -39,8 +39,9 @@ import {
 // cache does not dedupe inside Route Handlers or Server Actions (they are not a
 // render pass) — there, call requireOrgContext() once and pass the context on.
 //
-// Service-role paths without a user (the WhatsApp webhook, queue, digest) still
-// use getDefaultOrgId() until inbound routing by phone_number_id lands.
+// Service-role paths without a user (the queue, digest) still use
+// getDefaultOrgId() until inbound routing by phone_number_id lands; the
+// WhatsApp webhook uses getDefaultOrgIdStrict().
 //
 // The default org (Sailendra) also owns every env-configured integration
 // (WhatsApp, Portal, Zoom, Resend). Routes that use those credentials must gate
@@ -71,6 +72,17 @@ export type { OrgAccessDenied };
  */
 export async function getDefaultOrgId(client: SupabaseClient): Promise<string> {
     return (await getPlatformSetting(client, 'default_org_id')) || SEED_ORG_ID;
+}
+
+/**
+ * The default org for the WhatsApp webhook (Fase 2 task 2.2a): a read error
+ * throws (the webhook answers non-200, so Meta retries) instead of falling back
+ * to the seed org, so a database hiccup can never file a message under the
+ * wrong org. Only a missing row (a fresh development database) uses the seed
+ * org. Pass a service-role client.
+ */
+export async function getDefaultOrgIdStrict(client: SupabaseClient): Promise<string> {
+    return (await getPlatformSettingStrict(client, 'default_org_id')) || SEED_ORG_ID;
 }
 
 /**

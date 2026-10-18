@@ -54,7 +54,7 @@ function job(id: string, text: string, createdAt: string, o: JobOpts = {}) {
     };
 }
 
-type HistRow = { role: 'user' | 'assistant' | 'system'; content: string; wa_message_id?: string };
+type HistRow = { role: 'user' | 'assistant' | 'system'; content: string; wa_message_id?: string; metadata?: unknown };
 
 interface Scenario {
     jobs: ReturnType<typeof job>[];
@@ -610,6 +610,25 @@ describe('processQueue — history around the burst (tracker 3.4)', () => {
         const [message, history] = ragMock.mock.calls[0];
         expect(message).toBe('pertanyaan A');
         expect(history).toEqual([{ role: 'assistant', content: 'jawaban lama' }]);
+    });
+
+    it('leaves out what the customer sent to another number of the WABA (stored by process mode)', async () => {
+        const fake = clientFor({
+            jobs: [job('j1', 'halo, ini ke nomor utama', '2026-06-20T10:05:00.000Z', { wamid: 'wamid.b1' })],
+            history: [
+                { role: 'assistant', content: 'jawaban lama', wa_message_id: 'wamid.o1' },
+                { role: 'user', content: 'pesan ke nomor lain', wa_message_id: 'wamid.x1', metadata: { other_number: 'h0123456789' } },
+                { role: 'user', content: 'halo, ini ke nomor utama', wa_message_id: 'wamid.b1', metadata: null },
+            ],
+        });
+        await processQueue(fake.client);
+        const [message, history] = ragMock.mock.calls[0];
+        expect(message).toBe('halo, ini ke nomor utama');
+        expect(history).toEqual([{ role: 'assistant', content: 'jawaban lama' }]);
+        const select = fake.calls.find((c) => c.table === 'whatsapp_messages' && c.op === 'select')!;
+        expect(select.select).toContain('metadata');
+        // Left out in the query too, so they do not take the 30 places.
+        expect(select.filters).toContainEqual(['is', 'metadata->>other_number', null]);
     });
 
     it('skips a photo without a caption instead of sending an empty turn', async () => {

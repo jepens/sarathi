@@ -54,22 +54,28 @@ Nomor pelanggan selalu disamarkan (4 digit awal + 3 digit akhir) dan wamid tampi
 
 ### 3. 🧪 Test Webhook Script (`scripts/test-webhook.js`)
 
-**Fungsi**: Simulasi pesan WhatsApp ke webhook lokal
+**Fungsi**: Simulasi pesan WhatsApp ke webhook lokal. Webhook hanya menerima
+kiriman bertanda tangan untuk nomor aplikasi, jadi skrip menandatangani payload
+dengan `WHATSAPP_APP_SECRET` dan memakai `WHATSAPP_PHONE_NUMBER_ID`: jalankan
+dengan `--env-file=.env.local`. Skrip hanya mengirim ke mesin ini kecuali diberi
+`--allow-remote`.
+
+**Penting**: server yang dituju memakai kredensialnya sendiri (`.env.local`
+server itu). Pesan uji tersimpan di database yang dipakai server itu, dan AI-nya
+benar-benar mencoba membalas `TEST_PHONE` dari nomor WhatsApp di kredensial itu.
+Karena itu `TEST_PHONE` wajib diisi dengan nomor milik Anda, dan sebaiknya server
+lokal memakai database lokal, bukan produksi.
 
 **Cara Menggunakan**:
 ```bash
-# Basic test
-node scripts/test-webhook.js
+# Basic test (TEST_PHONE wajib: nomor milik Anda)
+TEST_PHONE=<nomor-anda> node --env-file=.env.local scripts/test-webhook.js
 
-# Custom webhook URL
-WEBHOOK_URL=http://localhost:3000/api/webhook/whatsapp node scripts/test-webhook.js
-
-# Custom phone number
-TEST_PHONE=6281234567890 node scripts/test-webhook.js
-
-# Both custom
-WEBHOOK_URL=https://your-domain.com/api/webhook/whatsapp TEST_PHONE=6281234567890 node scripts/test-webhook.js
+# Custom webhook URL (tetap mesin ini)
+WEBHOOK_URL=http://localhost:3000/api/webhook/whatsapp TEST_PHONE=<nomor-anda> node --env-file=.env.local scripts/test-webhook.js
 ```
+Skrip keluar dengan kode 1 bila ditolak (bukan mesin ini, env kurang, `TEST_PHONE`
+kosong) atau bila webhook tidak menjawab 2xx.
 
 **Output**:
 ```
@@ -146,7 +152,7 @@ http://localhost:3000/dashboard/debug-chats
 **Step 3: Test dengan Script**
 ```bash
 # Test webhook lokal
-node scripts/test-webhook.js
+TEST_PHONE=<nomor-anda> node --env-file=.env.local scripts/test-webhook.js
 
 # Cek debug dashboard
 http://localhost:3000/dashboard/debug-chats
@@ -215,11 +221,8 @@ Sebelum mulai debug, pastikan:
 # Run app
 npm run dev
 
-# Test webhook lokal
-node scripts/test-webhook.js
-
-# Test dengan custom phone
-TEST_PHONE=6281234567890 node scripts/test-webhook.js
+# Test webhook lokal (TEST_PHONE wajib: nomor milik Anda)
+TEST_PHONE=<nomor-anda> node --env-file=.env.local scripts/test-webhook.js
 
 # Expose lokal ke internet (development)
 ngrok http 3000
