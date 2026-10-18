@@ -34,6 +34,17 @@ describe('WhatsApp env getters', () => {
         expect(await isWhatsAppConfigured({} as any)).toBe(true);
     });
 
+    it('isWhatsAppConfigured checks each value after trimming', async () => {
+        vi.stubEnv('WHATSAPP_ACCESS_TOKEN', 'token-palsu');
+        vi.stubEnv('WHATSAPP_PHONE_NUMBER_ID', '\r\n');
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        expect(await isWhatsAppConfigured({} as any)).toBe(false);
+        vi.stubEnv('WHATSAPP_ACCESS_TOKEN', ' ');
+        vi.stubEnv('WHATSAPP_PHONE_NUMBER_ID', '100000000000001');
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        expect(await isWhatsAppConfigured({} as any)).toBe(false);
+    });
+
     it('treat a value of only whitespace as not set', async () => {
         vi.stubEnv('WHATSAPP_ACCESS_TOKEN', ' \n');
         vi.stubEnv('WHATSAPP_PHONE_NUMBER_ID', '\t');

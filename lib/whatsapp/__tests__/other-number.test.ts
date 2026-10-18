@@ -3,7 +3,6 @@ import { makeFakeSupabase } from './fakeSupabase';
 import {
     firstOtherNumberLimitNote,
     firstOtherNumberNote,
-    isNewOtherNumber,
     isOtherNumberRow,
     otherNumberLabel,
     otherNumberLimitNotice,
@@ -11,6 +10,7 @@ import {
     otherNumberMode,
     otherNumberNotice,
     otherNumberOf,
+    otherNumberSeen,
     resetOtherNumberState,
 } from '@/lib/whatsapp/other-number';
 
@@ -60,18 +60,20 @@ describe('otherNumberMode', () => {
         // Longer: more likely something pasted into the wrong variable (even a
         // secret), so only its length is reported.
         ['EAAG' + 'x'.repeat(60), 'store', 'nilai 64 karakter'],
+        ['abcdefghijkl', 'store', '"abcdefghijkl"'], // 12 characters: still quoted
+        ['abcdefghijklm', 'store', 'nilai 13 karakter'],
     ])('%j means %s', (raw, mode, unknownValue) => {
         expect(otherNumberMode(raw)).toEqual(unknownValue === undefined ? { mode } : { mode, unknownValue });
     });
 });
 
-describe('isNewOtherNumber', () => {
+describe('otherNumberSeen', () => {
     const other = otherNumberOf(OTHER, null);
 
     it('asks ops_events for a webhook_unrouted report of this number in the last 7 days, once per process', async () => {
         const fake = makeFakeSupabase({ resolve: () => ({ data: [], error: null }) });
         const now = Date.parse('2026-10-18T10:00:00Z');
-        expect(await isNewOtherNumber(fake.client, other, now)).toBe(true);
+        expect(await otherNumberSeen(fake.client, other, now)).toBe('new');
         expect(fake.calls).toEqual([
             expect.objectContaining({
                 table: 'ops_events',
@@ -84,34 +86,40 @@ describe('isNewOtherNumber', () => {
                 limitN: 1,
             }),
         ]);
-        expect(await isNewOtherNumber(fake.client, other, now)).toBe(false);
+        expect(await otherNumberSeen(fake.client, other, now)).toBe('known');
         expect(fake.calls).toHaveLength(1);
     });
 
     it('a number reported before is not new', async () => {
         const fake = makeFakeSupabase({ resolve: () => ({ data: [{ id: 7 }], error: null }) });
-        expect(await isNewOtherNumber(fake.client, other)).toBe(false);
+        expect(await otherNumberSeen(fake.client, other)).toBe('known');
     });
 
-    it('a read error counts as known for that event, and the next event looks again', async () => {
+    it('a read error is reported as unchecked (alerted, not taken for known), and the next event looks again', async () => {
         let fail = true;
-        const fake = makeFakeSupabase({ resolve: () => (fail ? { data: null, error: { code: '57014' } } : { data: [], error: null }) });
-        expect(await isNewOtherNumber(fake.client, other)).toBe(false);
+        const fake = makeFakeSupabase({ resolve: () => (fail ? { data: null, error: { code: '57014' } } : { data: [{ id: 1 }], error: null }) });
+        expect(await otherNumberSeen(fake.client, other)).toBe('unchecked');
         fail = false;
-        expect(await isNewOtherNumber(fake.client, other)).toBe(true);
+        expect(await otherNumberSeen(fake.client, other)).toBe('known');
         expect(fake.calls).toHaveLength(2);
     });
 
     it('concurrent callers share one lookup and only the first gets true', async () => {
         let release: (v: { data: unknown[]; error: null }) => void = () => {};
         const fake = makeFakeSupabase({ resolve: () => new Promise((r) => { release = r; }) });
-        const first = isNewOtherNumber(fake.client, other);
-        const second = isNewOtherNumber(fake.client, other);
-        await Promise.resolve();
-        await Promise.resolve();
+        const first = otherNumberSeen(fake.client, other);
+        let secondDone = false;
+        const second = otherNumberSeen(fake.client, other).then((seen) => {
+            secondDone = true;
+            return seen;
+        });
+        for (let i = 0; i < 5; i += 1) await Promise.resolve();
+        // The second caller waits for the shared lookup before it returns, so
+        // its event is not recorded before the lookup ran.
+        expect(secondDone).toBe(false);
         release({ data: [], error: null });
-        expect(await first).toBe(true);
-        expect(await second).toBe(false);
+        expect(await first).toBe('new');
+        expect(await second).toBe('known');
         expect(fake.calls).toHaveLength(1);
     });
 });

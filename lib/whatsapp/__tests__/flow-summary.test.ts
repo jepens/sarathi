@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { contactCardSummary, flowSubmissionSummary } from '@/lib/whatsapp/flow-summary';
+import { contactCardSummary, flowSubmissionSummary, otherMessageSummary } from '@/lib/whatsapp/flow-summary';
+
+// A lone surrogate: half of an emoji, not valid UTF-8 (the database refuses it).
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
 // The summary of a Flow submission to another number of the WABA, stored for
 // the operators (the form is unknown to this app). Fake answers only.
@@ -27,6 +30,30 @@ describe('flowSubmissionSummary', () => {
         for (const raw of ['bukan json', '[1,2]', '{}', null, undefined, 42]) {
             expect(flowSubmissionSummary(raw)).toBe('📋 Form WhatsApp dikirim (isian tidak terbaca)');
         }
+    });
+
+    it('never cuts an emoji in half', () => {
+        const summary = flowSubmissionSummary({ catatan: `${'a'.repeat(199)}😀😀` });
+        expect(summary).not.toMatch(LONE_SURROGATE);
+        expect(summary).toBe(`📋 Form WhatsApp dikirim\ncatatan: ${'a'.repeat(199)}😀…`);
+        expect(contactCardSummary([{ name: { formatted_name: `${'b'.repeat(199)}😀` }, phones: [] }])).not.toMatch(LONE_SURROGATE);
+    });
+});
+
+describe('otherMessageSummary', () => {
+    it('describes the other message types in one line', () => {
+        expect(otherMessageSummary({ type: 'button', button: { text: 'Ya, saya tertarik', payload: 'YA' } })).toBe('🔘 Tombol: Ya, saya tertarik');
+        expect(otherMessageSummary({ type: 'interactive', interactive: { type: 'list_reply', list_reply: { id: 'p2', title: 'Paket B' } } }))
+            .toBe('🔘 Pilihan: Paket B');
+        expect(otherMessageSummary({ type: 'interactive', interactive: { type: 'button_reply', button_reply: { id: 'b1' } } }))
+            .toBe('🔘 Pilihan: b1');
+        expect(otherMessageSummary({ type: 'location', location: { name: 'Kantor', address: 'Jl. Contoh 1', latitude: -6.2, longitude: 106.8 } }))
+            .toBe('📍 Lokasi: Kantor, Jl. Contoh 1');
+        expect(otherMessageSummary({ type: 'location', location: { latitude: -6.2, longitude: 106.8 } })).toBe('📍 Lokasi: -6.2, 106.8');
+        expect(otherMessageSummary({ type: 'reaction', reaction: { message_id: 'wamid.x', emoji: '👍' } })).toBe('Reaksi: 👍');
+        expect(otherMessageSummary({ type: 'reaction', reaction: { message_id: 'wamid.x' } })).toBe('Reaksi: (dihapus)');
+        expect(otherMessageSummary({ type: 'unsupported' })).toBe('Pesan jenis "unsupported" (isinya tidak ditampilkan di Sarathi)');
+        expect(otherMessageSummary(null)).toBe('Pesan jenis "tidak dikenal" (isinya tidak ditampilkan di Sarathi)');
     });
 });
 

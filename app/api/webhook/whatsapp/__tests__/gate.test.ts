@@ -416,15 +416,55 @@ describe('webhook gate: one-number routing', () => {
         expect(opsKinds().filter((k) => k === 'webhook_unrouted')).toHaveLength(2);
     });
 
-    it('a failed lookup alerts nothing new for that event, and the next event looks again', async () => {
+    it('a failed lookup is alerted within the hour too (its own event would make the number look known later)', async () => {
         h.opsLookupError = true;
         expect((await POST(post(textEvent(OTHER).raw))).status).toBe(200);
-        expect(opsKinds()).toEqual(['webhook_unrouted']);
+        expect(opsKinds()).toEqual(['webhook_unrouted_new', 'webhook_unrouted']);
+        expect(opsEvents()[0].p_detail).toMatch(/; riwayat 7 hari tidak terbaca$/);
+        // The next event looks again, and finds the number (the first event's row).
         h.opsLookupError = false;
-        h.opsSeen = false;
         expect((await POST(post(textEvent(OTHER).raw))).status).toBe(200);
         expect(touched('ops_events')).toHaveLength(2);
-        expect(opsKinds()).toEqual(['webhook_unrouted', 'webhook_unrouted_new', 'webhook_unrouted']);
+        expect(opsKinds()).toEqual(['webhook_unrouted_new', 'webhook_unrouted', 'webhook_unrouted']);
+    });
+
+    it.each([
+        ['button', { button: { text: 'Ya, saya tertarik', payload: 'YA' } }, '🔘 Tombol: Ya, saya tertarik'],
+        ['interactive', { interactive: { type: 'list_reply', list_reply: { id: 'p2', title: 'Paket B' } } }, '🔘 Pilihan: Paket B'],
+        ['location', { location: { name: 'Kantor', latitude: -6.2, longitude: 106.8 } }, '📍 Lokasi: Kantor'],
+        ['reaction', { reaction: { message_id: 'wamid.x', emoji: '👍' } }, 'Reaksi: 👍'],
+        ['unsupported', {}, 'Pesan jenis "unsupported" (isinya tidak ditampilkan di Sarathi)'],
+    ])('process mode keeps a %s message to another number as one readable line', async (type, extra, content) => {
+        vi.stubEnv('WHATSAPP_OTHER_NUMBER_EVENTS', 'process');
+        seq += 1;
+        const wamid = `wamid.fake-other-${seq}`;
+        const body = {
+            object: 'whatsapp_business_account',
+            entry: [{ changes: [{ field: 'messages', value: {
+                metadata: { phone_number_id: OTHER },
+                contacts: [{ wa_id: PHONE }],
+                messages: [{ from: PHONE, id: wamid, type, ...extra }],
+            } }] }],
+        };
+        expect((await POST(post(JSON.stringify(body)))).status).toBe(200);
+        const stored = touched('whatsapp_messages').find((c) => c.op === 'insert')!.payload as Record<string, unknown>;
+        expect(stored).toMatchObject({ role: 'user', wa_message_id: wamid, content, metadata: { other_number: expect.stringMatching(/^h[0-9a-f]{10}$/) } });
+        expect(touched('whatsapp_chats').find((c) => c.op === 'upsert')!.payload).toMatchObject({ last_message: content });
+        expect(sendWhatsAppMessage).not.toHaveBeenCalled();
+        expect(handleFlowReply).not.toHaveBeenCalled();
+    });
+
+    it('an unsupported message type to its own number is still only acknowledged', async () => {
+        const body = {
+            object: 'whatsapp_business_account',
+            entry: [{ changes: [{ field: 'messages', value: {
+                metadata: { phone_number_id: PNID },
+                contacts: [{ wa_id: PHONE }],
+                messages: [{ from: PHONE, id: 'wamid.fake-loc-own', type: 'location', location: { latitude: 1, longitude: 2 } }],
+            } }] }],
+        };
+        expect((await POST(post(JSON.stringify(body)))).status).toBe(200);
+        expect(touched('whatsapp_messages')).toEqual([]);
     });
 
     it('a Flow submission to its own number still gets the Brief Acara handling', async () => {

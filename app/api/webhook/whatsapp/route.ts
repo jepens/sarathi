@@ -11,17 +11,17 @@ import { webhookSummary } from '@/lib/whatsapp/webhook-summary';
 import { logSystemMessage } from '@/lib/whatsapp/history';
 import { sendPushToOrg } from '@/lib/notifications/web-push';
 import { handleFlowReply } from '@/lib/whatsapp/flow-response';
-import { contactCardSummary, flowSubmissionSummary } from '@/lib/whatsapp/flow-summary';
+import { contactCardSummary, flowSubmissionSummary, otherMessageSummary } from '@/lib/whatsapp/flow-summary';
 import {
     firstOtherNumberLimitNote,
     firstOtherNumberNote,
-    isNewOtherNumber,
     otherNumberLabel,
     otherNumberLimitNotice,
     otherNumberMetadata,
     otherNumberMode,
     otherNumberNotice,
     otherNumberOf,
+    otherNumberSeen,
     type OtherNumber,
 } from '@/lib/whatsapp/other-number';
 import { CHAT_MEDIA_BUCKET, CHAT_MEDIA_MAX_BYTES, safePhoneSegment, storageContentType } from '@/lib/storage/chat-media';
@@ -539,9 +539,13 @@ export async function POST(request: Request) {
                 const outcome = otherNumbers.mode === 'drop'
                     ? 'dibuang'
                     : 'diproses tanpa AI, pesan disimpan di inbox (WHATSAPP_OTHER_NUMBER_EVENTS=process)';
-                // Looked up before this event is recorded.
-                if (await isNewOtherNumber(supabase, other)) {
-                    await recordOpsEvent(supabase, 'webhook_unrouted_new', { detail: `${otherNumberLabel(other)}; ${outcome}` });
+                // Looked up before this event is recorded; a failed lookup is
+                // alerted too (see otherNumberSeen).
+                const seen = await otherNumberSeen(supabase, other);
+                if (seen !== 'known') {
+                    await recordOpsEvent(supabase, 'webhook_unrouted_new', {
+                        detail: `${otherNumberLabel(other)}; ${outcome}${seen === 'unchecked' ? '; riwayat 7 hari tidak terbaca' : ''}`,
+                    });
                 }
                 await recordOpsEvent(supabase, 'webhook_unrouted', { detail: `${otherNumberLabel(other)}; ${outcome}` });
                 if (otherNumbers.mode === 'drop') {
@@ -770,6 +774,21 @@ export async function POST(request: Request) {
                             waId,
                             inboundWamid,
                             nfmReply: interactive.nfm_reply,
+                        });
+                    } else if (storeOnly) {
+                        // A button or list choice sent to another number: kept
+                        // as one readable line (nothing acts on it).
+                        const summary = otherMessageSummary(message);
+                        await storeOtherNumberMessage({
+                            supabase,
+                            orgId: waCtx.orgId,
+                            contactKey,
+                            bsuid,
+                            waId,
+                            inboundWamid,
+                            content: summary,
+                            preview: summary,
+                            other: storeOnly,
                         });
                     } else {
                         // Other interactive subtypes (button_reply, list_reply)
@@ -1034,6 +1053,26 @@ export async function POST(request: Request) {
                     })();
 
                     // Return 200 immediately to Meta
+                    return new NextResponse('EVENT_RECEIVED', { status: 200 });
+                }
+
+                // Any other type sent to another number of the WABA (a
+                // template's quick-reply button, a location, a reaction, a type
+                // Sarathi does not show) is kept too, as one readable line, so
+                // process mode loses nothing that arrived.
+                if (storeOnly) {
+                    const summary = otherMessageSummary(message);
+                    await storeOtherNumberMessage({
+                        supabase,
+                        orgId: waCtx.orgId,
+                        contactKey,
+                        bsuid,
+                        waId,
+                        inboundWamid,
+                        content: summary,
+                        preview: summary,
+                        other: storeOnly,
+                    });
                     return new NextResponse('EVENT_RECEIVED', { status: 200 });
                 }
             }

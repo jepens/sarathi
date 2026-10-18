@@ -72,32 +72,38 @@ async function lookUpNew(client: SupabaseClient, other: OtherNumber, now: number
 }
 
 /**
- * Whether no webhook_unrouted event named this number in the last 7 days: a
- * number new to the WABA, or the app's own number when WHATSAPP_PHONE_NUMBER_ID
- * is wrong. Such a number is alerted within the hour (webhook_unrouted_new); a
- * known one only daily. Call it before this event is recorded: concurrent
- * deliveries of the same number wait for one lookup, and only the first of
- * them gets true, so no event of this number is recorded before the lookup
- * ran. Looked up once per number per server process (a restart looks again);
- * a read error counts as known for that event (the daily alert still comes)
- * and the next event looks again. ops_events keeps one example detail per
- * minute, so a number whose events always share their minute with another
- * number's may look new again after a restart: an extra email, never a
- * missing one.
+ * Whether a webhook_unrouted event named this number in the last 7 days.
+ * 'new' (none did: a number new to the WABA, or the app's own number when
+ * WHATSAPP_PHONE_NUMBER_ID is wrong) and 'unchecked' (the lookup failed) are
+ * alerted within the hour (webhook_unrouted_new); a 'known' number only
+ * daily. A failed lookup is alerted rather than taken for known: this event's
+ * own webhook_unrouted row would make every later lookup find the number.
+ * Call it before this event is recorded: concurrent deliveries of the same
+ * number wait for one lookup and only the first of them gets its result, so
+ * no event of this number is recorded before the lookup ran. Looked up once
+ * per number per server process (a restart looks again; after a failed
+ * lookup the next event looks again). ops_events keeps one example detail
+ * per minute, so a number whose events always share their minute with
+ * another number's may look new again after a restart: an extra email, never
+ * a missing one.
  */
-export async function isNewOtherNumber(client: SupabaseClient, other: OtherNumber, now = Date.now()): Promise<boolean> {
+export async function otherNumberSeen(
+    client: SupabaseClient,
+    other: OtherNumber,
+    now = Date.now(),
+): Promise<'new' | 'known' | 'unchecked'> {
     const pending = lookups.get(other.ref);
     if (pending) {
         await pending.catch(() => false);
-        return false;
+        return 'known';
     }
     const lookup = lookUpNew(client, other, now);
     if (lookups.size < LOOKUPS_MAX) lookups.set(other.ref, lookup);
     try {
-        return await lookup;
+        return (await lookup) ? 'new' : 'known';
     } catch {
         lookups.delete(other.ref);
-        return false;
+        return 'unchecked';
     }
 }
 
