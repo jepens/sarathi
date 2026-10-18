@@ -212,14 +212,18 @@ select is(
            tests.org_a(), tests.org_b()),
     'the summary gives totals per kind and org with the part not emailed');
 
--- A daily kind (e.g. another number's recurring traffic) waits a day, not an hour.
+-- A daily kind (e.g. another number's recurring traffic) waits a day, not an
+-- hour; the kinds not in the daily list keep the hour.
 insert into public.ops_events (kind, org_id, minute, first_at, last_at, count, detail) values
-    ('tst_daily', null, date_trunc('minute', now()) - interval '3 minutes', now() - interval '3 minutes', now() - interval '3 minutes', 1, 'd');
-insert into public.ops_alert_state (kind, org_id, last_alerted_at) values ('tst_daily', null, now() - interval '2 hours');
+    ('tst_daily', null, date_trunc('minute', now()) - interval '3 minutes', now() - interval '3 minutes', now() - interval '3 minutes', 1, 'd'),
+    ('tst_hourly', null, date_trunc('minute', now()) - interval '3 minutes', now() - interval '3 minutes', now() - interval '3 minutes', 1, 'h');
+insert into public.ops_alert_state (kind, org_id, last_alerted_at) values
+    ('tst_daily', null, now() - interval '2 hours'),
+    ('tst_hourly', null, now() - interval '2 hours');
 select is(
-    (select count(*)::int from public.claim_ops_alerts(3600, array['tst_daily'])),
-    0,
-    'a daily kind emailed two hours ago is not due yet');
+    (select string_agg(kind, ',' order by kind) from public.claim_ops_alerts(3600, array['tst_daily'])),
+    'tst_hourly',
+    'a daily kind emailed two hours ago is not due yet; another kind emailed then is');
 select is(
     (select string_agg(kind, ',') from public.claim_ops_alerts(3600)),
     'tst_daily',

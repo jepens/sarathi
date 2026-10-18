@@ -10,8 +10,9 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 // in DAILY_ALERT_KINDS), and returns the group totals. One email covers all
 // claimed groups. Once it is out, mark_ops_alerts_sent() stamps the events; if
 // it fails, release_ops_alerts() frees the groups for the next run. So a burst
-// of failures gives at most one email per hour per kind and org, a flood of one
-// kind never hides another, and two overlapping runs never email a group twice.
+// of failures gives at most one email per hour (a day for a daily kind) per
+// kind and org, a flood of one kind never hides another, and two overlapping
+// runs never email a group twice.
 //
 // maybeSendOpsDailySummary: once a day from 08:00 WIB, the totals of the last
 // 24 hours. It comes on quiet days too, so a day without it means the cron has
@@ -118,9 +119,10 @@ export function buildOpsAlertEmail(
         const details = [...new Set(list.flatMap((g) => g.details ?? []))].slice(0, 3);
         for (const d of details) lines.push(`  contoh: ${d}`);
     }
+    const daily = kinds.filter((k) => DAILY_ALERT_KINDS.includes(k)).map(label);
     lines.push(
         '',
-        'Email berikutnya untuk jenis dan org yang sama paling cepat 1 jam lagi. Kejadian dari 1-2 menit terakhir, dan kejadian di atas batas pencatatan per menit saat banjir, masuk email berikutnya; server yang restart bisa kehilangan sebagian hitungan yang sedang ditahan. Rincian: tabel ops_events (service role).',
+        `Email berikutnya untuk jenis dan org yang sama paling cepat 1 jam lagi${daily.length > 0 ? ` (1 hari lagi untuk: ${daily.join('; ')})` : ''}. Kejadian dari 1-2 menit terakhir, dan kejadian di atas batas pencatatan per menit saat banjir, masuk email berikutnya; server yang restart bisa kehilangan sebagian hitungan yang sedang ditahan. Rincian: tabel ops_events (service role).`,
     );
     const subject = `[Sarathi] Peringatan: ${kinds.map(label).join('; ')}`.slice(0, 200);
     return { subject, text: lines.join('\n') };
@@ -181,7 +183,7 @@ export async function maybeSendOpsAlerts(client: SupabaseClient, now: Date = new
         console.error('Ops alerts: sending the email failed', { kinds, reason: sendFailure });
         const { error: releaseError } = await client.rpc('release_ops_alerts', { p_stamp: stamp });
         if (releaseError) {
-            console.error('Ops alerts: the claim could not be released either; these events are emailed after the one-hour wait', {
+            console.error('Ops alerts: the claim could not be released either; these events are emailed after the wait (an hour, a day for a daily kind)', {
                 kinds,
                 code: releaseError.code,
             });
@@ -190,7 +192,7 @@ export async function maybeSendOpsAlerts(client: SupabaseClient, now: Date = new
     }
     const { error: markError } = await client.rpc('mark_ops_alerts_sent', { p_stamp: stamp, p_cutoff: cutoff });
     if (markError) {
-        console.error('Ops alerts: emailed, but the events could not be marked sent; they may be emailed again after the one-hour wait', {
+        console.error('Ops alerts: emailed, but the events could not be marked sent; they may be emailed again after the wait (an hour, a day for a daily kind)', {
             kinds,
             code: markError.code,
         });
