@@ -317,6 +317,10 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+    // Set once the signature has passed: only then is a failure a Meta delivery
+    // the team must hear about (anyone can POST junk to this URL).
+    let verified = false;
+    let alertOrgId: string | null = null;
     try {
         // Get raw body for signature verification.
         // MUST be the raw bytes — re-stringifying parsed JSON breaks the HMAC.
@@ -332,7 +336,19 @@ export async function POST(request: Request) {
         // app_secret, which we only know after reading phone_number_id from the
         // body. Parsing is side-effect-free; nothing acts on the payload until
         // the signature is verified below (right after we resolve the org).
-        const body = JSON.parse(rawBody);
+        // Meta always sends a JSON object, so a body that does not parse is not
+        // a Meta delivery: refuse it, without an alert.
+        let body;
+        try {
+            body = JSON.parse(rawBody);
+        } catch {
+            whatsappLogger.warn('Webhook body is not valid JSON — refused');
+            return new NextResponse('Bad Request', { status: 400 });
+        }
+        if (!body || typeof body !== 'object') {
+            whatsappLogger.warn('Webhook body is not a JSON object — refused');
+            return new NextResponse('Bad Request', { status: 400 });
+        }
 
         // What arrived, never the payload itself: it holds customers' phone
         // numbers, names and message text (audit KEA-21, UU PDP).
@@ -371,11 +387,17 @@ export async function POST(request: Request) {
                 if (!valid) {
                     whatsappLogger.warn('Rejected webhook with invalid/missing signature');
                     await recordOpsEvent(supabase, 'webhook_signature_invalid', {
-                        detail: signature ? 'tanda tangan tidak cocok' : 'header X-Hub-Signature-256 tidak ada',
+                        detail: !waCtx.appSecret
+                            ? 'WHATSAPP_APP_SECRET tidak diset di server'
+                            : signature
+                              ? 'tanda tangan tidak cocok'
+                              : 'header X-Hub-Signature-256 tidak ada',
                     });
                     return new NextResponse('Forbidden', { status: 403 });
                 }
             }
+            verified = true;
+            alertOrgId = waCtx.orgId;
 
             // ========== HANDLE user_id_update (Phase B) ==========
             // Fires when a customer changes their phone number → BSUID
@@ -783,12 +805,12 @@ export async function POST(request: Request) {
     } catch (error) {
         whatsappLogger.error('Error processing webhook', error);
         // Team alert (3.5): Meta retries the delivery, but a webhook that keeps
-        // failing loses messages once Meta gives up.
-        if (process.env.SUPABASE_SERVICE_ROLE_KEY) {
+        // failing loses messages once Meta gives up. Signed deliveries only.
+        if (verified && process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
             await recordOpsEvent(
-                createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY),
+                createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY),
                 'webhook_error',
-                { detail: describeErrorForOps(error) },
+                { orgId: alertOrgId, detail: describeErrorForOps(error) },
             );
         }
         return new NextResponse('Internal Server Error', { status: 500 });

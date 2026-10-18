@@ -1,21 +1,31 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 // Team alerts by email (tracker 3.5, migration 0070; owner decision
-// 2026-10-18: email via Resend). Called every minute from the queue cron
-// (/api/queue/process). Sends at most one email per run, covering every event
-// kind that has unsent events and was not alerted in the last hour, so a
-// burst of failures produces one email per hour per kind, not one per event.
+// 2026-10-18: email via Resend). Both functions run every minute from the queue
+// cron (/api/queue/process).
 //
-// Recipients: OPS_ALERT_EMAIL (comma-separated). Sender: OPS_ALERT_FROM_EMAIL,
-// else SAILENDRA_FROM_EMAIL. Without a recipient, a sender or RESEND_API_KEY
-// nothing is sent: the events stay unsent (kept 30 days) and a warning is
-// logged once an hour. Rows are claimed (alerted_at stamped) before sending,
-// so two overlapping runs cannot both send them; a failed send un-claims them
-// for the next run.
+// maybeSendOpsAlerts: claim_ops_alerts() claims, in one statement, every
+// (kind, org) group that has unsent events of a finished minute and was not
+// emailed in the last hour, and returns the group totals. One email covers all
+// claimed groups. Once it is out, mark_ops_alerts_sent() stamps the events; if
+// it fails, release_ops_alerts() frees the groups for the next run. So a burst
+// of failures gives at most one email per hour per kind and org, a flood of one
+// kind never hides another, and two overlapping runs never email a group twice.
+//
+// maybeSendOpsDailySummary: once a day from 08:00 WIB, the totals of the last
+// 24 hours. It comes on quiet days too, so a day without it means the cron has
+// stopped (and with it every alert).
+//
+// Recipients: OPS_ALERT_EMAIL (comma-separated; "Name <address>" is accepted).
+// Sender: OPS_ALERT_FROM_EMAIL, else SAILENDRA_FROM_EMAIL. Without a recipient,
+// a sender or RESEND_API_KEY nothing is claimed or sent: the events stay unsent
+// (kept 30 days) and a warning is logged once an hour. Set the variables in
+// Easypanel before the deploy (a running container does not see new values).
 
-const ALERT_EVERY_MS = 60 * 60 * 1000;
-const MAX_ROWS = 1000;
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const ALERT_EVERY_S = 60 * 60;
+const DAILY_HOUR_WIB = 8;
+const WIB_OFFSET_MS = 7 * 60 * 60 * 1000; // Asia/Jakarta has no daylight saving
+const ADDRESS_RE = /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/;
 
 export const OPS_KIND_LABELS: Record<string, string> = {
     webhook_signature_invalid: 'Webhook WhatsApp ditolak: tanda tangan tidak valid (403)',
@@ -24,12 +34,16 @@ export const OPS_KIND_LABELS: Record<string, string> = {
     whatsapp_token_invalid: 'Token WhatsApp tidak valid atau kedaluwarsa (Meta 190)',
 };
 
-interface OpsEventRow {
-    id: number;
+/** One claimed (kind, org) group, as claim_ops_alerts returns it. */
+export interface OpsAlertGroup {
     kind: string;
     org_id: string | null;
-    detail: string;
-    created_at: string;
+    events: number | string;
+    first_at: string;
+    last_at: string;
+    details: string[] | null;
+    stamp: string;
+    cutoff: string;
 }
 
 export interface OpsAlertResult {
@@ -42,19 +56,28 @@ interface AlertConfig {
     key: string;
     from: string;
     to: string[];
+    /** OPS_ALERT_EMAIL entries that are not addresses (ignored). */
+    dropped: number;
+}
+
+function recipientAddress(entry: string): string | null {
+    const angle = /<([^<>]+)>\s*$/.exec(entry);
+    const address = (angle ? angle[1] : entry).trim();
+    return ADDRESS_RE.test(address) ? address : null;
 }
 
 export function opsAlertConfig(env: Record<string, string | undefined> = process.env): AlertConfig | { missing: string } {
-    const to = (env.OPS_ALERT_EMAIL ?? '')
+    const entries = (env.OPS_ALERT_EMAIL ?? '')
         .split(',')
         .map((s) => s.trim())
-        .filter((s) => EMAIL_RE.test(s));
+        .filter(Boolean);
+    const to = entries.map(recipientAddress).filter((a): a is string => !!a);
     const from = (env.OPS_ALERT_FROM_EMAIL || env.SAILENDRA_FROM_EMAIL || '').trim();
     const key = (env.RESEND_API_KEY ?? '').trim();
     if (to.length === 0) return { missing: 'OPS_ALERT_EMAIL' };
     if (!from) return { missing: 'OPS_ALERT_FROM_EMAIL / SAILENDRA_FROM_EMAIL' };
     if (!key) return { missing: 'RESEND_API_KEY' };
-    return { key, from, to };
+    return { key, from, to, dropped: entries.length - to.length };
 }
 
 const WIB = new Intl.DateTimeFormat('id-ID', {
@@ -63,105 +86,175 @@ const WIB = new Intl.DateTimeFormat('id-ID', {
     timeStyle: 'short',
 });
 
-function wib(iso: string | Date): string {
-    return `${WIB.format(typeof iso === 'string' ? new Date(iso) : iso)} WIB`;
+function wib(at: string | number | Date): string {
+    return `${WIB.format(at instanceof Date ? at : new Date(at))} WIB`;
 }
 
+const label = (kind: string) => OPS_KIND_LABELS[kind] ?? kind;
+const orgLabel = (orgId: string | null, orgNames: Map<string, string>) =>
+    orgId ? orgNames.get(orgId) ?? orgId : 'tanpa org';
+
 export function buildOpsAlertEmail(
-    events: OpsEventRow[],
+    groups: OpsAlertGroup[],
     orgNames: Map<string, string>,
     now: Date,
 ): { subject: string; text: string } {
-    const byKind = new Map<string, OpsEventRow[]>();
-    for (const e of events) byKind.set(e.kind, [...(byKind.get(e.kind) ?? []), e]);
+    const byKind = new Map<string, OpsAlertGroup[]>();
+    for (const g of groups) byKind.set(g.kind, [...(byKind.get(g.kind) ?? []), g]);
     const kinds = [...byKind.keys()].sort();
     const lines: string[] = [`Peringatan operasional Sarathi, ${wib(now)}.`, ''];
     for (const kind of kinds) {
         const list = byKind.get(kind)!;
-        const orgs = [...new Set(list.map((e) => (e.org_id ? orgNames.get(e.org_id) ?? e.org_id : '-')))];
-        lines.push(`- ${OPS_KIND_LABELS[kind] ?? kind}: ${list.length} kejadian`);
-        lines.push(`  pertama ${wib(list[0].created_at)}, terakhir ${wib(list[list.length - 1].created_at)}`);
-        lines.push(`  org: ${orgs.join(', ')}`);
-        const details = [...new Set(list.map((e) => e.detail).filter(Boolean))].slice(0, 3);
+        const total = list.reduce((n, g) => n + Number(g.events), 0);
+        const first = Math.min(...list.map((g) => Date.parse(g.first_at)));
+        const last = Math.max(...list.map((g) => Date.parse(g.last_at)));
+        lines.push(`- ${label(kind)}: ${total} kejadian`);
+        lines.push(`  pertama ${wib(first)}, terakhir ${wib(last)}`);
+        lines.push(`  org: ${list.map((g) => `${orgLabel(g.org_id, orgNames)} (${Number(g.events)})`).join(', ')}`);
+        const details = [...new Set(list.flatMap((g) => g.details ?? []))].slice(0, 3);
         for (const d of details) lines.push(`  contoh: ${d}`);
     }
-    lines.push('', 'Email berikutnya untuk jenis yang sama paling cepat 1 jam lagi. Rincian: tabel ops_events (service role).');
-    const subject = `[Sarathi] Peringatan: ${kinds.map((k) => OPS_KIND_LABELS[k] ?? k).join('; ')}`.slice(0, 200);
+    lines.push(
+        '',
+        'Email berikutnya untuk jenis dan org yang sama paling cepat 1 jam lagi. Saat banjir kejadian pencatatan dibatasi per menit, jadi jumlahnya bisa sedikit di bawah yang sebenarnya. Rincian: tabel ops_events (service role).',
+    );
+    const subject = `[Sarathi] Peringatan: ${kinds.map(label).join('; ')}`.slice(0, 200);
     return { subject, text: lines.join('\n') };
 }
 
-export async function maybeSendOpsAlerts(client: SupabaseClient, now: Date = new Date()): Promise<OpsAlertResult> {
-    const { data: unsent, error } = await client
-        .from('ops_events')
-        .select('id, kind, org_id, detail, created_at')
-        .is('alerted_at', null)
-        .order('created_at', { ascending: true })
-        .limit(MAX_ROWS);
-    if (error) {
-        console.error('Ops alerts: reading events failed', { code: error.code });
-        return { sent: false, kinds: [], reason: 'read failed' };
-    }
-    const rows = (unsent ?? []) as OpsEventRow[];
-    if (rows.length === 0) return { sent: false, kinds: [] };
+async function orgNamesOf(client: SupabaseClient, orgIds: (string | null)[]): Promise<Map<string, string>> {
+    const ids = [...new Set(orgIds.filter((id): id is string => !!id))];
+    const names = new Map<string, string>();
+    if (ids.length === 0) return names;
+    const { data } = await client.from('organizations').select('id, name').in('id', ids);
+    for (const o of (data ?? []) as { id: string; name: string | null }[]) names.set(o.id, o.name ?? o.id);
+    return names;
+}
 
-    const since = new Date(now.getTime() - ALERT_EVERY_MS).toISOString();
-    const { data: recent, error: recentError } = await client
-        .from('ops_events')
-        .select('kind')
-        .gte('alerted_at', since)
-        .limit(MAX_ROWS);
-    if (recentError) {
-        console.error('Ops alerts: reading recent alerts failed', { code: recentError.code });
-        return { sent: false, kinds: [], reason: 'read failed' };
-    }
-    const cooling = new Set(((recent ?? []) as { kind: string }[]).map((r) => r.kind));
-    const due = rows.filter((e) => !cooling.has(e.kind));
-    if (due.length === 0) return { sent: false, kinds: [] };
-
-    const config = opsAlertConfig();
-    if ('missing' in config) {
-        if (now.getUTCMinutes() === 0) {
-            console.warn(`Ops alerts: ${due.length} event(s) not emailed, ${config.missing} not set`);
-        }
-        return { sent: false, kinds: [], reason: `${config.missing} not set` };
-    }
-
-    const stamp = now.toISOString();
-    const { data: claimedRows, error: claimError } = await client
-        .from('ops_events')
-        .update({ alerted_at: stamp })
-        .in('id', due.map((e) => e.id))
-        .is('alerted_at', null)
-        .select('id, kind, org_id, detail, created_at');
-    const claimed = ((claimedRows ?? []) as OpsEventRow[]).sort((a, b) => a.created_at.localeCompare(b.created_at));
-    if (claimError || claimed.length === 0) return { sent: false, kinds: [] };
-
-    const orgIds = [...new Set(claimed.map((e) => e.org_id).filter((id): id is string => !!id))];
-    const orgNames = new Map<string, string>();
-    if (orgIds.length > 0) {
-        const { data: orgs } = await client.from('organizations').select('id, name').in('id', orgIds);
-        for (const o of (orgs ?? []) as { id: string; name: string | null }[]) orgNames.set(o.id, o.name ?? o.id);
-    }
-
-    const { subject, text } = buildOpsAlertEmail(claimed, orgNames, now);
+/** Sends one email; returns null, or a short reason on failure. Never throws. */
+async function sendEmail(config: AlertConfig, subject: string, text: string): Promise<string | null> {
     try {
         const { Resend } = await import('resend');
-        const { error: sendError } = await new Resend(config.key).emails.send({
-            from: config.from,
-            to: config.to,
-            subject,
-            text,
-        });
-        if (sendError) throw new Error(sendError.message);
-        return { sent: true, kinds: [...new Set(claimed.map((e) => e.kind))].sort() };
+        const { error } = await new Resend(config.key).emails.send({ from: config.from, to: config.to, subject, text });
+        return error ? String(error.message ?? 'send error').slice(0, 120) : null;
     } catch (err) {
-        // Un-claim so the next run tries again.
-        await client
-            .from('ops_events')
-            .update({ alerted_at: null })
-            .in('id', claimed.map((e) => e.id))
-            .eq('alerted_at', stamp);
-        console.error('Ops alerts: sending the email failed', { reason: err instanceof Error ? err.message.slice(0, 120) : 'unknown' });
+        return err instanceof Error ? err.message.slice(0, 120) : 'unknown';
+    }
+}
+
+/** Logs, once an hour, why nothing can be emailed or which entries were ignored. */
+async function warnConfigOncePerHour(client: SupabaseClient, config: AlertConfig | { missing: string }, now: Date) {
+    if (now.getUTCMinutes() !== 0) return;
+    if ('missing' in config) {
+        const { count } = await client.from('ops_events').select('id', { count: 'exact', head: true }).is('alerted_at', null);
+        if (count) console.warn(`Ops alerts: ${count} unsent event row(s) not emailed, ${config.missing} not set`);
+    } else if (config.dropped > 0) {
+        console.warn(`Ops alerts: ${config.dropped} OPS_ALERT_EMAIL entr${config.dropped === 1 ? 'y is' : 'ies are'} not an email address and ignored`);
+    }
+}
+
+export async function maybeSendOpsAlerts(client: SupabaseClient, now: Date = new Date()): Promise<OpsAlertResult> {
+    const config = opsAlertConfig();
+    await warnConfigOncePerHour(client, config, now);
+    if ('missing' in config) return { sent: false, kinds: [], reason: `${config.missing} not set` };
+
+    const { data, error } = await client.rpc('claim_ops_alerts', { p_cooldown_seconds: ALERT_EVERY_S });
+    if (error) {
+        console.error('Ops alerts: claiming failed', { code: error.code });
+        return { sent: false, kinds: [], reason: 'claim failed' };
+    }
+    const groups = (Array.isArray(data) ? data : []) as OpsAlertGroup[];
+    if (groups.length === 0) return { sent: false, kinds: [] };
+    const { stamp, cutoff } = groups[0];
+    const kinds = [...new Set(groups.map((g) => g.kind))].sort();
+
+    const { subject, text } = buildOpsAlertEmail(groups, await orgNamesOf(client, groups.map((g) => g.org_id)), now);
+    const sendFailure = await sendEmail(config, subject, text);
+    if (sendFailure) {
+        console.error('Ops alerts: sending the email failed', { kinds, reason: sendFailure });
+        const { error: releaseError } = await client.rpc('release_ops_alerts', { p_stamp: stamp });
+        if (releaseError) {
+            console.error('Ops alerts: the claim could not be released either; these events are emailed after the one-hour wait', {
+                kinds,
+                code: releaseError.code,
+            });
+        }
         return { sent: false, kinds: [], reason: 'send failed' };
     }
+    const { error: markError } = await client.rpc('mark_ops_alerts_sent', { p_stamp: stamp, p_cutoff: cutoff });
+    if (markError) {
+        console.error('Ops alerts: emailed, but the events could not be marked sent; they may be emailed again after the one-hour wait', {
+            kinds,
+            code: markError.code,
+        });
+    }
+    return { sent: true, kinds };
+}
+
+/** Start of the Asia/Jakarta day of `now`, as an instant. */
+export function startOfWibDay(now: Date): Date {
+    const wibNow = new Date(now.getTime() + WIB_OFFSET_MS);
+    return new Date(Date.UTC(wibNow.getUTCFullYear(), wibNow.getUTCMonth(), wibNow.getUTCDate()) - WIB_OFFSET_MS);
+}
+
+export function buildOpsDailySummaryEmail(
+    rows: { kind: string; org_id: string | null; events: number | string; unsent: number | string }[],
+    failedJobs: number | null,
+    orgNames: Map<string, string>,
+    now: Date,
+): { subject: string; text: string } {
+    const byKind = new Map<string, typeof rows>();
+    for (const r of rows) byKind.set(r.kind, [...(byKind.get(r.kind) ?? []), r]);
+    const total = rows.reduce((n, r) => n + Number(r.events), 0);
+    const lines: string[] = [`Ringkasan harian operasional Sarathi, ${wib(now)} (24 jam terakhir).`, ''];
+    if (total === 0) {
+        lines.push('Kejadian operasional: tidak ada.');
+    } else {
+        lines.push('Kejadian operasional:');
+        for (const kind of [...byKind.keys()].sort()) {
+            const list = byKind.get(kind)!;
+            const n = list.reduce((s, r) => s + Number(r.events), 0);
+            const unsent = list.reduce((s, r) => s + Number(r.unsent), 0);
+            lines.push(`- ${label(kind)}: ${n}${unsent ? ` (${unsent} belum dikirim lewat email)` : ''}`);
+            lines.push(`  org: ${list.map((r) => `${orgLabel(r.org_id, orgNames)} (${Number(r.events)})`).join(', ')}`);
+        }
+    }
+    lines.push('', `Job antrean gagal: ${failedJobs === null ? 'tidak bisa dibaca' : failedJobs === 0 ? 'tidak ada' : failedJobs}.`);
+    lines.push(
+        '',
+        `Email ini dikirim setiap hari mulai pukul 0${DAILY_HOUR_WIB}.00 WIB, juga saat semuanya normal. Bila suatu hari tidak datang, cron antrean (/api/queue/process) kemungkinan berhenti, dan bersamanya semua peringatan: periksa layanan cron di Easypanel.`,
+    );
+    const subject = `[Sarathi] Ringkasan harian: ${total === 0 ? 'tidak ada kejadian' : `${total} kejadian`}${failedJobs ? `, ${failedJobs} job gagal` : ''}`;
+    return { subject, text: lines.join('\n') };
+}
+
+export async function maybeSendOpsDailySummary(client: SupabaseClient, now: Date = new Date()): Promise<{ sent: boolean; reason?: string }> {
+    if (new Date(now.getTime() + WIB_OFFSET_MS).getUTCHours() < DAILY_HOUR_WIB) return { sent: false };
+    const config = opsAlertConfig();
+    if ('missing' in config) return { sent: false, reason: `${config.missing} not set` };
+
+    const { data: stamp, error } = await client.rpc('claim_ops_daily_summary', { p_since: startOfWibDay(now).toISOString() });
+    if (error) {
+        console.error('Ops daily summary: claiming failed', { code: error.code });
+        return { sent: false, reason: 'claim failed' };
+    }
+    if (!stamp) return { sent: false };
+
+    const since = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
+    const [summary, failed] = await Promise.all([
+        client.rpc('ops_events_summary', { p_since: since }),
+        client.from('message_queue').select('id', { count: 'exact', head: true }).eq('status', 'failed').gte('processed_at', since),
+    ]);
+    const rows = (Array.isArray(summary.data) ? summary.data : []) as Parameters<typeof buildOpsDailySummaryEmail>[0];
+    if (summary.error) console.error('Ops daily summary: reading the events failed', { code: summary.error.code });
+    const failedJobs = failed.error ? null : failed.count ?? 0;
+
+    const { subject, text } = buildOpsDailySummaryEmail(rows, failedJobs, await orgNamesOf(client, rows.map((r) => r.org_id)), now);
+    const sendFailure = await sendEmail(config, subject, text);
+    if (sendFailure) {
+        console.error('Ops daily summary: sending failed', { reason: sendFailure });
+        await client.rpc('release_ops_alerts', { p_stamp: stamp });
+        return { sent: false, reason: 'send failed' };
+    }
+    return { sent: true };
 }

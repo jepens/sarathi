@@ -3,7 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { processQueue } from '@/lib/whatsapp/queue-db';
 import { maybeSendFollowupDigest } from '@/lib/followup/digest';
 import { whatsappLogger } from '@/lib/utils/logger';
-import { maybeSendOpsAlerts } from '@/lib/ops/alerts';
+import { maybeSendOpsAlerts, maybeSendOpsDailySummary } from '@/lib/ops/alerts';
 
 /**
  * Queue worker endpoint
@@ -54,11 +54,16 @@ export async function GET(request: Request) {
             whatsappLogger.error('Follow-up digest check failed', digestError);
         }
 
-        // Team alerts (tracker 3.5): at most one email per kind per hour. Never
-        // let it break the queue.
+        // Team alerts (tracker 3.5): first turn queue jobs the database itself
+        // gave up on into events, then at most one email per kind and org per
+        // hour, and the daily summary. Never let it break the queue.
         try {
+            const { data: staleJobs } = await supabase.rpc('report_stale_queue_failures');
+            if (staleJobs) whatsappLogger.warn(`Queue jobs failed by the stale-job reclaim: ${staleJobs}`);
             const alert = await maybeSendOpsAlerts(supabase);
             if (alert.sent) whatsappLogger.info(`Ops alert emailed: ${alert.kinds.join(', ')}`);
+            const daily = await maybeSendOpsDailySummary(supabase);
+            if (daily.sent) whatsappLogger.info('Ops daily summary emailed');
         } catch (alertError) {
             whatsappLogger.error('Ops alert check failed', alertError);
         }
