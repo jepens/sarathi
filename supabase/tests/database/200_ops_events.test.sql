@@ -3,14 +3,15 @@
 -- on, one deny policy each, no table or sequence privilege for anon or
 -- authenticated, every function for the service role only. record_ops_event
 -- keeps one row per kind, org and minute; claim_ops_alerts claims per (kind,
--- org) the groups with unsent events of finished minutes that were not emailed
--- within the cooldown, never the same group twice; mark_ops_alerts_sent stamps
+-- org) the groups with unsent events of closed minutes (before the start of the
+-- previous minute) that were not emailed within the cooldown (a day for daily
+-- kinds), never the same group twice; mark_ops_alerts_sent stamps
 -- only the claimed groups' events; release_ops_alerts frees a claim after a
 -- failed send; the daily summary is claimed once per period;
 -- report_stale_queue_failures reports each job the stale-job reclaim failed
 -- once; the cleanup keeps 30 days.
 begin;
-select plan(40);
+select plan(42);
 
 select tests.create_two_orgs();
 
@@ -126,7 +127,8 @@ insert into public.ops_events (kind, org_id, minute, first_at, last_at, count, d
     ('tst_noorg', null, date_trunc('minute', now()) - interval '2 minutes', now() - interval '2 minutes', now() - interval '2 minutes', 4, ''),
     ('tst_cool', tests.org_a(), date_trunc('minute', now()) - interval '2 minutes', now() - interval '2 minutes', now() - interval '2 minutes', 1, 'c'),
     ('tst_cool', tests.org_b(), date_trunc('minute', now()) - interval '2 minutes', now() - interval '2 minutes', now() - interval '2 minutes', 6, 'c'),
-    ('tst_due', tests.org_a(), date_trunc('minute', now()) - interval '1 minute', now() - interval '1 minute', now() - interval '1 minute', 1, 'tepi');
+    ('tst_due', tests.org_a(), date_trunc('minute', now()) - interval '1 minute', now() - interval '1 minute', now() - interval '1 minute', 1, 'tepi'),
+    ('tst_prev', tests.org_b(), date_trunc('minute', now()) - interval '1 minute', now() - interval '1 minute', now() - interval '1 minute', 2, 'p');
 select public.record_ops_event('tst_due', tests.org_a(), 'baru', 7);
 insert into public.ops_alert_state (kind, org_id, last_alerted_at) values
     ('tst_cool', tests.org_a(), now() - interval '30 minutes'),
@@ -170,8 +172,8 @@ select is(
 select is(
     (select string_agg(kind || '/' || coalesce(org_id::text, '-'), ', ' order by kind, org_id nulls first)
        from public.ops_events where alerted_at is null and kind <> 'tst_due'),
-    format('tst_cool/%s, tst_now/-, tst_now/%s', tests.org_a(), tests.org_a()),
-    'the cooling group and the current minute stay unsent');
+    format('tst_cool/%s, tst_now/-, tst_now/%s, tst_prev/%s', tests.org_a(), tests.org_a(), tests.org_b()),
+    'the cooling group, the current minute and a group with only a previous-minute row stay unsent');
 select is(
     (select string_agg(format('%s=%s', (extract(epoch from minute - date_trunc('minute', now())) / 60)::int, count), ', ' order by minute)
        from public.ops_events where kind = 'tst_due' and alerted_at is null),
@@ -206,9 +208,22 @@ select is(
     (select string_agg(format('%s/%s=%s/%s', kind, coalesce(org_id::text, '-'), events, unsent), ', '
                        order by kind, org_id nulls first)
        from public.ops_events_summary(now() - interval '1 day') where kind like 'tst%'),
-    format('tst_cool/%1$s=1/1, tst_cool/%2$s=6/0, tst_due/%1$s=13/8, tst_noorg/-=4/0, tst_now/-=3/3, tst_now/%1$s=5/5, tst_retry/%1$s=1/1',
+    format('tst_cool/%1$s=1/1, tst_cool/%2$s=6/0, tst_due/%1$s=13/8, tst_noorg/-=4/0, tst_now/-=3/3, tst_now/%1$s=5/5, tst_prev/%2$s=2/2, tst_retry/%1$s=1/1',
            tests.org_a(), tests.org_b()),
     'the summary gives totals per kind and org with the part not emailed');
+
+-- A daily kind (e.g. another number's recurring traffic) waits a day, not an hour.
+insert into public.ops_events (kind, org_id, minute, first_at, last_at, count, detail) values
+    ('tst_daily', null, date_trunc('minute', now()) - interval '3 minutes', now() - interval '3 minutes', now() - interval '3 minutes', 1, 'd');
+insert into public.ops_alert_state (kind, org_id, last_alerted_at) values ('tst_daily', null, now() - interval '2 hours');
+select is(
+    (select count(*)::int from public.claim_ops_alerts(3600, array['tst_daily'])),
+    0,
+    'a daily kind emailed two hours ago is not due yet');
+select is(
+    (select string_agg(kind, ',') from public.claim_ops_alerts(3600)),
+    'tst_daily',
+    'while as an hourly kind it would be');
 
 -- Queue jobs the stale-job reclaim failed.
 insert into public.message_queue (org_id, phone_number, message_text, status, retries, max_retries, error_message, processed_at) values

@@ -5,8 +5,9 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 // cron (/api/queue/process).
 //
 // maybeSendOpsAlerts: claim_ops_alerts() claims, in one statement, every
-// (kind, org) group that has unsent events of a finished minute and was not
-// emailed in the last hour, and returns the group totals. One email covers all
+// (kind, org) group that has unsent events of a closed minute (one that ended
+// over a minute ago) and was not emailed in the last hour (a day for the kinds
+// in DAILY_ALERT_KINDS), and returns the group totals. One email covers all
 // claimed groups. Once it is out, mark_ops_alerts_sent() stamps the events; if
 // it fails, release_ops_alerts() frees the groups for the next run. So a burst
 // of failures gives at most one email per hour per kind and org, a flood of one
@@ -23,6 +24,9 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 // Easypanel before the deploy (a running container does not see new values).
 
 const ALERT_EVERY_S = 60 * 60;
+// Kinds whose events are expected to recur (e.g. the traffic of a number that
+// is not routed) and are emailed at most once a day.
+export const DAILY_ALERT_KINDS: string[] = [];
 const DAILY_HOUR_WIB = 8;
 const WIB_OFFSET_MS = 7 * 60 * 60 * 1000; // Asia/Jakarta has no daylight saving
 const ADDRESS_RE = /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/;
@@ -116,7 +120,7 @@ export function buildOpsAlertEmail(
     }
     lines.push(
         '',
-        'Email berikutnya untuk jenis dan org yang sama paling cepat 1 jam lagi. Saat banjir kejadian, pencatatan dibatasi per menit: kejadian di atas batas dicatat saat menitnya berakhir, jadi sebagian bisa baru muncul di email berikutnya. Rincian: tabel ops_events (service role).',
+        'Email berikutnya untuk jenis dan org yang sama paling cepat 1 jam lagi. Kejadian dari 1-2 menit terakhir, dan kejadian di atas batas pencatatan per menit saat banjir, masuk email berikutnya; server yang restart bisa kehilangan sebagian hitungan yang sedang ditahan. Rincian: tabel ops_events (service role).',
     );
     const subject = `[Sarathi] Peringatan: ${kinds.map(label).join('; ')}`.slice(0, 200);
     return { subject, text: lines.join('\n') };
@@ -158,7 +162,10 @@ export async function maybeSendOpsAlerts(client: SupabaseClient, now: Date = new
     await warnConfigOncePerHour(client, config, now);
     if ('missing' in config) return { sent: false, kinds: [], reason: `${config.missing} not set` };
 
-    const { data, error } = await client.rpc('claim_ops_alerts', { p_cooldown_seconds: ALERT_EVERY_S });
+    const { data, error } = await client.rpc('claim_ops_alerts', {
+        p_cooldown_seconds: ALERT_EVERY_S,
+        p_daily_kinds: DAILY_ALERT_KINDS,
+    });
     if (error) {
         console.error('Ops alerts: claiming failed', { code: error.code });
         return { sent: false, kinds: [], reason: 'claim failed' };

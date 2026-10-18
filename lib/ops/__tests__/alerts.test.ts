@@ -26,7 +26,7 @@ import {
 const ORG = '5a11e024-0001-4000-8000-000000000001';
 const NOW = new Date('2026-10-18T03:30:00Z'); // 10:30 WIB
 const STAMP = '2026-10-18T03:30:00.123456+00:00';
-const CUTOFF = '2026-10-18T03:30:00+00:00';
+const CUTOFF = '2026-10-18T03:29:00+00:00';
 
 interface Fake {
     rpcCalls: Array<{ fn: string; args: Record<string, unknown> }>;
@@ -95,7 +95,7 @@ describe('maybeSendOpsAlerts', () => {
         expect(await run()).toEqual({ sent: false, kinds: [] });
         expect(h.send).not.toHaveBeenCalled();
         expect(fns()).toEqual(['claim_ops_alerts']);
-        expect(fake.rpcCalls[0].args).toEqual({ p_cooldown_seconds: 3600 });
+        expect(fake.rpcCalls[0].args).toEqual({ p_cooldown_seconds: 3600, p_daily_kinds: [] });
     });
 
     it('emails every claimed group once, then marks the events sent with the claim stamp', async () => {

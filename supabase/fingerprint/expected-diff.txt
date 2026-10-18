@@ -46,7 +46,7 @@
 > con public.ops_events ops_events_kind_check CHECK ((kind ~ '^[a-z][a-z0-9_]{0,62}$'::text))
 > con public.ops_events ops_events_org_id_fkey FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
 > con public.ops_events ops_events_pkey PRIMARY KEY (id)
-> fn public.claim_ops_alerts(p_cooldown_seconds integer) returns=TABLE(kind text, org_id uuid, events bigint, first_at timestamp with time zone, last_at timestamp with time zone, details text[], stamp timestamp with time zone, cutoff timestamp with time zone) lang=sql volatile=v secdef=f config=search_path="" owner=postgres body_md5=e69614126fe53ccd5e4b845421fe5c63
+> fn public.claim_ops_alerts(p_cooldown_seconds integer, p_daily_kinds text[]) returns=TABLE(kind text, org_id uuid, events bigint, first_at timestamp with time zone, last_at timestamp with time zone, details text[], stamp timestamp with time zone, cutoff timestamp with time zone) lang=sql volatile=v secdef=f config=search_path="" owner=postgres body_md5=86500845f48175b40f2c69b7d5032634
 > fn public.claim_ops_daily_summary(p_since timestamp with time zone) returns=timestamp with time zone lang=sql volatile=v secdef=f config=search_path="" owner=postgres body_md5=d4504e3af230e16c3354d3e361d3589f
 > fn public.cleanup_old_ops_events() returns=void lang=sql volatile=v secdef=f config=search_path="" owner=postgres body_md5=77c3e88860412a5d177ce9c25ad364d8
 > fn public.mark_ops_alerts_sent(p_stamp timestamp with time zone, p_cutoff timestamp with time zone) returns=integer lang=sql volatile=v secdef=f config=search_path="" owner=postgres body_md5=401b57034e97e70963913e9cc6f640ad
@@ -54,9 +54,9 @@
 > fn public.record_ops_event(p_kind text, p_org uuid, p_detail text, p_count integer) returns=void lang=sql volatile=v secdef=f config=search_path="" owner=postgres body_md5=f9ac86643bf5158c0c1b428c81ad2027
 > fn public.release_ops_alerts(p_stamp timestamp with time zone) returns=integer lang=sql volatile=v secdef=f config=search_path="" owner=postgres body_md5=4caaa4cb8e321b3d7dfbc19efda58f3f
 > fn public.report_stale_queue_failures() returns=integer lang=sql volatile=v secdef=f config=search_path="" owner=postgres body_md5=bf0db6680bda11ee0df8f9ee10ff4ea0
-> fnexec public.claim_ops_alerts(p_cooldown_seconds integer) anon=f
-> fnexec public.claim_ops_alerts(p_cooldown_seconds integer) authenticated=f
-> fnexec public.claim_ops_alerts(p_cooldown_seconds integer) service_role=t
+> fnexec public.claim_ops_alerts(p_cooldown_seconds integer, p_daily_kinds text[]) anon=f
+> fnexec public.claim_ops_alerts(p_cooldown_seconds integer, p_daily_kinds text[]) authenticated=f
+> fnexec public.claim_ops_alerts(p_cooldown_seconds integer, p_daily_kinds text[]) service_role=t
 > fnexec public.claim_ops_daily_summary(p_since timestamp with time zone) anon=f
 > fnexec public.claim_ops_daily_summary(p_since timestamp with time zone) authenticated=f
 > fnexec public.claim_ops_daily_summary(p_since timestamp with time zone) service_role=t

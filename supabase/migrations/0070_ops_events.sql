@@ -15,7 +15,9 @@
 -- every-minute queue cron (lib/ops/alerts.ts) calls claim_ops_alerts(), which
 -- in one statement claims the groups that have unsent events of a closed minute
 -- (one that ended over a minute ago, so no writer still in flight can add to
--- it) and were not emailed in the last hour, and returns their totals; it
+-- it) and were not emailed within their cooldown (an hour; a day for kinds the
+-- caller marks as daily, e.g. the recurring traffic of another number), and
+-- returns their totals; it
 -- emails them, then mark_ops_alerts_sent() stamps the events, or on a failed
 -- send release_ops_alerts() frees the groups for the next run. The hour is per
 -- (kind, org), so a flood of one kind never hides another kind, and one org's
@@ -84,8 +86,9 @@ create policy "service_role only" on public.ops_alert_state
     as permissive for all to anon, authenticated
     using (false) with check (false);
 
--- Adds p_count events (the server's in-process throttle folds suppressed events
--- into the next call) to the unsent row of this kind, org and minute.
+-- Adds p_count events to the unsent row of this kind, org and minute (the
+-- server's in-process throttle records the events it held back at the end of
+-- its window, or with the next call if that comes first).
 create function public.record_ops_event(p_kind text, p_org uuid, p_detail text, p_count integer default 1)
 returns void
 language sql
@@ -103,37 +106,45 @@ $$;
 -- Claims every (kind, org) group that has unsent events of a closed minute
 -- (before the cutoff: the start of the previous minute, so a writer whose
 -- transaction is still open across the minute boundary cannot add to a minute
--- that is being emailed) and was not emailed within p_cooldown_seconds, and
--- returns one row per claimed group: its totals, up to three example details,
--- the claim's stamp and the cutoff. Atomic: the claim is an upsert of the group's state
+-- that is being emailed) and was not emailed within its cooldown
+-- (p_cooldown_seconds, or a day for the kinds in p_daily_kinds), and returns
+-- one row per claimed group: its totals, up to three example details, the
+-- claim's stamp and the cutoff. The cutoff is computed once and used for both
+-- the claim and the totals. Atomic: the claim is an upsert of the group's state
 -- row guarded by the cooldown, so two overlapping runs never claim the same
 -- group. The events are not stamped here; mark_ops_alerts_sent does that once
 -- the email is out.
-create function public.claim_ops_alerts(p_cooldown_seconds integer default 3600)
+create function public.claim_ops_alerts(p_cooldown_seconds integer default 3600, p_daily_kinds text[] default '{}')
 returns table (kind text, org_id uuid, events bigint, first_at timestamptz, last_at timestamptz,
                details text[], stamp timestamptz, cutoff timestamptz)
 language sql
 set search_path = ''
 as $$
-    with due as (
+    with bound as (
+        select date_trunc('minute', now()) - interval '1 minute' as cutoff
+    ),
+    due as (
         insert into public.ops_alert_state as s (kind, org_id, last_alerted_at)
         select distinct e.kind, e.org_id, now()
           from public.ops_events e
+          cross join bound b
          where e.alerted_at is null
-           and e.minute < date_trunc('minute', now()) - interval '1 minute'
+           and e.minute < b.cutoff
         on conflict (kind, org_id) do update
             set last_alerted_at = excluded.last_alerted_at
-            where s.last_alerted_at < now() - make_interval(secs => p_cooldown_seconds)
+            where s.last_alerted_at < now() - make_interval(secs =>
+                case when s.kind = any (coalesce(p_daily_kinds, '{}')) then 86400 else p_cooldown_seconds end)
         returning s.kind, s.org_id
     )
     select e.kind, e.org_id, sum(e.count)::bigint, min(e.first_at), max(e.last_at),
            (array_agg(distinct e.detail) filter (where e.detail <> ''))[1:3],
-           now(), date_trunc('minute', now()) - interval '1 minute'
+           now(), b.cutoff
       from public.ops_events e
       join due d on d.kind = e.kind and d.org_id is not distinct from e.org_id
+      cross join bound b
      where e.alerted_at is null
-       and e.minute < date_trunc('minute', now()) - interval '1 minute'
-     group by e.kind, e.org_id;
+       and e.minute < b.cutoff
+     group by e.kind, e.org_id, b.cutoff;
 $$;
 
 -- After the email went out: stamps the unsent events (of minutes before
@@ -249,7 +260,7 @@ as $$
 $$;
 
 revoke execute on function public.record_ops_event(text, uuid, text, integer) from public, anon, authenticated;
-revoke execute on function public.claim_ops_alerts(integer) from public, anon, authenticated;
+revoke execute on function public.claim_ops_alerts(integer, text[]) from public, anon, authenticated;
 revoke execute on function public.mark_ops_alerts_sent(timestamptz, timestamptz) from public, anon, authenticated;
 revoke execute on function public.release_ops_alerts(timestamptz) from public, anon, authenticated;
 revoke execute on function public.claim_ops_daily_summary(timestamptz) from public, anon, authenticated;
@@ -257,7 +268,7 @@ revoke execute on function public.ops_events_summary(timestamptz) from public, a
 revoke execute on function public.report_stale_queue_failures() from public, anon, authenticated;
 revoke execute on function public.cleanup_old_ops_events() from public, anon, authenticated;
 grant execute on function public.record_ops_event(text, uuid, text, integer) to service_role;
-grant execute on function public.claim_ops_alerts(integer) to service_role;
+grant execute on function public.claim_ops_alerts(integer, text[]) to service_role;
 grant execute on function public.mark_ops_alerts_sent(timestamptz, timestamptz) to service_role;
 grant execute on function public.release_ops_alerts(timestamptz) to service_role;
 grant execute on function public.claim_ops_daily_summary(timestamptz) to service_role;

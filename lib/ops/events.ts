@@ -17,10 +17,11 @@ export type OpsEventKind =
 const DETAIL_MAX = 500;
 
 // At most MAX_PER_WINDOW database calls per kind and org per minute per server
-// process, so a flood (e.g. forged webhooks, each refused with 403) costs a few
-// writes a minute. The events above the cap are counted here and recorded when
-// the window ends (or by the next call, if that comes first), so a burst is
-// reported in full, at most a minute late. A restart loses the held count.
+// process (plus one at the end of the window), so a flood (e.g. forged
+// webhooks, each refused with 403) costs a few writes a minute. The events
+// above the cap are counted here and recorded when the window ends (or by the
+// next call, if that comes first), so a burst is reported in full, at most a
+// minute late. A restart loses the held count.
 const WINDOW_MS = 60_000;
 const MAX_PER_WINDOW = 20;
 
@@ -76,6 +77,9 @@ function armTailFlush(client: SupabaseClient, kind: string, orgId: string | null
     if (!w || w.flushArmed) return;
     w.flushArmed = true;
     const timer = setTimeout(() => {
+        // Re-arm: an event held after this flush (the timer can fire a hair
+        // before the window ends) gets a flush of its own.
+        w.flushArmed = false;
         // A newer window may already have carried the count (and zeroed it).
         if (w.suppressed === 0) return;
         const n = w.suppressed;
