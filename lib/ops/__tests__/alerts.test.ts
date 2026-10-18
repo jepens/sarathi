@@ -121,6 +121,18 @@ describe('maybeSendOpsAlerts', () => {
         expect(mail.text).toContain('paling cepat 1 jam lagi. ');
     });
 
+    it('a number new to the WABA is emailed within the hour; its recurring traffic once a day', () => {
+        expect(DAILY_ALERT_KINDS).toContain('webhook_unrouted');
+        expect(DAILY_ALERT_KINDS).not.toContain('webhook_unrouted_new');
+        const { text } = buildOpsAlertEmail(
+            [group('webhook_unrouted_new', 1, null), group('webhook_unrouted', 7, null)],
+            new Map(),
+            NOW,
+        );
+        expect(text).toContain('pertama kali dalam 7 hari');
+        expect(text).toContain('paling cepat 1 jam lagi (1 hari lagi untuk: Webhook untuk nomor lain di WABA (bukan nomor org ini)). ');
+    });
+
     it('the footer names the kinds that wait a day before the next email', () => {
         DAILY_ALERT_KINDS.push('tst_daily');
         try {

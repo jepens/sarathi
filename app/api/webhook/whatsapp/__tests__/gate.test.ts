@@ -6,10 +6,13 @@ import { makeFakeSupabase, type FakeCall, type FakeSupabase } from '@/lib/whatsa
 // the real verifier over the raw bytes before anything reads the payload; a
 // signed body that is not JSON, not an object or not a WhatsApp event is
 // acknowledged (200) without touching the database; events of another number
-// of the WABA are dropped and alerted with a hash of the id; status updates are
-// scoped to the org; no service-role key, no configured number or an unreadable
-// default org never lead to a write under the wrong org. Fake ids, phones and
-// secrets only.
+// of the WABA are dropped and alerted with a hash of the id (within the hour
+// for a number not reported in the last 7 days), or in process mode stored
+// without AI, without the 24-hour window, marked for the AI history and with
+// a note for the operators; a user_id_update applies whichever number reported
+// it; status updates are scoped to the org; no service-role key, no usable
+// number id or an unreadable default org never lead to a write under the
+// wrong org; env values are trimmed. Fake ids, phones and secrets only.
 
 const SECRET = 'test-app-secret';
 const PNID = '100000000000001'; // the env number
@@ -23,6 +26,8 @@ const h = vi.hoisted(() => ({
     enqueue: vi.fn(),
     rateOk: vi.fn(async () => true),
     logs: [] as unknown[][],
+    /** Whether the ops_events lookup finds an earlier report of the number. */
+    opsSeen: true,
 }));
 
 vi.mock('@supabase/supabase-js', () => ({ createClient: vi.fn(() => h.fake.client) }));
@@ -54,6 +59,10 @@ vi.mock('@/lib/utils/logger', async (importOriginal) => {
 
 import { createClient } from '@supabase/supabase-js';
 import { resetOpsEventThrottle } from '@/lib/ops/events';
+import { resetOtherNumberState } from '@/lib/whatsapp/other-number';
+import { sendWhatsAppMessage } from '@/lib/whatsapp/client';
+import { logSystemMessage } from '@/lib/whatsapp/history';
+import { handleFlowReply } from '@/lib/whatsapp/flow-response';
 import { POST } from '@/app/api/webhook/whatsapp/route';
 
 function post(raw: string | Uint8Array, signature: 'sign' | 'none' | string = 'sign', secret = SECRET): Request {
@@ -69,7 +78,7 @@ function post(raw: string | Uint8Array, signature: 'sign' | 'none' | string = 's
 
 let seq = 0;
 
-function textEvent(phoneNumberId = PNID): { raw: string; wamid: string } {
+function textEvent(phoneNumberId = PNID, display?: string): { raw: string; wamid: string } {
     seq += 1;
     const wamid = `wamid.fake-gate-${seq}`;
     const body = {
@@ -79,12 +88,35 @@ function textEvent(phoneNumberId = PNID): { raw: string; wamid: string } {
             changes: [{
                 field: 'messages',
                 value: {
-                    metadata: { phone_number_id: phoneNumberId },
+                    metadata: { phone_number_id: phoneNumberId, ...(display ? { display_phone_number: display } : {}) },
                     contacts: [{ wa_id: PHONE }],
                     messages: [{ from: PHONE, id: wamid, type: 'text', text: { body: 'halo, masih buka?' } }],
                 },
             }],
         }],
+    };
+    return { raw: JSON.stringify(body), wamid };
+}
+
+function flowEvent(phoneNumberId = PNID): { raw: string; wamid: string } {
+    seq += 1;
+    const wamid = `wamid.fake-flow-${seq}`;
+    const body = {
+        object: 'whatsapp_business_account',
+        entry: [{ changes: [{ field: 'messages', value: {
+            metadata: { phone_number_id: phoneNumberId },
+            contacts: [{ wa_id: PHONE }],
+            messages: [{
+                from: PHONE,
+                id: wamid,
+                type: 'interactive',
+                interactive: { type: 'nfm_reply', nfm_reply: {
+                    name: 'flow',
+                    body: 'Sent',
+                    response_json: JSON.stringify({ flow_token: 'token-palsu', nama: 'Budi Palsu', jumlah_peserta: 40 }),
+                } },
+            }],
+        } }] }],
     };
     return { raw: JSON.stringify(body), wamid };
 }
@@ -100,12 +132,15 @@ const opsKinds = () => opsEvents().map((e) => e.p_kind);
 beforeEach(() => {
     vi.clearAllMocks();
     resetOpsEventThrottle();
+    resetOtherNumberState();
     h.logs = [];
+    h.opsSeen = true;
     h.fake = makeFakeSupabase({
-        resolve: (c) =>
-            c.table === 'whatsapp_chats' && c.op === 'select'
-                ? { data: { ai_enabled: true, contact_name: null }, error: null }
-                : { data: null, error: null },
+        resolve: (c) => {
+            if (c.table === 'whatsapp_chats' && c.op === 'select') return { data: { ai_enabled: true, contact_name: null }, error: null };
+            if (c.table === 'ops_events' && c.op === 'select') return { data: h.opsSeen ? [{ id: 1 }] : [], error: null };
+            return { data: null, error: null };
+        },
     });
     h.defaultOrg.mockResolvedValue(ORG);
     h.enqueue.mockResolvedValue(null);
@@ -221,31 +256,143 @@ describe('webhook gate: one-number routing', () => {
         expect(touched('whatsapp_messages')).toEqual([]);
         expect(touched('whatsapp_chats')).toEqual([]);
         expect(h.defaultOrg).not.toHaveBeenCalled();
-        const [alert] = opsEvents();
-        expect(alert.p_kind).toBe('webhook_unrouted');
-        expect(alert.p_detail).toMatch(/^phone_number_id h[0-9a-f]{10}; dibuang$/);
+        expect(opsKinds()).toEqual(['webhook_unrouted']); // a number reported before: daily only
+        expect(opsEvents()[0].p_detail).toMatch(/^phone_number_id h[0-9a-f]{10}; dibuang$/);
         expect(JSON.stringify(h.logs)).not.toContain(OTHER);
     });
 
-    it('WHATSAPP_OTHER_NUMBER_EVENTS=process stores another number\'s message in the inbox, without AI or any send', async () => {
-        vi.stubEnv('WHATSAPP_OTHER_NUMBER_EVENTS', ' Process ');
-        const { raw, wamid } = textEvent(OTHER);
-        expect((await POST(post(raw))).status).toBe(200);
-        await vi.waitFor(() => expect(touched('whatsapp_messages').some((c) => c.op === 'insert')).toBe(true));
-        const stored = touched('whatsapp_messages').find((c) => c.op === 'insert')!.payload as Record<string, unknown>;
-        expect(stored).toMatchObject({ org_id: ORG, role: 'user', wa_message_id: wamid });
-        expect(h.enqueue).not.toHaveBeenCalled();
-        expect(h.rateOk).not.toHaveBeenCalled(); // no rate-limit warning from the wrong number
-        expect(opsKinds()).toEqual(['webhook_unrouted']);
-        expect(opsEvents()[0].p_detail).toMatch(/^phone_number_id h[0-9a-f]{10}; disimpan di inbox tanpa balasan AI/);
+    it('a number not reported in the last 7 days is alerted within the hour (webhook_unrouted_new), looked up once per process', async () => {
+        h.opsSeen = false;
+        expect((await POST(post(textEvent(OTHER).raw))).status).toBe(200);
+        expect(opsKinds()).toEqual(['webhook_unrouted_new', 'webhook_unrouted']);
+        expect(opsEvents()[0].p_detail).toBe(opsEvents()[1].p_detail);
+        const [lookup] = touched('ops_events');
+        expect(lookup.op).toBe('select');
+        expect(lookup.filters).toEqual([
+            ['eq', 'kind', 'webhook_unrouted'],
+            ['like', 'detail', expect.stringMatching(/^phone_number_id h[0-9a-f]{10};%$/)],
+            ['gte', 'minute', expect.any(String)],
+        ]);
+        // The next event of the same number: no second lookup, no second "new" alert.
+        expect((await POST(post(textEvent(OTHER).raw))).status).toBe(200);
+        expect(touched('ops_events')).toHaveLength(1);
+        expect(opsKinds()).toEqual(['webhook_unrouted_new', 'webhook_unrouted', 'webhook_unrouted']);
     });
 
-    it('an unrecognised WHATSAPP_OTHER_NUMBER_EVENTS value is treated as process (the safer side) and alerted', async () => {
+    it("names the last four digits of the other number's display number, never the whole number or its id", async () => {
+        expect((await POST(post(textEvent(OTHER, '+62 812-0000-1234').raw))).status).toBe(200);
+        expect(opsEvents()[0].p_detail).toMatch(/^phone_number_id h[0-9a-f]{10}; nomor berakhiran 1234; dibuang$/);
+        const recorded = JSON.stringify([opsEvents(), h.logs]);
+        expect(recorded).not.toContain('6281200001234');
+        expect(recorded).not.toContain(OTHER);
+    });
+
+    it("WHATSAPP_OTHER_NUMBER_EVENTS=process stores another number's message without AI or any send, without opening the 24-hour window, marked for the AI history, with a note", async () => {
+        vi.stubEnv('WHATSAPP_OTHER_NUMBER_EVENTS', ' Process ');
+        const { raw, wamid } = textEvent(OTHER, '+62 812-0000-1234');
+        expect((await POST(post(raw))).status).toBe(200);
+        await vi.waitFor(() => expect(h.fake.rpcCalls.some((c) => c.name === 'bump_unread')).toBe(true));
+        const stored = touched('whatsapp_messages').find((c) => c.op === 'insert')!.payload as Record<string, unknown>;
+        expect(stored).toMatchObject({ org_id: ORG, role: 'user', wa_message_id: wamid });
+        const ref = (stored.metadata as { other_number: string }).other_number;
+        expect(ref).toMatch(/^h[0-9a-f]{10}$/);
+        // Meta's 24-hour window is per business number: the main number has none.
+        const chat = touched('whatsapp_chats').find((c) => c.op === 'upsert')!.payload as Record<string, unknown>;
+        expect(chat).toMatchObject({ org_id: ORG, phone_number: PHONE, last_message: 'halo, masih buka?' });
+        expect(chat).not.toHaveProperty('last_inbound_at');
+        expect(h.enqueue).not.toHaveBeenCalled();
+        expect(sendWhatsAppMessage).not.toHaveBeenCalled();
+        // Its own rate-limit bucket, apart from the customer's on the main number.
+        expect(h.rateOk).toHaveBeenCalledWith(`${ORG}:other:${PHONE}`, expect.anything());
+        expect(logSystemMessage).toHaveBeenCalledWith(ORG, PHONE, expect.stringContaining('nomor berakhiran 1234'));
+        expect(opsKinds()).toEqual(['webhook_unrouted']);
+        expect(opsEvents()[0].p_detail).toBe(
+            `phone_number_id ${ref}; nomor berakhiran 1234; disimpan di inbox tanpa balasan AI (WHATSAPP_OTHER_NUMBER_EVENTS=process)`,
+        );
+    });
+
+    it('the note for the operators comes once a day per chat, not with every message', async () => {
+        vi.stubEnv('WHATSAPP_OTHER_NUMBER_EVENTS', 'process');
+        expect((await POST(post(textEvent(OTHER).raw))).status).toBe(200);
+        expect((await POST(post(textEvent(OTHER).raw))).status).toBe(200);
+        await vi.waitFor(() => expect(h.fake.rpcCalls.filter((c) => c.name === 'bump_unread')).toHaveLength(2));
+        expect(logSystemMessage).toHaveBeenCalledTimes(1);
+    });
+
+    it('over its own rate limit a message to another number is neither stored nor answered', async () => {
+        vi.stubEnv('WHATSAPP_OTHER_NUMBER_EVENTS', 'process');
+        h.rateOk.mockResolvedValueOnce(false);
+        expect((await POST(post(textEvent(OTHER).raw))).status).toBe(200);
+        expect(sendWhatsAppMessage).not.toHaveBeenCalled();
+        expect(logSystemMessage).not.toHaveBeenCalled();
+        expect(touched('whatsapp_messages')).toEqual([]);
+        expect(touched('whatsapp_chats')).toEqual([]);
+    });
+
+    it('process mode stores a Flow submission to another number as a summary of its answers: no Brief Acara handling, no send', async () => {
+        vi.stubEnv('WHATSAPP_OTHER_NUMBER_EVENTS', 'process');
+        const { raw, wamid } = flowEvent(OTHER);
+        expect((await POST(post(raw))).status).toBe(200);
+        expect(handleFlowReply).not.toHaveBeenCalled();
+        expect(sendWhatsAppMessage).not.toHaveBeenCalled();
+        const stored = touched('whatsapp_messages').find((c) => c.op === 'insert')!.payload as Record<string, unknown>;
+        expect(stored).toMatchObject({
+            org_id: ORG,
+            role: 'user',
+            wa_message_id: wamid,
+            content: '📋 Form WhatsApp dikirim\nnama: Budi Palsu\njumlah_peserta: 40',
+            metadata: { other_number: expect.stringMatching(/^h[0-9a-f]{10}$/) },
+        });
+        expect(touched('whatsapp_chats').find((c) => c.op === 'upsert')!.payload).not.toHaveProperty('last_inbound_at');
+        expect(h.fake.rpcCalls.map((c) => c.name)).toContain('bump_unread');
+        expect(logSystemMessage).toHaveBeenCalledTimes(1);
+    });
+
+    it('a Flow submission to its own number still gets the Brief Acara handling', async () => {
+        expect((await POST(post(flowEvent(PNID).raw))).status).toBe(200);
+        expect(handleFlowReply).toHaveBeenCalledTimes(1);
+        expect(touched('whatsapp_messages')).toEqual([]); // handleFlowReply (mocked) stores it
+    });
+
+    it('an unrecognised WHATSAPP_OTHER_NUMBER_EVENTS value is treated as process (nothing is lost) and alerted', async () => {
         vi.stubEnv('WHATSAPP_OTHER_NUMBER_EVENTS', 'proses');
         expect((await POST(post(textEvent(OTHER).raw))).status).toBe(200);
+        await vi.waitFor(() => expect(touched('whatsapp_messages').some((c) => c.op === 'insert')).toBe(true));
         expect(h.enqueue).not.toHaveBeenCalled();
         expect(opsKinds()).toEqual(['webhook_unconfigured', 'webhook_unrouted']);
-        expect(opsEvents()[0].p_detail).toContain('"proses"');
+        expect(opsEvents()[0].p_detail).toBe(
+            'WHATSAPP_OTHER_NUMBER_EVENTS tidak dikenal ("proses"): diperlakukan sebagai process, event nomor lain disimpan tanpa AI',
+        );
+    });
+
+    it.each([
+        ['store', true],
+        ["'process'", true],
+        ['"drop"', false],
+        ['DROP', false],
+    ])('WHATSAPP_OTHER_NUMBER_EVENTS=%s is understood (stored: %s), without a configuration alert', async (value, stored) => {
+        vi.stubEnv('WHATSAPP_OTHER_NUMBER_EVENTS', value);
+        expect((await POST(post(textEvent(OTHER).raw))).status).toBe(200);
+        if (stored) await vi.waitFor(() => expect(touched('whatsapp_messages').some((c) => c.op === 'insert')).toBe(true));
+        else expect(touched('whatsapp_messages')).toEqual([]);
+        expect(opsKinds()).toEqual(['webhook_unrouted']);
+    });
+
+    it('a user_id_update reported with another number of the WABA is applied (a BSUID belongs to the business portfolio), not dropped', async () => {
+        const body = {
+            object: 'whatsapp_business_account',
+            entry: [{ changes: [{ field: 'user_id_update', value: {
+                metadata: { phone_number_id: OTHER },
+                user_id_update: [{ user_id: { previous: 'ID.lama', current: 'ID.baru' } }],
+            } }] }],
+        };
+        expect((await POST(post(JSON.stringify(body)))).status).toBe(200);
+        const update = touched('whatsapp_chats').find((c) => c.op === 'update')!;
+        expect(update.filters).toEqual([
+            ['eq', 'org_id', ORG],
+            ['eq', 'bsuid', 'ID.lama'],
+        ]);
+        expect(opsKinds()).toEqual([]);
     });
 
     it('an event without metadata (user_id_update) is not taken for another number', async () => {
@@ -322,8 +469,22 @@ describe('webhook gate: nothing is written under the wrong org', () => {
         expect(h.enqueue).not.toHaveBeenCalled();
         expect(touched('whatsapp_messages')).toEqual([]);
         expect(opsEvents()).toEqual([
-            { p_kind: 'webhook_unconfigured', p_org: null, p_detail: 'WHATSAPP_PHONE_NUMBER_ID tidak diset di server', p_count: 1 },
+            {
+                p_kind: 'webhook_unconfigured',
+                p_org: null,
+                p_detail: 'WHATSAPP_PHONE_NUMBER_ID tidak diset di server; webhook menjawab 503, Meta mengirim ulang',
+                p_count: 1,
+            },
         ]);
+    });
+
+    it('a WHATSAPP_PHONE_NUMBER_ID that is not a number id answers 503 and says so', async () => {
+        vi.stubEnv('WHATSAPP_PHONE_NUMBER_ID', 'nomor-utama');
+        expect((await POST(post(textEvent().raw))).status).toBe(503);
+        expect(h.enqueue).not.toHaveBeenCalled();
+        expect(opsEvents()[0].p_detail).toBe(
+            'WHATSAPP_PHONE_NUMBER_ID bukan ID nomor (harus angka saja); webhook menjawab 503, Meta mengirim ulang',
+        );
     });
 
     it('a default org that cannot be read answers 500 (Meta retries) and stores nothing', async () => {
@@ -334,6 +495,24 @@ describe('webhook gate: nothing is written under the wrong org', () => {
         expect(touched('whatsapp_messages')).toEqual([]);
         expect(opsKinds()).toEqual(['webhook_error']);
         expect(opsEvents()[0].p_org).toBeNull();
+    });
+});
+
+describe('webhook gate: env values are trimmed', () => {
+    it("a WHATSAPP_PHONE_NUMBER_ID with a trailing CR, LF, tab or space still routes the app's own number", async () => {
+        for (const tail of ['\r\n', '\n', '\t', ' ']) {
+            vi.stubEnv('WHATSAPP_PHONE_NUMBER_ID', `${PNID}${tail}`);
+            const { raw, wamid } = textEvent(PNID);
+            expect((await POST(post(raw))).status).toBe(200);
+            expect(h.enqueue).toHaveBeenLastCalledWith(ORG, PHONE, 'halo, masih buka?', expect.anything(), wamid);
+        }
+        expect(opsKinds()).toEqual([]);
+    });
+
+    it("an app secret with a trailing newline still verifies Meta's signature", async () => {
+        vi.stubEnv('WHATSAPP_APP_SECRET', `${SECRET}\n`);
+        expect((await POST(post(textEvent().raw))).status).toBe(200);
+        expect(h.enqueue).toHaveBeenCalledTimes(1);
     });
 });
 

@@ -19,7 +19,7 @@
 #### 2. WhatsApp Client Library
 - ✅ **`lib/whatsapp/client.ts`**
   - `sendWhatsAppMessage()` function
-  - Uses WhatsApp Business Graph API v21.0
+  - Uses WhatsApp Business Graph API v21.0 (catatan 2026-10-18: kini v25.0, dari `lib/whatsapp/graph.ts`)
   - Environment variable validation
   - Error handling with detailed logging
 

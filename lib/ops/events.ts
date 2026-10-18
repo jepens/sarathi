@@ -12,6 +12,7 @@ export type OpsEventKind =
     | 'webhook_signature_invalid'
     | 'webhook_error'
     | 'webhook_unrouted'
+    | 'webhook_unrouted_new'
     | 'webhook_unconfigured'
     | 'queue_job_failed'
     | 'whatsapp_token_invalid'

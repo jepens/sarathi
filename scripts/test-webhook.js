@@ -7,7 +7,12 @@
  * Webhook hanya menerima kiriman bertanda tangan (X-Hub-Signature-256, HMAC
  * dengan WHATSAPP_APP_SECRET) untuk nomor WHATSAPP_PHONE_NUMBER_ID, jadi
  * jalankan dengan env aplikasi:
- *   node --env-file=.env.local scripts/test-webhook.js
+ *   TEST_PHONE=<nomor milik Anda> node --env-file=.env.local scripts/test-webhook.js
+ *
+ * Server yang dituju memakai kredensialnya sendiri: pesan uji tersimpan di
+ * database server itu, dan AI-nya benar-benar mencoba membalas TEST_PHONE dari
+ * nomor WhatsApp server itu. Karena itu TEST_PHONE wajib diisi dengan nomor
+ * milik Anda. Keluar dengan kode 1 bila ditolak atau gagal.
  */
 
 const crypto = require('crypto');
@@ -18,7 +23,7 @@ const WEBHOOK_URL = process.env.WEBHOOK_URL || 'http://localhost:3000/api/webhoo
 const ALLOW_REMOTE = process.argv.includes('--allow-remote');
 const APP_SECRET = process.env.WHATSAPP_APP_SECRET || '';
 const PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID || '';
-const TEST_PHONE = process.env.TEST_PHONE || '6281234567890';
+const TEST_PHONE = process.env.TEST_PHONE || '';
 
 // Simulasi payload dari WhatsApp API
 const webhookPayload = {
@@ -64,17 +69,25 @@ const webhookPayload = {
 async function testWebhook() {
     console.log('🧪 Testing WhatsApp Webhook...\n');
     console.log(`📍 Webhook URL: ${WEBHOOK_URL}`);
-    console.log(`📱 Test Phone: ${TEST_PHONE}\n`);
+    console.log(`📱 Test Phone: ${TEST_PHONE || '(belum diisi)'}\n`);
 
     const host = new URL(WEBHOOK_URL).hostname;
     if (!ALLOW_REMOTE && !['localhost', '127.0.0.1', '::1', '[::1]'].includes(host)) {
         console.error(`❌ ${host} is not this machine. A signed test message would really be stored (and answered) there.`);
         console.error('   Pass --allow-remote only if that is what you want.');
+        process.exitCode = 1;
         return;
     }
     if (!APP_SECRET || !PHONE_NUMBER_ID) {
         console.error('❌ WHATSAPP_APP_SECRET dan WHATSAPP_PHONE_NUMBER_ID wajib ada.');
-        console.error('   Jalankan: node --env-file=.env.local scripts/test-webhook.js');
+        console.error('   Jalankan: TEST_PHONE=<nomor milik Anda> node --env-file=.env.local scripts/test-webhook.js');
+        process.exitCode = 1;
+        return;
+    }
+    if (!/^[0-9]{8,15}$/.test(TEST_PHONE)) {
+        console.error('❌ TEST_PHONE wajib diisi dengan nomor milik Anda (angka saja, 8-15 digit, mis. 62812...).');
+        console.error('   AI server tujuan benar-benar mencoba membalas nomor itu.');
+        process.exitCode = 1;
         return;
     }
     const raw = JSON.stringify(webhookPayload);
@@ -103,6 +116,7 @@ async function testWebhook() {
             console.log(`3. Look for phone number: ${TEST_PHONE}`);
             console.log('4. Verify message: "Test message from script"');
         } else {
+            process.exitCode = 1;
             console.log('❌ Webhook test FAILED!');
             console.log('\n🔍 Troubleshooting:');
             console.log('1. Make sure app is running (npm run dev)');
@@ -111,6 +125,7 @@ async function testWebhook() {
         }
 
     } catch (error) {
+        process.exitCode = 1;
         console.error('❌ Error testing webhook:', error.message);
         console.log('\n🔍 Troubleshooting:');
         console.log('1. Make sure app is running (npm run dev)');

@@ -9,6 +9,7 @@
 //   from(t).select('...').eq().eq().maybeSingle()
 //   from(t).select('...').eq().eq().order().limit(n)
 //   from(t).select('...').gte().lte().neq().is().not()  // awaited (range/null)
+//   from(t).select('...').eq().like().gte().limit(n)
 //   from(t).update(x).in('id', ids)        // awaited
 //   from(t).update(x).eq('id', id)         // awaited
 //   from(t).upsert(x, opts)                // awaited
@@ -77,6 +78,7 @@ export function makeFakeSupabase(opts: {
             lte(c: string, v: unknown) { ctx.filters.push(['lte', c, v]); return b; },
             is(c: string, v: unknown) { ctx.filters.push(['is', c, v]); return b; },
             ilike(c: string, v: unknown) { ctx.filters.push(['ilike', c, v]); return b; },
+            like(c: string, v: unknown) { ctx.filters.push(['like', c, v]); return b; },
             not(c: string, op: string, v: unknown) { ctx.filters.push(['not', c, [op, v]]); return b; },
             or(expr: string) { ctx.filters.push(['or', expr, undefined]); return b; },
             in(c: string, v: unknown) { ctx.filters.push(['in', c, v]); return finalize(); },
