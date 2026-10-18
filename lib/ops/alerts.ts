@@ -116,7 +116,7 @@ export function buildOpsAlertEmail(
     }
     lines.push(
         '',
-        'Email berikutnya untuk jenis dan org yang sama paling cepat 1 jam lagi. Saat banjir kejadian pencatatan dibatasi per menit, jadi jumlahnya bisa sedikit di bawah yang sebenarnya. Rincian: tabel ops_events (service role).',
+        'Email berikutnya untuk jenis dan org yang sama paling cepat 1 jam lagi. Saat banjir kejadian, pencatatan dibatasi per menit: kejadian di atas batas dicatat saat menitnya berakhir, jadi sebagian bisa baru muncul di email berikutnya. Rincian: tabel ops_events (service role).',
     );
     const subject = `[Sarathi] Peringatan: ${kinds.map(label).join('; ')}`.slice(0, 200);
     return { subject, text: lines.join('\n') };
@@ -197,17 +197,21 @@ export function startOfWibDay(now: Date): Date {
     return new Date(Date.UTC(wibNow.getUTCFullYear(), wibNow.getUTCMonth(), wibNow.getUTCDate()) - WIB_OFFSET_MS);
 }
 
+type SummaryRow = { kind: string; org_id: string | null; events: number | string; unsent: number | string };
+
 export function buildOpsDailySummaryEmail(
-    rows: { kind: string; org_id: string | null; events: number | string; unsent: number | string }[],
+    rows: SummaryRow[] | null,
     failedJobs: number | null,
     orgNames: Map<string, string>,
     now: Date,
 ): { subject: string; text: string } {
-    const byKind = new Map<string, typeof rows>();
-    for (const r of rows) byKind.set(r.kind, [...(byKind.get(r.kind) ?? []), r]);
-    const total = rows.reduce((n, r) => n + Number(r.events), 0);
+    const byKind = new Map<string, SummaryRow[]>();
+    for (const r of rows ?? []) byKind.set(r.kind, [...(byKind.get(r.kind) ?? []), r]);
+    const total = (rows ?? []).reduce((n, r) => n + Number(r.events), 0);
     const lines: string[] = [`Ringkasan harian operasional Sarathi, ${wib(now)} (24 jam terakhir).`, ''];
-    if (total === 0) {
+    if (rows === null) {
+        lines.push('Kejadian operasional: tidak bisa dibaca (lihat log server).');
+    } else if (total === 0) {
         lines.push('Kejadian operasional: tidak ada.');
     } else {
         lines.push('Kejadian operasional:');
@@ -224,7 +228,8 @@ export function buildOpsDailySummaryEmail(
         '',
         `Email ini dikirim setiap hari mulai pukul 0${DAILY_HOUR_WIB}.00 WIB, juga saat semuanya normal. Bila suatu hari tidak datang, cron antrean (/api/queue/process) kemungkinan berhenti, dan bersamanya semua peringatan: periksa layanan cron di Easypanel.`,
     );
-    const subject = `[Sarathi] Ringkasan harian: ${total === 0 ? 'tidak ada kejadian' : `${total} kejadian`}${failedJobs ? `, ${failedJobs} job gagal` : ''}`;
+    const events = rows === null ? 'kejadian tidak bisa dibaca' : total === 0 ? 'tidak ada kejadian' : `${total} kejadian`;
+    const subject = `[Sarathi] Ringkasan harian: ${events}${failedJobs ? `, ${failedJobs} job gagal` : ''}`;
     return { subject, text: lines.join('\n') };
 }
 
@@ -245,15 +250,16 @@ export async function maybeSendOpsDailySummary(client: SupabaseClient, now: Date
         client.rpc('ops_events_summary', { p_since: since }),
         client.from('message_queue').select('id', { count: 'exact', head: true }).eq('status', 'failed').gte('processed_at', since),
     ]);
-    const rows = (Array.isArray(summary.data) ? summary.data : []) as Parameters<typeof buildOpsDailySummaryEmail>[0];
+    const rows = summary.error ? null : ((Array.isArray(summary.data) ? summary.data : []) as SummaryRow[]);
     if (summary.error) console.error('Ops daily summary: reading the events failed', { code: summary.error.code });
     const failedJobs = failed.error ? null : failed.count ?? 0;
 
-    const { subject, text } = buildOpsDailySummaryEmail(rows, failedJobs, await orgNamesOf(client, rows.map((r) => r.org_id)), now);
+    const { subject, text } = buildOpsDailySummaryEmail(rows, failedJobs, await orgNamesOf(client, (rows ?? []).map((r) => r.org_id)), now);
     const sendFailure = await sendEmail(config, subject, text);
     if (sendFailure) {
         console.error('Ops daily summary: sending failed', { reason: sendFailure });
-        await client.rpc('release_ops_alerts', { p_stamp: stamp });
+        const { error: releaseError } = await client.rpc('release_ops_alerts', { p_stamp: stamp });
+        if (releaseError) console.error('Ops daily summary: the claim could not be released; no retry today', { code: releaseError.code });
         return { sent: false, reason: 'send failed' };
     }
     return { sent: true };

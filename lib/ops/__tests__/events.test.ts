@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
     describeErrorForOps,
     isWhatsAppTokenError,
@@ -32,6 +32,10 @@ beforeEach(() => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
 });
 
+afterEach(() => {
+    vi.useRealTimers();
+});
+
 describe('recordOpsEvent', () => {
     it('calls record_ops_event with the kind, the org and a redacted, length-capped detail', async () => {
         const f = fakeClient(() => ({ error: null }));
@@ -54,6 +58,38 @@ describe('recordOpsEvent', () => {
         await expect(recordOpsEvent(failing.client as any, 'webhook_error')).resolves.toBeUndefined();
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         await expect(recordOpsEvent(throwing.client as any, 'webhook_error')).resolves.toBeUndefined();
+    });
+
+    it("records a burst's held-back tail when its window ends, once", async () => {
+        vi.useFakeTimers();
+        const f = fakeClient(() => ({ error: null }));
+        for (let i = 0; i < 25; i++) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            await recordOpsEvent(f.client as any, 'webhook_signature_invalid', { detail: 'tanda tangan tidak cocok' });
+        }
+        expect(f.calls).toHaveLength(20);
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(f.calls).toHaveLength(21);
+        expect(f.calls[20].args).toMatchObject({ p_kind: 'webhook_signature_invalid', p_count: 5, p_detail: 'tanda tangan tidak cocok' });
+        // The next event starts a new window and carries nothing already flushed.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await recordOpsEvent(f.client as any, 'webhook_signature_invalid');
+        expect(f.calls[21].args).toMatchObject({ p_count: 1 });
+    });
+
+    it('a new window that comes before the flush carries the tail instead, and the flush records nothing', async () => {
+        vi.useFakeTimers();
+        const f = fakeClient(() => ({ error: null }));
+        for (let i = 0; i < 22; i++) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            await recordOpsEvent(f.client as any, 'webhook_error');
+        }
+        vi.setSystemTime(Date.now() + 60_000); // the clock moves on, the timer has not fired yet
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await recordOpsEvent(f.client as any, 'webhook_error');
+        expect(f.calls[20].args).toMatchObject({ p_count: 3 });
+        await vi.runAllTimersAsync();
+        expect(f.calls).toHaveLength(21);
     });
 
     it('makes at most 20 calls per kind and org a minute', async () => {

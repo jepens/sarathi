@@ -13,8 +13,9 @@
 --
 -- public.ops_alert_state: when each (kind, org) group was last emailed. The
 -- every-minute queue cron (lib/ops/alerts.ts) calls claim_ops_alerts(), which
--- in one statement claims the groups that have unsent events of a finished
--- minute and were not emailed in the last hour, and returns their totals; it
+-- in one statement claims the groups that have unsent events of a closed minute
+-- (one that ended over a minute ago, so no writer still in flight can add to
+-- it) and were not emailed in the last hour, and returns their totals; it
 -- emails them, then mark_ops_alerts_sent() stamps the events, or on a failed
 -- send release_ops_alerts() frees the groups for the next run. The hour is per
 -- (kind, org), so a flood of one kind never hides another kind, and one org's
@@ -25,9 +26,10 @@
 -- mid-job) into events. cleanup_old_ops_events() deletes events and state
 -- older than 30 days, hourly with the other cleanups.
 --
--- Service role only, like message_queue, rate_limits and whatsapp_integrations
--- (0069): RLS on, a deny policy, no table or sequence privilege for anon or
--- authenticated; every function is executable by the service role only.
+-- Service role only, like whatsapp_integrations (0069): RLS on, a deny policy,
+-- no table or sequence privilege for anon or authenticated (message_queue and
+-- rate_limits carry the same deny policy but still grant authenticated its
+-- table privileges); every function is executable by the service role only.
 --
 -- Expand: nothing reads or writes these objects before the PR that ships them
 -- is deployed; applied after the owner's review (D1).
@@ -98,10 +100,12 @@ as $$
                   detail = case when e.detail = '' then excluded.detail else e.detail end;
 $$;
 
--- Claims every (kind, org) group that has unsent events of a finished minute
--- and was not emailed within p_cooldown_seconds, and returns one row per
--- claimed group: its totals, up to three example details, the claim's stamp
--- and the minute cutoff. Atomic: the claim is an upsert of the group's state
+-- Claims every (kind, org) group that has unsent events of a closed minute
+-- (before the cutoff: the start of the previous minute, so a writer whose
+-- transaction is still open across the minute boundary cannot add to a minute
+-- that is being emailed) and was not emailed within p_cooldown_seconds, and
+-- returns one row per claimed group: its totals, up to three example details,
+-- the claim's stamp and the cutoff. Atomic: the claim is an upsert of the group's state
 -- row guarded by the cooldown, so two overlapping runs never claim the same
 -- group. The events are not stamped here; mark_ops_alerts_sent does that once
 -- the email is out.
@@ -116,7 +120,7 @@ as $$
         select distinct e.kind, e.org_id, now()
           from public.ops_events e
          where e.alerted_at is null
-           and e.minute < date_trunc('minute', now())
+           and e.minute < date_trunc('minute', now()) - interval '1 minute'
         on conflict (kind, org_id) do update
             set last_alerted_at = excluded.last_alerted_at
             where s.last_alerted_at < now() - make_interval(secs => p_cooldown_seconds)
@@ -124,11 +128,11 @@ as $$
     )
     select e.kind, e.org_id, sum(e.count)::bigint, min(e.first_at), max(e.last_at),
            (array_agg(distinct e.detail) filter (where e.detail <> ''))[1:3],
-           now(), date_trunc('minute', now())
+           now(), date_trunc('minute', now()) - interval '1 minute'
       from public.ops_events e
       join due d on d.kind = e.kind and d.org_id is not distinct from e.org_id
      where e.alerted_at is null
-       and e.minute < date_trunc('minute', now())
+       and e.minute < date_trunc('minute', now()) - interval '1 minute'
      group by e.kind, e.org_id;
 $$;
 
@@ -202,7 +206,8 @@ $$;
 -- Queue jobs the database gave up on (claim_queue_jobs fails a job stranded in
 -- 'processing' once its retries are used up; no application code sees that)
 -- become queue_job_failed events, each job once: its error_message is marked
--- as reported. Returns the jobs reported.
+-- as reported. Counted per conversation, like the application path (one event
+-- per conversation that got no reply). Returns the jobs reported.
 create function public.report_stale_queue_failures()
 returns integer
 language sql
@@ -213,15 +218,17 @@ as $$
            set error_message = 'Reclaimed from stale processing (reported)'
          where q.status = 'failed'
            and q.error_message = 'Reclaimed from stale processing'
-        returning q.org_id
+        returning q.org_id, q.phone_number
     ),
     per_org as (
-        select n.org_id, count(*)::int as jobs from noted n group by n.org_id
+        select n.org_id, count(*)::int as jobs, count(distinct n.phone_number)::int as conversations
+          from noted n group by n.org_id
     ),
     recorded as (
         insert into public.ops_events as e (kind, org_id, minute, first_at, last_at, count, detail)
-        select 'queue_job_failed', p.org_id, date_trunc('minute', now()), now(), now(), p.jobs,
-               format('%s pesan: worker berhenti di tengah proses, lalu batas percobaan habis', p.jobs)
+        select 'queue_job_failed', p.org_id, date_trunc('minute', now()), now(), now(), p.conversations,
+               format('%s pesan dari %s percakapan: worker berhenti di tengah proses, lalu batas percobaan habis',
+                      p.jobs, p.conversations)
           from per_org p
         on conflict (kind, org_id, minute) where alerted_at is null
         do update set count = e.count + excluded.count,

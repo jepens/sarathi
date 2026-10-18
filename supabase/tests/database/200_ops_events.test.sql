@@ -10,7 +10,7 @@
 -- report_stale_queue_failures reports each job the stale-job reclaim failed
 -- once; the cleanup keeps 30 days.
 begin;
-select plan(38);
+select plan(40);
 
 select tests.create_two_orgs();
 
@@ -74,11 +74,11 @@ select is(
 select tests.authenticate_as(tests.user_a1());
 select throws_ok(
     $$ select public.record_ops_event('tst_x', null, 'x', 1) $$,
-    '42501', null,
+    '42501', 'permission denied for function record_ops_event',
     'an org owner cannot record an event');
 select throws_ok(
     $$ select * from public.claim_ops_alerts(3600) $$,
-    '42501', null,
+    '42501', 'permission denied for function claim_ops_alerts',
     'nor claim alerts');
 select tests.clear_authentication();
 
@@ -114,8 +114,10 @@ select throws_ok(
     '23514', null,
     'a kind outside [a-z][a-z0-9_] is refused');
 
--- Claiming. Events of finished minutes, and the state of two groups: one
--- emailed 30 minutes ago (cooling), one 2 hours ago (due again).
+-- Claiming. Events of closed minutes, and the state of two groups: one
+-- emailed 30 minutes ago (cooling), one 2 hours ago (due again). The claimed
+-- group tst_due also has a row of the previous minute (not closed yet: a
+-- writer may still be adding to it) and one of the current minute.
 insert into public.ops_events (kind, org_id, minute, first_at, last_at, count, detail) values
     ('tst_due', tests.org_a(), date_trunc('minute', now()) - interval '5 minutes', now() - interval '5 minutes', now() - interval '5 minutes', 2, 'd1'),
     ('tst_due', tests.org_a(), date_trunc('minute', now()) - interval '4 minutes', now() - interval '4 minutes', now() - interval '4 minutes', 1, 'd2'),
@@ -123,7 +125,9 @@ insert into public.ops_events (kind, org_id, minute, first_at, last_at, count, d
     ('tst_due', tests.org_a(), date_trunc('minute', now()) - interval '2 minutes', now() - interval '2 minutes', now() - interval '2 minutes', 1, 'd4'),
     ('tst_noorg', null, date_trunc('minute', now()) - interval '2 minutes', now() - interval '2 minutes', now() - interval '2 minutes', 4, ''),
     ('tst_cool', tests.org_a(), date_trunc('minute', now()) - interval '2 minutes', now() - interval '2 minutes', now() - interval '2 minutes', 1, 'c'),
-    ('tst_cool', tests.org_b(), date_trunc('minute', now()) - interval '2 minutes', now() - interval '2 minutes', now() - interval '2 minutes', 6, 'c');
+    ('tst_cool', tests.org_b(), date_trunc('minute', now()) - interval '2 minutes', now() - interval '2 minutes', now() - interval '2 minutes', 6, 'c'),
+    ('tst_due', tests.org_a(), date_trunc('minute', now()) - interval '1 minute', now() - interval '1 minute', now() - interval '1 minute', 1, 'tepi');
+select public.record_ops_event('tst_due', tests.org_a(), 'baru', 7);
 insert into public.ops_alert_state (kind, org_id, last_alerted_at) values
     ('tst_cool', tests.org_a(), now() - interval '30 minutes'),
     ('tst_cool', tests.org_b(), now() - interval '2 hours');
@@ -133,7 +137,7 @@ select is(
     (select string_agg(format('%s/%s=%s', kind, coalesce(org_id::text, '-'), events), ', ' order by kind, org_id nulls first)
        from claimed),
     format('tst_cool/%s=6, tst_due/%s=5, tst_noorg/-=4', tests.org_b(), tests.org_a()),
-    'the claim takes, per kind and org, the groups with unsent events of finished minutes not emailed in the last hour');
+    'the claim takes, per kind and org, the groups with unsent events of closed minutes not emailed in the last hour');
 select is(
     (select cardinality(details) from claimed where kind = 'tst_due'),
     3,
@@ -143,8 +147,8 @@ select is(
     null::text[],
     'and none when the examples are empty');
 select ok(
-    (select bool_and(stamp = now() and cutoff = date_trunc('minute', now())) from claimed),
-    'every row carries the claim stamp and the minute cutoff');
+    (select bool_and(stamp = now() and cutoff = date_trunc('minute', now()) - interval '1 minute') from claimed),
+    'every row carries the claim stamp and the cutoff (the start of the previous minute)');
 select is(
     (select count(*)::int from public.ops_alert_state where last_alerted_at = now()),
     3,
@@ -160,14 +164,19 @@ select is(
 
 -- Marking after the email went out.
 select is(
-    public.mark_ops_alerts_sent(now(), date_trunc('minute', now())),
+    public.mark_ops_alerts_sent(now(), date_trunc('minute', now()) - interval '1 minute'),
     6,
-    'marking stamps the unsent rows of finished minutes of the claimed groups');
+    'marking stamps the unsent rows of closed minutes of the claimed groups');
 select is(
     (select string_agg(kind || '/' || coalesce(org_id::text, '-'), ', ' order by kind, org_id nulls first)
-       from public.ops_events where alerted_at is null),
+       from public.ops_events where alerted_at is null and kind <> 'tst_due'),
     format('tst_cool/%s, tst_now/-, tst_now/%s', tests.org_a(), tests.org_a()),
     'the cooling group and the current minute stay unsent');
+select is(
+    (select string_agg(format('%s=%s', (extract(epoch from minute - date_trunc('minute', now())) / 60)::int, count), ', ' order by minute)
+       from public.ops_events where kind = 'tst_due' and alerted_at is null),
+    '-1=1, 0=7',
+    'a claimed group keeps its rows of the previous and the current minute: neither counted in the email nor stamped');
 
 -- Releasing after a failed send.
 insert into public.ops_events (kind, org_id, minute, first_at, last_at, count, detail) values
@@ -197,23 +206,30 @@ select is(
     (select string_agg(format('%s/%s=%s/%s', kind, coalesce(org_id::text, '-'), events, unsent), ', '
                        order by kind, org_id nulls first)
        from public.ops_events_summary(now() - interval '1 day') where kind like 'tst%'),
-    format('tst_cool/%1$s=1/1, tst_cool/%2$s=6/0, tst_due/%1$s=5/0, tst_noorg/-=4/0, tst_now/-=3/3, tst_now/%1$s=5/5, tst_retry/%1$s=1/1',
+    format('tst_cool/%1$s=1/1, tst_cool/%2$s=6/0, tst_due/%1$s=13/8, tst_noorg/-=4/0, tst_now/-=3/3, tst_now/%1$s=5/5, tst_retry/%1$s=1/1',
            tests.org_a(), tests.org_b()),
     'the summary gives totals per kind and org with the part not emailed');
 
 -- Queue jobs the stale-job reclaim failed.
 insert into public.message_queue (org_id, phone_number, message_text, status, retries, max_retries, error_message, processed_at) values
     (tests.org_a(), '620000000001', 'x', 'failed', 3, 3, 'Reclaimed from stale processing', now()),
+    (tests.org_a(), '620000000001', 'x2', 'failed', 3, 3, 'Reclaimed from stale processing', now()),
     (tests.org_a(), '620000000002', 'y', 'failed', 3, 3, 'Reclaimed from stale processing', now()),
-    (tests.org_a(), '620000000003', 'z', 'failed', 3, 3, 'OpenAI 500', now());
+    (tests.org_a(), '620000000003', 'z', 'failed', 3, 3, 'OpenAI 500', now()),
+    (tests.org_a(), '620000000004', 'w', 'pending', 1, 3, 'Reclaimed from stale processing', null);
 select is(
     public.report_stale_queue_failures(),
-    2,
-    'queue jobs failed by the stale-job reclaim are reported, other failures are not');
+    3,
+    'queue jobs failed by the stale-job reclaim are reported; other failures and retryable reclaims are not');
 select is(
-    (select count from public.ops_events where kind = 'queue_job_failed' and org_id = tests.org_a() and alerted_at is null),
-    2,
-    'as one queue_job_failed row with their count');
+    (select format('%s | %s', count, detail) from public.ops_events
+      where kind = 'queue_job_failed' and org_id = tests.org_a() and alerted_at is null),
+    '2 | 3 pesan dari 2 percakapan: worker berhenti di tengah proses, lalu batas percobaan habis',
+    'as one queue_job_failed row counting conversations, like the application path');
+select is(
+    (select error_message from public.message_queue where phone_number = '620000000004'),
+    'Reclaimed from stale processing',
+    'a retryable reclaim (still pending) is left alone');
 select is(
     public.report_stale_queue_failures(),
     0,

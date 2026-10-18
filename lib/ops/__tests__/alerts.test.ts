@@ -190,6 +190,20 @@ describe('maybeSendOpsDailySummary', () => {
     });
 });
 
+describe('daily summary when the events cannot be read', () => {
+    it('says so instead of a false all-clear', async () => {
+        const at = new Date('2026-10-18T01:00:00Z');
+        fake.replies.claim_ops_daily_summary = { data: STAMP, error: null };
+        fake.replies.ops_events_summary = { data: null, error: { code: '57014' } };
+        fake.failedJobs = 3;
+        expect(await runDaily(at)).toEqual({ sent: true });
+        const mail = h.send.mock.calls[0][0];
+        expect(mail.subject).toBe('[Sarathi] Ringkasan harian: kejadian tidak bisa dibaca, 3 job gagal');
+        expect(mail.text).toContain('Kejadian operasional: tidak bisa dibaca');
+        expect(mail.text).not.toContain('tidak ada.');
+    });
+});
+
 describe('daily summary content', () => {
     it('lists totals per kind with the part not emailed, and the failed queue jobs', () => {
         const { subject, text } = buildOpsDailySummaryEmail(

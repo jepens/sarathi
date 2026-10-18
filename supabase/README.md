@@ -463,9 +463,11 @@ line to `production.txt`.
   (`<` only in production, `>` only in the replay), each with a reason:
   permanent ones, or *pending* lines of a migration not yet applied to
   production (see above). Entries that no longer differ fail as stale. It
-  currently holds one pending block, the contract 0067 (the 2 `bucket
-  chat-media` lines; applied after the deploy of its PR). Apart from that the
-  replay matches production exactly (re-checked 2026-10-17 after applying
+  currently holds two pending blocks: the contract 0067 (the 2 `bucket
+  chat-media` lines; applied after the deploy of its PR) and the expand 0070
+  (72 lines; applied after the owner's review). Each block is deleted when
+  production.txt is refreshed after its apply. Apart from these the replay
+  matches production exactly (re-checked 2026-10-17 after applying
   0069, against a fresh read-only production query: 587 lines, md5
   `287d4582fac9a846d1bc3f4bf82e044d`).
 - Not fingerprinted: sequence privileges, column-level privileges, MAINTAIN,

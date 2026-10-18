@@ -58,8 +58,9 @@ export async function GET(request: Request) {
         // gave up on into events, then at most one email per kind and org per
         // hour, and the daily summary. Never let it break the queue.
         try {
-            const { data: staleJobs } = await supabase.rpc('report_stale_queue_failures');
-            if (staleJobs) whatsappLogger.warn(`Queue jobs failed by the stale-job reclaim: ${staleJobs}`);
+            const { data: staleJobs, error: staleError } = await supabase.rpc('report_stale_queue_failures');
+            if (staleError) whatsappLogger.error('Reporting stale queue failures failed', { code: staleError.code });
+            else if (staleJobs) whatsappLogger.warn(`Queue jobs failed by the stale-job reclaim: ${staleJobs}`);
             const alert = await maybeSendOpsAlerts(supabase);
             if (alert.sent) whatsappLogger.info(`Ops alert emailed: ${alert.kinds.join(', ')}`);
             const daily = await maybeSendOpsDailySummary(supabase);
