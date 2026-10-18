@@ -10,8 +10,11 @@ import { isDialablePhone } from '@/lib/leads/schema';
 // have a recovered real phone we prefer it.
 
 // Build the recipient portion of a send body from a single identifier. A
-// dialable phone → { to }; anything else (a BSUID) → { recipient_type,
-// recipient }. Never emits both.
+// dialable phone → { recipient_type, to }; anything else (a BSUID) →
+// { recipient_type, recipient }. Never emits both `to` and `recipient`.
+// recipient_type is sent for a phone too: Meta's current Messages reference
+// marks it required with no default, and its v25.0 examples send it (Graph
+// v25.0 bump, tracker 2.7).
 //
 // A phone may arrive FORMATTED (leading +, spaces, dashes — e.g. an env-set
 // owner number "+62 813-…"); strip it to bare digits so it still routes to `to`
@@ -21,7 +24,7 @@ import { isDialablePhone } from '@/lib/leads/schema';
 export function buildRecipient(identifier: string): Record<string, unknown> {
     const stripped = identifier.replace(/[\s\-()]/g, '').replace(/^\+/, '');
     return isDialablePhone(stripped)
-        ? { to: stripped }
+        ? { recipient_type: 'individual', to: stripped }
         : { recipient_type: 'individual', recipient: identifier };
 }
 
