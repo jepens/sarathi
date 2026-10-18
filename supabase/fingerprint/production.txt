@@ -1,4 +1,4 @@
-bucket chat-media public=t size_limit=- mime=-
+bucket chat-media public=f size_limit=52428800 mime=image/jpeg,image/png,image/webp,audio/aac,audio/amr,audio/mpeg,audio/mp4,audio/ogg,video/mp4,video/3gpp,application/pdf,text/plain,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/octet-stream
 bucket documents public=f size_limit=- mime=-
 bucket proposals public=f size_limit=10485760 mime=application/pdf
 col public.app_settings.created_at type=timestamp with time zone notnull=f default=now() identity=- generated=-
@@ -41,6 +41,7 @@ col public.labels.id type=uuid notnull=t default=gen_random_uuid() identity=- ge
 col public.labels.name type=text notnull=t default=- identity=- generated=-
 col public.labels.org_id type=uuid notnull=t default=- identity=- generated=-
 col public.labels.updated_at type=timestamp with time zone notnull=t default=now() identity=- generated=-
+col public.message_queue.ai_quota_counted type=boolean notnull=t default=false identity=- generated=-
 col public.message_queue.created_at type=timestamp with time zone notnull=f default=now() identity=- generated=-
 col public.message_queue.error_message type=text notnull=f default=- identity=- generated=-
 col public.message_queue.id type=uuid notnull=t default=gen_random_uuid() identity=- generated=-
@@ -87,6 +88,17 @@ col public.orders.status type=text notnull=f default='pending'::text identity=- 
 col public.orders.total_amount type=numeric notnull=f default=0 identity=- generated=-
 col public.orders.updated_at type=timestamp with time zone notnull=f default=now() identity=- generated=-
 col public.orders.venue type=text notnull=f default=- identity=- generated=-
+col public.org_quota_overrides.ai_replies_per_day type=integer notnull=f default=- identity=- generated=-
+col public.org_quota_overrides.inbound_per_minute type=integer notnull=f default=- identity=- generated=-
+col public.org_quota_overrides.note type=text notnull=t default=''::text identity=- generated=-
+col public.org_quota_overrides.org_id type=uuid notnull=t default=- identity=- generated=-
+col public.org_quota_overrides.updated_at type=timestamp with time zone notnull=t default=now() identity=- generated=-
+col public.org_usage_counters.metric type=text notnull=t default=- identity=- generated=-
+col public.org_usage_counters.org_id type=uuid notnull=t default=- identity=- generated=-
+col public.org_usage_counters.refused type=integer notnull=t default=0 identity=- generated=-
+col public.org_usage_counters.refused_streak type=integer notnull=t default=0 identity=- generated=-
+col public.org_usage_counters.used type=integer notnull=t default=0 identity=- generated=-
+col public.org_usage_counters.window_start type=timestamp with time zone notnull=t default=- identity=- generated=-
 col public.organization_members.created_at type=timestamp with time zone notnull=t default=now() identity=- generated=-
 col public.organization_members.org_id type=uuid notnull=t default=- identity=- generated=-
 col public.organization_members.role type=org_role notnull=t default='owner'::org_role identity=- generated=-
@@ -254,6 +266,14 @@ con public.ops_events ops_events_pkey PRIMARY KEY (id)
 con public.orders orders_org_customer_phone_fkey FOREIGN KEY (org_id, customer_phone) REFERENCES whatsapp_chats(org_id, phone_number)
 con public.orders orders_org_id_fkey FOREIGN KEY (org_id) REFERENCES organizations(id)
 con public.orders orders_pkey PRIMARY KEY (id)
+con public.org_quota_overrides org_quota_overrides_ai_check CHECK ((ai_replies_per_day > 0))
+con public.org_quota_overrides org_quota_overrides_inbound_check CHECK ((inbound_per_minute > 0))
+con public.org_quota_overrides org_quota_overrides_note_check CHECK ((char_length(note) <= 500))
+con public.org_quota_overrides org_quota_overrides_org_id_fkey FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
+con public.org_quota_overrides org_quota_overrides_pkey PRIMARY KEY (org_id)
+con public.org_usage_counters org_usage_counters_metric_check CHECK ((metric = ANY (ARRAY['inbound_minute'::text, 'ai_reply_day'::text])))
+con public.org_usage_counters org_usage_counters_org_id_fkey FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
+con public.org_usage_counters org_usage_counters_pkey PRIMARY KEY (org_id, metric, window_start)
 con public.organization_members organization_members_org_id_fkey FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
 con public.organization_members organization_members_pkey PRIMARY KEY (org_id, user_id)
 con public.organization_members organization_members_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE
@@ -315,7 +335,9 @@ fn public.claim_queue_jobs(p_limit integer, p_stale_seconds integer, p_debounce_
 fn public.cleanup_old_ops_events() returns=void lang=sql volatile=v secdef=f config=search_path="" owner=postgres body_md5=77c3e88860412a5d177ce9c25ad364d8
 fn public.cleanup_old_queue_entries() returns=void lang=plpgsql volatile=v secdef=f config=search_path=public owner=postgres body_md5=a7d64dbb496e09e97c364d3192821b7d
 fn public.cleanup_old_rate_limits() returns=void lang=plpgsql volatile=v secdef=f config=search_path=public owner=postgres body_md5=a6d1df4122575a9aa573d126891a17ea
+fn public.cleanup_old_usage_counters() returns=void lang=sql volatile=v secdef=f config=search_path="" owner=postgres body_md5=1546bab106684618c6bf92b104ab596c
 fn public.cleanup_vendor_on_untag() returns=trigger lang=plpgsql volatile=v secdef=t config=search_path="" owner=postgres body_md5=e7fd5cbdf2d558909f82057d3fdd1f2b
+fn public.consume_org_quota(p_org uuid, p_metric text, p_default_limit integer) returns=TABLE(allowed boolean, used integer, refused integer, quota integer, first_refusal boolean) lang=plpgsql volatile=v secdef=f config=search_path="" owner=postgres body_md5=3b2bf688bb18bae55d96c106d405433a
 fn public.delete_contact_cascade(p_org uuid, p_phone text) returns=jsonb lang=plpgsql volatile=v secdef=t config=search_path=public, pg_temp owner=postgres body_md5=614c7885561f9b3121e9ba3ae76849c4
 fn public.ensure_single_active_system_message() returns=trigger lang=plpgsql volatile=v secdef=f config=search_path=public owner=postgres body_md5=055ccac38a30ae861e3f5b5f98c6d7da
 fn public.handle_new_user() returns=trigger lang=plpgsql volatile=v secdef=t config=search_path="" owner=postgres body_md5=b09dd3c8c92319801607b91dbb9d03d2
@@ -363,9 +385,15 @@ fnexec public.cleanup_old_queue_entries() service_role=t
 fnexec public.cleanup_old_rate_limits() anon=t
 fnexec public.cleanup_old_rate_limits() authenticated=t
 fnexec public.cleanup_old_rate_limits() service_role=t
+fnexec public.cleanup_old_usage_counters() anon=f
+fnexec public.cleanup_old_usage_counters() authenticated=f
+fnexec public.cleanup_old_usage_counters() service_role=t
 fnexec public.cleanup_vendor_on_untag() anon=f
 fnexec public.cleanup_vendor_on_untag() authenticated=f
 fnexec public.cleanup_vendor_on_untag() service_role=t
+fnexec public.consume_org_quota(p_org uuid, p_metric text, p_default_limit integer) anon=f
+fnexec public.consume_org_quota(p_org uuid, p_metric text, p_default_limit integer) authenticated=f
+fnexec public.consume_org_quota(p_org uuid, p_metric text, p_default_limit integer) service_role=t
 fnexec public.delete_contact_cascade(p_org uuid, p_phone text) anon=f
 fnexec public.delete_contact_cascade(p_org uuid, p_phone text) authenticated=t
 fnexec public.delete_contact_cascade(p_org uuid, p_phone text) service_role=t
@@ -450,6 +478,9 @@ idx public.orders CREATE INDEX idx_orders_event_date ON public.orders USING btre
 idx public.orders CREATE INDEX idx_orders_org_customer_phone ON public.orders USING btree (org_id, customer_phone)
 idx public.orders CREATE INDEX orders_org_id_idx ON public.orders USING btree (org_id)
 idx public.orders CREATE UNIQUE INDEX orders_pkey ON public.orders USING btree (id)
+idx public.org_quota_overrides CREATE UNIQUE INDEX org_quota_overrides_pkey ON public.org_quota_overrides USING btree (org_id)
+idx public.org_usage_counters CREATE INDEX org_usage_counters_metric_window_idx ON public.org_usage_counters USING btree (metric, window_start)
+idx public.org_usage_counters CREATE UNIQUE INDEX org_usage_counters_pkey ON public.org_usage_counters USING btree (org_id, metric, window_start)
 idx public.organization_members CREATE INDEX organization_members_user_id_idx ON public.organization_members USING btree (user_id)
 idx public.organization_members CREATE UNIQUE INDEX organization_members_pkey ON public.organization_members USING btree (org_id, user_id)
 idx public.organizations CREATE UNIQUE INDEX organizations_pkey ON public.organizations USING btree (id)
@@ -513,6 +544,8 @@ pol public.message_queue "service_role only" PERMISSIVE cmd=ALL roles=anon,authe
 pol public.ops_alert_state "service_role only" PERMISSIVE cmd=ALL roles=anon,authenticated using=false check=false
 pol public.ops_events "service_role only" PERMISSIVE cmd=ALL roles=anon,authenticated using=false check=false
 pol public.orders "org members full access" PERMISSIVE cmd=ALL roles=authenticated using=private.is_org_member(org_id) check=private.is_org_member(org_id)
+pol public.org_quota_overrides "service_role only" PERMISSIVE cmd=ALL roles=anon,authenticated using=false check=false
+pol public.org_usage_counters "service_role only" PERMISSIVE cmd=ALL roles=anon,authenticated using=false check=false
 pol public.organization_members "read own memberships" PERMISSIVE cmd=SELECT roles=authenticated using=(user_id = ( SELECT auth.uid() AS uid)) check=-
 pol public.organizations "members read their org" PERMISSIVE cmd=SELECT roles=authenticated using=private.is_org_member(id) check=-
 pol public.products "org members full access" PERMISSIVE cmd=ALL roles=authenticated using=private.is_org_member(org_id) check=private.is_org_member(org_id)
@@ -541,6 +574,8 @@ rel public.ops_alert_state_id_seq kind=S owner=postgres rls=f force_rls=f
 rel public.ops_events kind=r owner=postgres rls=t force_rls=f
 rel public.ops_events_id_seq kind=S owner=postgres rls=f force_rls=f
 rel public.orders kind=r owner=postgres rls=t force_rls=f
+rel public.org_quota_overrides kind=r owner=postgres rls=t force_rls=f
+rel public.org_usage_counters kind=r owner=postgres rls=t force_rls=f
 rel public.organization_members kind=r owner=postgres rls=t force_rls=f
 rel public.organizations kind=r owner=postgres rls=t force_rls=f
 rel public.platform_settings kind=r owner=postgres rls=t force_rls=f
@@ -584,6 +619,12 @@ relpriv public.ops_events service_role=rawdDxt
 relpriv public.orders anon=
 relpriv public.orders authenticated=rawdDxt
 relpriv public.orders service_role=rawdDxt
+relpriv public.org_quota_overrides anon=
+relpriv public.org_quota_overrides authenticated=
+relpriv public.org_quota_overrides service_role=rawdDxt
+relpriv public.org_usage_counters anon=
+relpriv public.org_usage_counters authenticated=
+relpriv public.org_usage_counters service_role=rawdDxt
 relpriv public.organization_members anon=
 relpriv public.organization_members authenticated=rawdDxt
 relpriv public.organization_members service_role=rawdDxt
@@ -644,6 +685,7 @@ trg public.labels CREATE TRIGGER trg_org_broadcast_upd AFTER UPDATE ON public.la
 trg public.orders CREATE TRIGGER trg_org_broadcast_del AFTER DELETE ON public.orders REFERENCING OLD TABLE AS old_rows FOR EACH STATEMENT EXECUTE FUNCTION private.broadcast_org_changes()
 trg public.orders CREATE TRIGGER trg_org_broadcast_ins AFTER INSERT ON public.orders REFERENCING NEW TABLE AS new_rows FOR EACH STATEMENT EXECUTE FUNCTION private.broadcast_org_changes()
 trg public.orders CREATE TRIGGER trg_org_broadcast_upd AFTER UPDATE ON public.orders REFERENCING NEW TABLE AS new_rows FOR EACH STATEMENT EXECUTE FUNCTION private.broadcast_org_changes()
+trg public.org_quota_overrides CREATE TRIGGER trg_org_quota_overrides_updated_at BEFORE UPDATE ON public.org_quota_overrides FOR EACH ROW EXECUTE FUNCTION set_updated_at()
 trg public.platform_settings CREATE TRIGGER trg_platform_settings_updated_at BEFORE UPDATE ON public.platform_settings FOR EACH ROW EXECUTE FUNCTION set_updated_at()
 trg public.system_message CREATE TRIGGER trigger_single_active_system_message BEFORE INSERT OR UPDATE ON public.system_message FOR EACH ROW WHEN ((new.is_active = true)) EXECUTE FUNCTION ensure_single_active_system_message()
 trg public.system_message CREATE TRIGGER update_system_message_updated_at BEFORE UPDATE ON public.system_message FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()

@@ -37,6 +37,10 @@ export const OPS_KIND_LABELS: Record<string, string> = {
     webhook_error: 'Webhook WhatsApp gagal diproses (500)',
     queue_job_failed: 'Balasan AI gagal setelah semua percobaan',
     whatsapp_token_invalid: 'Token WhatsApp tidak valid atau kedaluwarsa (Meta 190)',
+    quota_inbound_exceeded: 'Kuota percakapan AI baru per menit tercapai: percakapan baru di menit itu tidak dibalas AI',
+    quota_ai_daily_warning: 'Kuota balasan AI harian sudah terpakai 80%',
+    quota_ai_daily_exceeded: 'Kuota balasan AI harian habis: AI berhenti membalas sampai 00.00 WIB',
+    quota_check_failed: 'Pemeriksaan kuota gagal: kuota tidak ditegakkan, AI tetap membalas',
 };
 
 /** One claimed (kind, org) group, as claim_ops_alerts returns it. */
