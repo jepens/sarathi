@@ -64,6 +64,8 @@ interface Scenario {
     /** The completion update answers with an error (supabase-js does not throw). */
     markCompletedError?: boolean;
     failHistoryWrite?: boolean;
+    /** The reply's history insert answers with an error. */
+    historyWriteError?: boolean;
 }
 
 // Build a fake client whose resolver answers each table/op the pipeline touches.
@@ -89,6 +91,7 @@ function clientFor(s: Scenario) {
         if (table === 'whatsapp_messages' && op === 'insert') {
             // assistant reply history write
             if (s.failHistoryWrite) throw new Error('DB down: history insert failed');
+            if (s.historyWriteError) return { data: null, error: { message: 'statement timeout', code: '57014' } };
             return { data: null, error: null };
         }
         // chat upsert, queue update (pending/failed), anything else
@@ -344,11 +347,22 @@ describe('processQueue — V3 resend safety', () => {
         await processQueue(fake.client);
         expect(sendMock).toHaveBeenCalledTimes(1);
         expect(vi.mocked(whatsappLogger.error)).toHaveBeenCalledWith(
-            expect.stringContaining('Failed to mark jobs completed after sending'),
+            expect.stringContaining('will answer this burst again'),
             expect.objectContaining({ code: '57014' }),
         );
         expect(queueUpdates(fake.calls, 'pending')).toHaveLength(0);
         expect(queueUpdates(fake.calls, 'failed')).toHaveLength(0);
+    });
+
+    it('logs a reply history write the database refused, without resending', async () => {
+        const fake = clientFor({ jobs: [job('j1', 'm1', '2026-06-20T10:00:00.000Z')], historyWriteError: true });
+        await processQueue(fake.client);
+        expect(sendMock).toHaveBeenCalledTimes(1);
+        expect(vi.mocked(whatsappLogger.error)).toHaveBeenCalledWith(
+            expect.stringContaining('Reply history write failed'),
+            expect.objectContaining({ code: '57014' }),
+        );
+        expect(queueUpdates(fake.calls, 'pending')).toHaveLength(0);
     });
 });
 
@@ -406,6 +420,15 @@ describe('processQueue — admin takeover', () => {
         expect(sendMock).not.toHaveBeenCalled();
         expect(queueUpdates(fake.calls, 'completed')).toHaveLength(1);
     });
+
+    it('logs a close the database refused in manual mode', async () => {
+        const fake = clientFor({ jobs: [job('j1', 'm1', '2026-06-20T10:00:00.000Z')], aiEnabled: false, markCompletedError: true });
+        await processQueue(fake.client);
+        expect(vi.mocked(whatsappLogger.error)).toHaveBeenCalledWith(
+            expect.stringContaining('in manual mode failed'),
+            expect.objectContaining({ code: '57014' }),
+        );
+    });
 });
 
 describe('processQueue — daily AI quota of the org (tracker 3.4)', () => {
@@ -431,7 +454,8 @@ describe('processQueue — daily AI quota of the org (tracker 3.4)', () => {
         expect(completed).toHaveLength(1);
         expect(completed[0].filters).toContainEqual(['in', 'id', ['j1']]);
         expect((completed[0].payload as Record<string, unknown>).error_message).toBe('quota: ai_reply_day');
-        expect(logSystemMock).toHaveBeenCalledWith(ORG, PHONE, aiQuotaReachedNotice(300));
+        // touchChat: false: the chat stays "Belum dibalas" for the operators.
+        expect(logSystemMock).toHaveBeenCalledWith(ORG, PHONE, aiQuotaReachedNotice(300), { touchChat: false });
         // a stop, not a failure: nothing is retried and no fallback is sent
         expect(queueUpdates(fake.calls, 'pending')).toHaveLength(0);
         expect(queueUpdates(fake.calls, 'failed')).toHaveLength(0);
@@ -442,6 +466,18 @@ describe('processQueue — daily AI quota of the org (tracker 3.4)', () => {
                 (c) => c.table === 'message_queue' && c.op === 'update' && 'ai_quota_counted' in ((c.payload as Record<string, unknown>) ?? {}),
             ),
         ).toBe(false);
+    });
+
+    it('over the quota, a close the database refused is logged (the note still comes)', async () => {
+        quotaMock.mockResolvedValueOnce({ allowed: false, used: 300, refused: 1, limit: 300, firstRefusal: false });
+        const fake = clientFor({ jobs: [job('j1', 'm1', '2026-06-20T10:00:00.000Z')], markCompletedError: true });
+        await processQueue(fake.client);
+        expect(vi.mocked(whatsappLogger.error)).toHaveBeenCalledWith(
+            expect.stringContaining('over the daily AI quota failed'),
+            expect.objectContaining({ code: '57014' }),
+        );
+        expect(logSystemMock).toHaveBeenCalledTimes(1);
+        expect(sendMock).not.toHaveBeenCalled();
     });
 
     it('a chat in manual mode is not counted', async () => {
@@ -540,6 +576,22 @@ describe('processQueue — history around the burst (tracker 3.4)', () => {
             { role: 'assistant', content: 'jawaban lama' },
             { role: 'assistant', content: 'Paket B Rp5 juta (dari operator)' },
         ]);
+    });
+
+    it('cuts at the next customer turn, so a reply to that later turn is not kept without its question', async () => {
+        const fake = clientFor({
+            jobs: [job('j1', 'pertanyaan A', '2026-06-20T10:00:00.000Z', { wamid: 'wamid.a1', retries: 1 })], // reclaimed later
+            history: [
+                { role: 'assistant', content: 'jawaban lama', wa_message_id: 'wamid.o1' },
+                { role: 'user', content: 'pertanyaan A', wa_message_id: 'wamid.a1' },
+                { role: 'user', content: 'pertanyaan B', wa_message_id: 'wamid.b1' },
+                { role: 'assistant', content: 'jawaban untuk B', wa_message_id: 'wamid.o2' },
+            ],
+        });
+        await processQueue(fake.client);
+        const [message, history] = ragMock.mock.calls[0];
+        expect(message).toBe('pertanyaan A');
+        expect(history).toEqual([{ role: 'assistant', content: 'jawaban lama' }]);
     });
 
     it('skips a photo without a caption instead of sending an empty turn', async () => {

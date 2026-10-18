@@ -783,9 +783,11 @@ export async function POST(request: Request) {
                                 whatsappLogger.info(`User message inserted for ${contactKey}`);
 
                                 // The minute quota kept this message from the AI:
-                                // tell the operators, once per chat and minute.
+                                // tell the operators, once per chat and minute,
+                                // without marking the chat answered (it still
+                                // needs a human reply).
                                 if (refusedByQuota !== null && firstInboundRefusalNote(`${waCtx.orgId}:${contactKey}`)) {
-                                    await logSystemMessage(waCtx.orgId, contactKey, inboundQuotaNotice(refusedByQuota));
+                                    await logSystemMessage(waCtx.orgId, contactKey, inboundQuotaNotice(refusedByQuota), { touchChat: false });
                                 }
 
                                 // Per-chat unread badge: atomic increment (only on

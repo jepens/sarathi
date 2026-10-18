@@ -129,7 +129,10 @@ describe('webhook text message: the org inbound quota', () => {
         const row = await deliver(req);
         expect(h.enqueue).not.toHaveBeenCalled();
         expect(row).toMatchObject({ org_id: ORG, phone_number: '620000000002', role: 'user', wa_message_id: wamid });
-        await vi.waitFor(() => expect(h.logSystem).toHaveBeenCalledWith(ORG, '620000000002', inboundQuotaNotice(12)));
+        // touchChat: false: the chat stays "Belum dibalas" for the operators.
+        await vi.waitFor(() =>
+            expect(h.logSystem).toHaveBeenCalledWith(ORG, '620000000002', inboundQuotaNotice(12), { touchChat: false }),
+        );
         expect(insertsWhenNoted).toBe(1); // the message was stored before the note
     });
 

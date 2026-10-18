@@ -262,7 +262,8 @@ async function processConversation(jobs: QueueJob[], supabase: SupabaseClient): 
         if (quota && !quota.allowed) {
             const closeError = await markJobsCompleted(supabase, ids, 'quota: ai_reply_day');
             if (closeError) whatsappLogger.error(`Closing the jobs of ${phoneNumber} over the daily AI quota failed`, closeError);
-            await logSystemMessage(orgId, phoneNumber, aiQuotaReachedNotice(quota.limit));
+            // The customer still needs a reply: the note must not mark the chat answered.
+            await logSystemMessage(orgId, phoneNumber, aiQuotaReachedNotice(quota.limit), { touchChat: false });
             whatsappLogger.warn(`Conversation ${phoneNumber} not answered — daily AI quota of the org reached (${quota.limit})`);
             return;
         }
@@ -304,13 +305,15 @@ async function processConversation(jobs: QueueJob[], supabase: SupabaseClient): 
             .filter((msg) => (msg.role === 'user' || msg.role === 'assistant') && !!msg.content?.trim());
         // The inbound burst is already stored in whatsapp_messages and is fed
         // to the model as combinedMessage, so it must not be in the history
-        // too. When every job knows its wamid, drop exactly those rows and any
-        // customer message newer than them (a later turn: the next burst): an
-        // earlier unanswered message (one the org's minute quota kept from the
-        // AI, tracker 3.4, or one sent in manual mode) stays in as context, and
-        // so does a reply stored after the burst (an operator answering from the
+        // too. When every job knows its wamid, drop exactly those rows and cut
+        // the history at the first customer message after them (a later turn:
+        // the next burst, and any reply to it): an earlier unanswered message
+        // (one the org's minute quota kept from the AI, tracker 3.4, or one sent
+        // in manual mode) stays in as context, and so does a reply stored after
+        // the burst but before that next turn (an operator answering from the
         // dashboard meanwhile, or the AI's reply to the previous burst), so the
-        // AI does not contradict or repeat it. Otherwise drop the trailing run
+        // AI sees it. It does come before the burst in the prompt, the only
+        // place generateRAGResponse takes it. Otherwise drop the trailing run
         // of UNANSWERED user messages, which is this burst, since the bot
         // hasn't replied yet.
         const burstWamids = new Set(jobs.map((j) => j.wa_message_id).filter((w): w is string => !!w));
@@ -322,7 +325,8 @@ async function processConversation(jobs: QueueJob[], supabase: SupabaseClient): 
             chrono.forEach((msg, i) => {
                 if (inBurst(msg)) last = i;
             });
-            kept = chrono.filter((msg, i) => !inBurst(msg) && !(last >= 0 && i > last && msg.role === 'user'));
+            const nextTurn = last >= 0 ? chrono.findIndex((msg, i) => i > last && msg.role === 'user') : -1;
+            kept = (nextTurn >= 0 ? chrono.slice(0, nextTurn) : chrono).filter((msg) => !inBurst(msg));
         } else {
             let end = chrono.length;
             while (end > 0 && chrono[end - 1].role === 'user') end--;
@@ -347,27 +351,29 @@ async function processConversation(jobs: QueueJob[], supabase: SupabaseClient): 
         // outer catch and re-queue the job (that would resend a duplicate). If
         // this DB write itself fails, log and swallow it: the rows stay
         // 'processing' and are reclaimed only after the wide stale window — not
-        // resent now (supabase-js returns the error rather than throwing it).
+        // resent now, but then answered a second time (supabase-js returns the
+        // error rather than throwing it).
+        const completeFailed = `Failed to mark jobs completed after sending to ${phoneNumber}: reply already sent and not resent now, but the stale-job reclaim (~10 min) will answer this burst again`;
         try {
             const completeError = await markJobsCompleted(supabase, ids);
-            if (completeError) {
-                whatsappLogger.error(`Failed to mark jobs completed after sending to ${phoneNumber} (reply already sent — NOT resending)`, completeError);
-            }
+            if (completeError) whatsappLogger.error(completeFailed, completeError);
         } catch (completeErr) {
-            whatsappLogger.error(`Failed to mark jobs completed after sending to ${phoneNumber} (reply already sent — NOT resending)`, completeErr);
+            whatsappLogger.error(completeFailed, completeErr);
         }
 
-        // History writes are best-effort: log on failure, never resend.
+        // History writes are best-effort: log on failure (returned or
+        // thrown), never resend.
         try {
-            await supabase.from('whatsapp_chats').upsert({
+            const { error: chatErr } = await supabase.from('whatsapp_chats').upsert({
                 org_id: orgId,
                 phone_number: phoneNumber,
                 last_message: aiResponse.message,
                 last_message_at: nowIso(),
                 updated_at: nowIso()
             }, { onConflict: 'org_id,phone_number' });
+            if (chatErr) whatsappLogger.error(`Chat summary write failed after sending to ${phoneNumber} (NOT resending)`, chatErr);
 
-            await supabase.from('whatsapp_messages').insert({
+            const { error: replyErr } = await supabase.from('whatsapp_messages').insert({
                 org_id: orgId,
                 phone_number: phoneNumber,
                 role: 'assistant',
@@ -376,6 +382,7 @@ async function processConversation(jobs: QueueJob[], supabase: SupabaseClient): 
                 status: 'sent',
                 status_updated_at: nowIso(),
             });
+            if (replyErr) whatsappLogger.error(`Reply history write failed after sending to ${phoneNumber} (NOT resending)`, replyErr);
         } catch (histErr) {
             whatsappLogger.error(`History write failed after sending to ${phoneNumber} (NOT resending)`, histErr);
         }
