@@ -12,7 +12,9 @@ vi.mock('@/lib/settings/app-settings', () => ({
 
 import { GRAPH_API_VERSION, graphUrl } from '@/lib/whatsapp/graph';
 import {
+    describeWhatsAppError,
     downloadWhatsAppMedia,
+    makeWhatsAppApiError,
     sendWhatsAppMedia,
     sendWhatsAppMessage,
     uploadWhatsAppMedia,
@@ -64,7 +66,30 @@ describe('Graph API version', () => {
         expect(urls).toEqual([`${GRAPH}/pnid-palsu/messages`, `${GRAPH}/pnid-palsu/media`, `${GRAPH}/pnid-palsu/messages`]);
     });
 
-    it('a text send names its type and recipient_type, as Meta\'s v25.0 reference requires', async () => {
+    it('an AI reply (no reply context) names its type and recipient_type, as Meta\'s v25.0 reference requires', async () => {
+        await sendWhatsAppMessage('628000000000', 'halo');
+        expect(bodies[0]).toEqual({
+            messaging_product: 'whatsapp',
+            recipient_type: 'individual',
+            to: '628000000000',
+            type: 'text',
+            text: { body: 'halo' },
+        });
+    });
+
+    it('a send to a BSUID uses recipient (never to)', async () => {
+        await sendWhatsAppMessage('ID.palsu', 'halo');
+        expect(bodies[0]).toEqual({
+            messaging_product: 'whatsapp',
+            recipient_type: 'individual',
+            recipient: 'ID.palsu',
+            type: 'text',
+            text: { body: 'halo' },
+        });
+        expect(bodies[0]).not.toHaveProperty('to');
+    });
+
+    it('a manual reply with a quote keeps its context, type and recipient_type', async () => {
         await sendWhatsAppMessage('628000000000', 'halo', undefined, 'wamid.dikutip');
         expect(bodies[0]).toEqual({
             messaging_product: 'whatsapp',
@@ -91,5 +116,13 @@ describe('Graph API version', () => {
             `${GRAPH}/pnid-palsu/messages`,
         ]);
         expect(urls.some((u) => u.includes('v21.0'))).toBe(false);
+    });
+});
+
+describe('describeWhatsAppError', () => {
+    it("keeps Meta's detail for a rejected template parameter (132018, since v23.0)", () => {
+        const err = makeWhatsAppApiError({ error: { code: 132018, error_data: { details: 'Param text cannot have new-line/tab characters' } } }, 400);
+        expect(describeWhatsAppError(err)).toContain('Param text cannot have new-line/tab characters');
+        expect(describeWhatsAppError(err)).toContain('(Kode 132018)');
     });
 });

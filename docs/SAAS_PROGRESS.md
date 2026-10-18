@@ -90,7 +90,7 @@
 
 ## Fase 2 — WhatsApp & integrasi per tenant, model "dikelola tim" (perkiraan ulang 2026-10-17: ±2–3 bulan)
 
-Keputusan D6 (aplikasi Meta per klien) dan D8 (khusus Sailendra, sebagian dibuka nanti) diambil 2026-10-17. Desain teknis, urutan rilis, tugas dan hasil kritik adversarial: `docs/FASE2_DESIGN.md`; brief untuk pemilik: `docs/FASE2_BRIEF_D6_D8.md`. Versi Graph API v21.0 yang dipakai sekarang berhenti 21 Jan 2027.
+Keputusan D6 (aplikasi Meta per klien) dan D8 (khusus Sailendra, sebagian dibuka nanti) diambil 2026-10-17. Desain teknis, urutan rilis, tugas dan hasil kritik adversarial: `docs/FASE2_DESIGN.md`; brief untuk pemilik: `docs/FASE2_BRIEF_D6_D8.md`. Versi Graph API dinaikkan dari v21.0 (berhenti 21 Jan 2027) ke v25.0 di #56 (didukung sampai 28 Jul 2028).
 
 | # | Tugas | Temuan | Status | PR / Catatan |
 |---|---|---|---|---|
@@ -100,7 +100,7 @@ Keputusan D6 (aplikasi Meta per klien) dan D8 (khusus Sailendra, sebagian dibuka
 | 2.4 | Integrasi milik Sailendra (Portal, Zoom/email Sailendra) di balik flag per org | KEA-7 | ⬜ | D8: saklar fitur per org **wajib sebelum tenant ke-2** apa pun keputusannya; hari ini booking tenant lain akan membuat ruang Zoom Sailendra dan memberi tahu sales Sailendra (`lib/ai/tools.ts`). Netralkan identitas Sailendra/MJ di preset dan teks AI |
 | 2.5 | Template & Flow per WABA + handler status template | KUA-17 | ⬜ | Daftar template & Flow per WABA + handler status template; template Sailendra didaftarkan sebelum notifikasi/digest dipindah ke registry (urutan dari kritik) |
 | 2.6 | Zona waktu & aturan meeting per org | KUA-18 | ⬜ | S bila semua tenant pilot di WIB |
-| 2.7 | Versi Graph API terpusat & dinaikkan | KUA-16 | 🔄 | Satu tempat untuk versi Graph API, naik ke v25.0 (v21.0 berhenti 21 Jan 2027). PR 2026-10-18 (keputusan pemilik: naik sekarang): `lib/whatsapp/graph.ts` (`GRAPH_API_VERSION` = v25.0 + `graphUrl`) dipakai semua panggilan Cloud API, uji `graph-urls` mengunci semua URL; `type` dan `recipient_type` kini dikirim eksplisit (referensi Meta terbaru mewajibkannya); petunjuk kode 132018. Selesai setelah deploy + uji regresi pemilik. Sisa 2.7 (helper `graphFetch`, versi per kredensial) menyusul bersama 2.2b |
+| 2.7 | Versi Graph API terpusat & dinaikkan | KUA-16 | 🔄 | Satu tempat untuk versi Graph API, naik ke v25.0 (v21.0 berhenti 21 Jan 2027). PR 2026-10-18 (keputusan pemilik: naik sekarang): `lib/whatsapp/graph.ts` (`GRAPH_API_VERSION` = v25.0 + `graphUrl`) dipakai semua panggilan Cloud API, uji `graph-urls` mengunci semua URL; `type` dan `recipient_type` kini dikirim eksplisit (referensi Meta terbaru mewajibkannya); petunjuk kode 132018 (dengan detail Meta). Selesai setelah deploy + uji regresi pemilik; setelah regresi lulus pemilik menyetel versi API default aplikasi Sailendra di App Dashboard ke v25.0 (hanya berlaku untuk panggilan tanpa versi, yang tidak dibuat Sarathi; versi field webhook dibiarkan, diubah terpisah bila perlu). Sisa 2.7 (helper `graphFetch`, versi per kredensial) menyusul bersama 2.2b |
 | 2.8 | Pendaftaran Meta Tech Provider (paralel, non-kode) | — | ➡️ | Tidak dibutuhkan di model D6 (aplikasi per klien); dipindah ke 5.4 |
 | 2.9 | Runbook onboarding tenant + gladi (bagian gerbang tenant ke-2) | — | ⬜ | Setelah 2.1b/2.2c: langkah tim untuk tenant baru (aplikasi Meta di portofolio klien, URL webhook, rahasia lewat alat provisioning), lalu gladi dengan tenant uji |
 | 2.10 | Dokumen dan komentar yang sesuai kode | — | ⬜ | Bagian kecil dari tiap PR Fase 2 |

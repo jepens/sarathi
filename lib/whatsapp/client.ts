@@ -68,8 +68,9 @@ export async function sendWhatsAppMessage(
     // WhatsApp then shows it quoted (RFC: context.message_id).
     contextMessageId?: string | null,
 ): Promise<SendWhatsAppResult> {
-    // Per-tenant credentials when provided (webhook/queue), else fall back to
-    // the env credentials (manual/legacy callers, single-tenant Sailendra).
+    // creds: the webhook and the queue pass the default org's env credentials
+    // (one Meta app until Fase 2 task 2.2b threads each org's own); manual
+    // callers omit them and fall back to env directly.
     const phoneNumberId = creds?.phoneNumberId || (await getWhatsAppPhoneNumberId());
     const accessToken = creds?.accessToken || (await getWhatsAppAccessToken());
 
@@ -340,7 +341,7 @@ export function describeWhatsAppError(err: WhatsAppApiError): string {
             return `Parameter tidak valid: ${err.details ?? 'tidak ada detail'}. (Kode 100)`;
         // From Graph v23.0, template parameter problems at send time.
         case 132018:
-            return 'Parameter template ditolak Meta: jumlah atau isi variabel, atau tombol Flow, tidak cocok dengan template yang disetujui. (Kode 132018)';
+            return `Parameter template ditolak Meta: ${err.details ?? 'tidak ada detail'}. Periksa isi variabel (tanpa baris baru atau tab, maksimal 4 spasi berturut-turut). (Kode 132018)`;
         default:
             return err.message;
     }

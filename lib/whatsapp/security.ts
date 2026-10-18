@@ -28,9 +28,10 @@ export async function verifyWhatsAppSignature(
         return false;
     }
 
-    // `undefined` → fall back to the env app secret (legacy/single-tenant
-    // callers). An explicit `null` means "this org has no app_secret configured"
-    // → we can't verify, so reject. A string is the resolved per-tenant secret.
+    // `undefined` → read the env app secret. An explicit `null` means the caller
+    // resolved no secret (today: WHATSAPP_APP_SECRET unset) → we can't verify,
+    // so reject. A string is the secret the caller resolved (today the env
+    // secret; per-app secrets come with Fase 2 task 2.2).
     const appSecret =
         appSecretOverride === undefined
             ? await getWhatsAppAppSecret()
