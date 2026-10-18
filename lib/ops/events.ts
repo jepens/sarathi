@@ -12,7 +12,11 @@ export type OpsEventKind =
     | 'webhook_signature_invalid'
     | 'webhook_error'
     | 'queue_job_failed'
-    | 'whatsapp_token_invalid';
+    | 'whatsapp_token_invalid'
+    | 'quota_inbound_exceeded'
+    | 'quota_ai_daily_warning'
+    | 'quota_ai_daily_exceeded'
+    | 'quota_check_failed';
 
 const DETAIL_MAX = 500;
 

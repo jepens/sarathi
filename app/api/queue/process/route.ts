@@ -79,6 +79,7 @@ export async function GET(request: Request) {
                 await supabase.rpc('cleanup_old_queue_entries');
                 await supabase.rpc('cleanup_old_rate_limits');
                 await supabase.rpc('cleanup_old_ops_events');
+                await supabase.rpc('cleanup_old_usage_counters');
                 whatsappLogger.info('Hourly queue/rate-limit cleanup done');
             } catch (cleanupError) {
                 whatsappLogger.error('Queue cleanup failed', cleanupError);

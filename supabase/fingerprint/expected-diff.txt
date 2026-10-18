@@ -19,3 +19,51 @@
 # CONTRACT (tracker 1.11, KEA-4): applied only after this PR's build is live and every dashboard tab is reloaded, so the block stays pending through the merge; delete it when production.txt is refreshed after 0067.
 < bucket chat-media public=t size_limit=- mime=-
 > bucket chat-media public=f size_limit=52428800 mime=image/jpeg,image/png,image/webp,audio/aac,audio/amr,audio/mpeg,audio/mp4,audio/ogg,video/mp4,video/3gpp,application/pdf,text/plain,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/octet-stream
+
+# pending production apply: 0071_org_quotas
+# (tracker 3.4 minimal: per-org quotas on the WhatsApp AI path; service role
+# only). Expand: nothing uses the objects before its PR is deployed; applied
+# after 0070 and the owner's review. Delete these lines when production.txt
+# is refreshed after applying 0071.
+> col public.message_queue.ai_quota_counted type=boolean notnull=t default=false identity=- generated=-
+> col public.org_quota_overrides.ai_replies_per_day type=integer notnull=f default=- identity=- generated=-
+> col public.org_quota_overrides.inbound_per_minute type=integer notnull=f default=- identity=- generated=-
+> col public.org_quota_overrides.note type=text notnull=t default=''::text identity=- generated=-
+> col public.org_quota_overrides.org_id type=uuid notnull=t default=- identity=- generated=-
+> col public.org_quota_overrides.updated_at type=timestamp with time zone notnull=t default=now() identity=- generated=-
+> col public.org_usage_counters.metric type=text notnull=t default=- identity=- generated=-
+> col public.org_usage_counters.org_id type=uuid notnull=t default=- identity=- generated=-
+> col public.org_usage_counters.refused type=integer notnull=t default=0 identity=- generated=-
+> col public.org_usage_counters.refused_streak type=integer notnull=t default=0 identity=- generated=-
+> col public.org_usage_counters.used type=integer notnull=t default=0 identity=- generated=-
+> col public.org_usage_counters.window_start type=timestamp with time zone notnull=t default=- identity=- generated=-
+> con public.org_quota_overrides org_quota_overrides_ai_check CHECK ((ai_replies_per_day > 0))
+> con public.org_quota_overrides org_quota_overrides_inbound_check CHECK ((inbound_per_minute > 0))
+> con public.org_quota_overrides org_quota_overrides_note_check CHECK ((char_length(note) <= 500))
+> con public.org_quota_overrides org_quota_overrides_org_id_fkey FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
+> con public.org_quota_overrides org_quota_overrides_pkey PRIMARY KEY (org_id)
+> con public.org_usage_counters org_usage_counters_metric_check CHECK ((metric = ANY (ARRAY['inbound_minute'::text, 'ai_reply_day'::text])))
+> con public.org_usage_counters org_usage_counters_org_id_fkey FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
+> con public.org_usage_counters org_usage_counters_pkey PRIMARY KEY (org_id, metric, window_start)
+> fn public.cleanup_old_usage_counters() returns=void lang=sql volatile=v secdef=f config=search_path="" owner=postgres body_md5=1546bab106684618c6bf92b104ab596c
+> fn public.consume_org_quota(p_org uuid, p_metric text, p_default_limit integer) returns=TABLE(allowed boolean, used integer, refused integer, quota integer, first_refusal boolean) lang=plpgsql volatile=v secdef=f config=search_path="" owner=postgres body_md5=3b2bf688bb18bae55d96c106d405433a
+> fnexec public.cleanup_old_usage_counters() anon=f
+> fnexec public.cleanup_old_usage_counters() authenticated=f
+> fnexec public.cleanup_old_usage_counters() service_role=t
+> fnexec public.consume_org_quota(p_org uuid, p_metric text, p_default_limit integer) anon=f
+> fnexec public.consume_org_quota(p_org uuid, p_metric text, p_default_limit integer) authenticated=f
+> fnexec public.consume_org_quota(p_org uuid, p_metric text, p_default_limit integer) service_role=t
+> idx public.org_quota_overrides CREATE UNIQUE INDEX org_quota_overrides_pkey ON public.org_quota_overrides USING btree (org_id)
+> idx public.org_usage_counters CREATE INDEX org_usage_counters_metric_window_idx ON public.org_usage_counters USING btree (metric, window_start)
+> idx public.org_usage_counters CREATE UNIQUE INDEX org_usage_counters_pkey ON public.org_usage_counters USING btree (org_id, metric, window_start)
+> pol public.org_quota_overrides "service_role only" PERMISSIVE cmd=ALL roles=anon,authenticated using=false check=false
+> pol public.org_usage_counters "service_role only" PERMISSIVE cmd=ALL roles=anon,authenticated using=false check=false
+> rel public.org_quota_overrides kind=r owner=postgres rls=t force_rls=f
+> rel public.org_usage_counters kind=r owner=postgres rls=t force_rls=f
+> relpriv public.org_quota_overrides anon=
+> relpriv public.org_quota_overrides authenticated=
+> relpriv public.org_quota_overrides service_role=rawdDxt
+> relpriv public.org_usage_counters anon=
+> relpriv public.org_usage_counters authenticated=
+> relpriv public.org_usage_counters service_role=rawdDxt
+> trg public.org_quota_overrides CREATE TRIGGER trg_org_quota_overrides_updated_at BEFORE UPDATE ON public.org_quota_overrides FOR EACH ROW EXECUTE FUNCTION set_updated_at()

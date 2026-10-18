@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { verifyWhatsAppSignature } from '@/lib/whatsapp/security';
 import { checkRateLimit } from '@/lib/whatsapp/rate-limiter-db';
-import { enqueueMessage, processQueue, getDebounceSeconds } from '@/lib/whatsapp/queue-db';
+import { enqueueMessage, inboundQueueState, processQueue, getDebounceSeconds } from '@/lib/whatsapp/queue-db';
 import { sendWhatsAppMessage, downloadWhatsAppMedia } from '@/lib/whatsapp/client';
 import { resolveSendTarget } from '@/lib/whatsapp/recipient';
 import { resolveWhatsAppContext } from '@/lib/whatsapp/credentials';
@@ -15,6 +15,7 @@ import { CHAT_MEDIA_BUCKET, CHAT_MEDIA_MAX_BYTES, safePhoneSegment, storageConte
 
 import { checkVerifyToken } from '@/lib/settings/app-settings';
 import { describeErrorForOps, recordOpsEvent } from '@/lib/ops/events';
+import { consumeOrgQuota, firstInboundRefusalNote, inboundQuotaNotice } from '@/lib/quota/org-quota';
 
 // Resolve the canonical contact key for the whatsapp_chats PK.
 //
@@ -672,7 +673,33 @@ export async function POST(request: Request) {
                         .maybeSingle<{ ai_enabled: boolean | null; contact_name: string | null }>();
                     const aiEnabled = aiRow?.ai_enabled !== false;
 
+                    // Org quota (tracker 3.4, migration 0071): at most N new AI
+                    // bursts a minute per org. A fragment that joins this chat's
+                    // burst still waiting in the queue adds no AI call and is
+                    // queued uncounted; a redelivery (already queued or stored)
+                    // is neither counted nor queued again. Over the limit the
+                    // message is still stored below, with a note for the
+                    // operators, but gets no AI reply; the team is alerted on the
+                    // first refusal. Check-then-insert, not locked per chat: two
+                    // first fragments arriving at once are both counted, and a
+                    // fragment arriving just as its burst is claimed starts an
+                    // uncounted burst (the daily quota still counts it).
+                    // (inboundQueueState must run before the message is stored
+                    // below: it treats a stored wamid as a redelivery.)
+                    let refusedByQuota: number | null = null;
+                    let redelivery = false;
                     if (aiEnabled) {
+                        const queued = await inboundQueueState(supabase, waCtx.orgId, contactKey, inboundWamid);
+                        redelivery = queued.duplicate;
+                        if (!queued.duplicate && !queued.joinsBurst) {
+                            const burst = await consumeOrgQuota(supabase, waCtx.orgId, 'inbound_minute');
+                            if (!burst.allowed) refusedByQuota = burst.limit;
+                        }
+                    }
+
+                    if (aiEnabled && redelivery) {
+                        whatsappLogger.info('Redelivered inbound message — already queued or stored, not queued again');
+                    } else if (aiEnabled && refusedByQuota === null) {
                         // Add to database queue (service role client bypasses RLS).
                         // Returns null when this is a duplicate webhook delivery
                         // (deduped on wa_message_id) — then there's nothing to do.
@@ -694,6 +721,8 @@ export async function POST(request: Request) {
                                 processQueue(supabase).catch(err => whatsappLogger.error('Delayed queue drain failed', err));
                             }, delayMs);
                         }
+                    } else if (aiEnabled) {
+                        whatsappLogger.warn(`Org inbound quota reached (${refusedByQuota}/min): message stored without an AI reply`);
                     } else {
                         whatsappLogger.info(`AI disabled for ${contactKey} — manual mode, skipping auto-reply`);
                     }
@@ -752,6 +781,12 @@ export async function POST(request: Request) {
                                 }
                             } else {
                                 whatsappLogger.info(`User message inserted for ${contactKey}`);
+
+                                // The minute quota kept this message from the AI:
+                                // tell the operators, once per chat and minute.
+                                if (refusedByQuota !== null && firstInboundRefusalNote(`${waCtx.orgId}:${contactKey}`)) {
+                                    await logSystemMessage(waCtx.orgId, contactKey, inboundQuotaNotice(refusedByQuota));
+                                }
 
                                 // Per-chat unread badge: atomic increment (only on
                                 // a genuinely-new, non-duplicate insert). Best-effort

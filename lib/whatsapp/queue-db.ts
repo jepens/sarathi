@@ -6,6 +6,7 @@ import { generateRAGResponse } from '@/lib/ai/rag';
 import { whatsappLogger } from '@/lib/utils/logger';
 import { logSystemMessage } from '@/lib/whatsapp/history';
 import { describeErrorForOps, isWhatsAppTokenError, recordOpsEvent } from '@/lib/ops/events';
+import { consumeOrgQuota } from '@/lib/quota/org-quota';
 
 import { SupabaseClient } from '@supabase/supabase-js';
 
@@ -24,6 +25,8 @@ export interface QueueJob {
     max_retries: number;
     error_message?: string;
     wa_message_id?: string | null;
+    /** Counted against the org's daily AI quota already (tracker 3.4, 0071). */
+    ai_quota_counted?: boolean;
     created_at: string;
 }
 
@@ -43,6 +46,11 @@ const nowIso = (): string => new Date().toISOString();
 // Operator-facing note logged when a handoff switches the chat to manual mode.
 export const HANDOFF_MANUAL_MODE_NOTICE =
     'Handoff ke tim: balasan otomatis AI dimatikan untuk chat ini. Balas customer secara manual, atau nyalakan lagi lewat switch "AI aktif".';
+
+// Operator-facing note logged when the org's daily AI quota stops a reply.
+export function aiQuotaReachedNotice(limit: number): string {
+    return `Batas ${limit} balasan AI per hari untuk organisasi ini sudah tercapai, jadi pesan ini tidak dibalas AI. Balas customer secara manual; AI membalas lagi mulai pukul 00.00 WIB.`;
+}
 
 /**
  * Add an inbound message to the queue.
@@ -91,6 +99,37 @@ export async function enqueueMessage(
         whatsappLogger.error('Failed to enqueue message', error);
         throw error;
     }
+}
+
+/**
+ * Before the org's inbound quota counts a message (tracker 3.4): is it a
+ * redelivery (its wamid is already queued, or already stored, e.g. a message
+ * the quota refused or one sent in manual mode), or does it join a burst of
+ * this chat still waiting in the queue? A redelivery is neither counted nor
+ * queued again; a joining fragment adds no AI call, so it is queued without
+ * being counted. A read error answers false (the message is counted).
+ *
+ * Must run BEFORE this delivery stores its own message: the stored-message
+ * check would otherwise take every first delivery for a redelivery.
+ */
+export async function inboundQueueState(
+    client: SupabaseClient,
+    orgId: string,
+    phoneNumber: string,
+    waMessageId: string | null,
+): Promise<{ duplicate: boolean; joinsBurst: boolean }> {
+    const none = Promise.resolve({ data: [] as unknown[], error: null });
+    const [queued, stored, pending] = await Promise.all([
+        waMessageId
+            ? client.from('message_queue').select('id').eq('org_id', orgId).eq('wa_message_id', waMessageId).limit(1)
+            : none,
+        waMessageId
+            ? client.from('whatsapp_messages').select('id').eq('org_id', orgId).eq('wa_message_id', waMessageId).eq('role', 'user').limit(1)
+            : none,
+        client.from('message_queue').select('id').eq('org_id', orgId).eq('phone_number', phoneNumber).eq('status', 'pending').limit(1),
+    ]);
+    const hit = (r: { data: unknown[] | null; error: unknown }) => !r.error && (r.data?.length ?? 0) > 0;
+    return { duplicate: hit(queued) || hit(stored), joinsBurst: hit(pending) };
 }
 
 /**
@@ -160,12 +199,16 @@ export async function processQueue(client?: SupabaseClient): Promise<void> {
     }
 }
 
-/** Mark a set of queue jobs as completed in one statement. */
-async function markJobsCompleted(supabase: SupabaseClient, ids: string[]): Promise<void> {
-    await supabase
+/**
+ * Mark a set of queue jobs as completed in one statement. `note` (kept in
+ * error_message) says why jobs were closed without a reply.
+ */
+async function markJobsCompleted(supabase: SupabaseClient, ids: string[], note?: string): Promise<unknown> {
+    const { error } = await supabase
         .from('message_queue')
-        .update({ status: 'completed', processed_at: nowIso(), updated_at: nowIso() })
+        .update({ status: 'completed', processed_at: nowIso(), updated_at: nowIso(), ...(note ? { error_message: note } : {}) })
         .in('id', ids);
+    return error ?? null;
 }
 
 /**
@@ -196,9 +239,42 @@ async function processConversation(jobs: QueueJob[], supabase: SupabaseClient): 
             .eq('phone_number', phoneNumber)
             .maybeSingle();
         if (chatRow?.ai_enabled === false) {
-            await markJobsCompleted(supabase, ids);
+            const closeError = await markJobsCompleted(supabase, ids);
+            if (closeError) whatsappLogger.error(`Closing the jobs of ${phoneNumber} in manual mode failed`, closeError);
             whatsappLogger.info(`Conversation ${phoneNumber} skipped — AI disabled (manual mode)`);
             return;
+        }
+
+        // Org quota (tracker 3.4, migration 0071): at most N AI replies a day
+        // per org, 00:00 to 00:00 WIB. A burst is counted when it holds a job
+        // not counted before (message_queue.ai_quota_counted): its first
+        // attempt, a message that joined it after a failure, or a burst a
+        // crashed worker claimed but never counted. A plain retry of a counted
+        // burst is not counted again, so an outage does not use up the day's
+        // quota (one unit can then cost up to max_retries model calls). Over the
+        // limit the burst gets no AI reply (hard stop, owner decision
+        // 2026-10-18): the jobs are closed with the reason, the chat shows a note
+        // for the operators, and the team is alerted on the first refusal after
+        // a call that was let through (once a day, and again when a raised limit
+        // is reached).
+        const uncounted = jobs.filter((j) => !j.ai_quota_counted);
+        const quota = uncounted.length > 0 ? await consumeOrgQuota(supabase, orgId, 'ai_reply_day') : null;
+        if (quota && !quota.allowed) {
+            const closeError = await markJobsCompleted(supabase, ids, 'quota: ai_reply_day');
+            if (closeError) whatsappLogger.error(`Closing the jobs of ${phoneNumber} over the daily AI quota failed`, closeError);
+            await logSystemMessage(orgId, phoneNumber, aiQuotaReachedNotice(quota.limit));
+            whatsappLogger.warn(`Conversation ${phoneNumber} not answered — daily AI quota of the org reached (${quota.limit})`);
+            return;
+        }
+        if (quota) {
+            // Counted: a retry, a reclaim or a later burst with these jobs does
+            // not count them again. Best-effort: a failure only means they may
+            // be counted once more.
+            const { error: countedError } = await supabase
+                .from('message_queue')
+                .update({ ai_quota_counted: true })
+                .in('id', uncounted.map((j) => j.id));
+            if (countedError) whatsappLogger.error(`Marking the jobs of ${phoneNumber} as counted failed`, countedError);
         }
 
         // Coalesce the burst into one user turn, preserving order.
@@ -209,7 +285,7 @@ async function processConversation(jobs: QueueJob[], supabase: SupabaseClient): 
         // fetch here gives long WhatsApp threads real memory.
         const { data: historyData } = await supabase
             .from('whatsapp_messages')
-            .select('role, content')
+            .select('role, content, wa_message_id')
             .eq('org_id', orgId)
             .eq('phone_number', phoneNumber)
             .order('created_at', { ascending: false })
@@ -221,17 +297,38 @@ async function processConversation(jobs: QueueJob[], supabase: SupabaseClient): 
         // they must never enter the model context, and if left in they would also
         // block the burst-trim below (a trailing 'system' row stops the loop, so
         // the burst would be fed to the model twice).
-        const chrono = (historyData || [])
+        // Empty rows (a photo or voice note without a caption) carry nothing for
+        // the model and are skipped.
+        const chrono = ((historyData || []) as { role: string; content: string; wa_message_id: string | null }[])
             .reverse()
-            .filter((msg) => msg.role === 'user' || msg.role === 'assistant')
-            .map((msg) => ({ role: msg.role as 'user' | 'assistant', content: msg.content }));
-        // The inbound burst is already stored in whatsapp_messages, so drop the
-        // trailing run of UNANSWERED user messages — otherwise they'd be fed to
-        // the model twice (once in history, once as combinedMessage). That
-        // trailing run is exactly this burst, since the bot hasn't replied yet.
-        let end = chrono.length;
-        while (end > 0 && chrono[end - 1].role === 'user') end--;
-        const history = chrono.slice(0, end);
+            .filter((msg) => (msg.role === 'user' || msg.role === 'assistant') && !!msg.content?.trim());
+        // The inbound burst is already stored in whatsapp_messages and is fed
+        // to the model as combinedMessage, so it must not be in the history
+        // too. When every job knows its wamid, drop exactly those rows and any
+        // customer message newer than them (a later turn: the next burst): an
+        // earlier unanswered message (one the org's minute quota kept from the
+        // AI, tracker 3.4, or one sent in manual mode) stays in as context, and
+        // so does a reply stored after the burst (an operator answering from the
+        // dashboard meanwhile, or the AI's reply to the previous burst), so the
+        // AI does not contradict or repeat it. Otherwise drop the trailing run
+        // of UNANSWERED user messages, which is this burst, since the bot
+        // hasn't replied yet.
+        const burstWamids = new Set(jobs.map((j) => j.wa_message_id).filter((w): w is string => !!w));
+        const inBurst = (msg: { role: string; wa_message_id: string | null }) =>
+            msg.role === 'user' && !!msg.wa_message_id && burstWamids.has(msg.wa_message_id);
+        let kept = chrono;
+        if (burstWamids.size === jobs.length) {
+            let last = -1;
+            chrono.forEach((msg, i) => {
+                if (inBurst(msg)) last = i;
+            });
+            kept = chrono.filter((msg, i) => !inBurst(msg) && !(last >= 0 && i > last && msg.role === 'user'));
+        } else {
+            let end = chrono.length;
+            while (end > 0 && chrono[end - 1].role === 'user') end--;
+            kept = chrono.slice(0, end);
+        }
+        const history = kept.map((msg) => ({ role: msg.role as 'user' | 'assistant', content: msg.content }));
 
         // Generate ONE AI response for the whole burst, scoped to the org.
         const aiResponse = await generateRAGResponse(combinedMessage, history, phoneNumber, { orgId });
@@ -248,10 +345,14 @@ async function processConversation(jobs: QueueJob[], supabase: SupabaseClient): 
         // history writes — and guard it in its OWN try/catch. The reply is
         // already delivered, so NOTHING from here on may fall through to the
         // outer catch and re-queue the job (that would resend a duplicate). If
-        // this DB write itself fails, swallow it: the rows stay 'processing' and
-        // are reclaimed only after the wide stale window — not resent now.
+        // this DB write itself fails, log and swallow it: the rows stay
+        // 'processing' and are reclaimed only after the wide stale window — not
+        // resent now (supabase-js returns the error rather than throwing it).
         try {
-            await markJobsCompleted(supabase, ids);
+            const completeError = await markJobsCompleted(supabase, ids);
+            if (completeError) {
+                whatsappLogger.error(`Failed to mark jobs completed after sending to ${phoneNumber} (reply already sent — NOT resending)`, completeError);
+            }
         } catch (completeErr) {
             whatsappLogger.error(`Failed to mark jobs completed after sending to ${phoneNumber} (reply already sent — NOT resending)`, completeErr);
         }
@@ -310,8 +411,10 @@ async function processConversation(jobs: QueueJob[], supabase: SupabaseClient): 
             await recordOpsEvent(supabase, 'whatsapp_token_invalid', { orgId, detail: 'saat membalas dari antrean' });
         }
         // The send failed (mark-completed runs only after a successful send), so
-        // retry the whole group. Exhaust only when every job is out of budget.
-        const exhausted = jobs.every((j) => j.retries + 1 >= j.max_retries);
+        // retry the whole group, until its oldest job is out of budget: messages
+        // that keep joining a failing burst must not keep it retrying (and
+        // unreported) forever.
+        const exhausted = jobs.some((j) => j.retries + 1 >= j.max_retries);
 
         if (exhausted) {
             await supabase

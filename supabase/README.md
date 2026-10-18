@@ -463,12 +463,13 @@ line to `production.txt`.
   (`<` only in production, `>` only in the replay), each with a reason:
   permanent ones, or *pending* lines of a migration not yet applied to
   production (see above). Entries that no longer differ fail as stale. It
-  currently holds one pending block: the contract 0067 (the 2 `bucket
-  chat-media` lines; applied after the deploy of its PR). The block is
-  deleted when production.txt is refreshed after its apply. Apart from it
-  the replay matches production exactly (re-checked 2026-10-18 after
-  applying 0070, against a fresh read-only production query: 659 lines,
-  md5 `9725a80c56c29dcf5e0dac53619c26a3`).
+  currently holds two pending blocks: the contract 0067 (the 2 `bucket
+  chat-media` lines; applied after the deploy of its PR) and the expand 0071
+  (42 lines; applied after the owner's review). Each block is deleted when
+  production.txt is refreshed after its apply. Apart from these the replay
+  matches production exactly (re-checked 2026-10-18 after applying 0070,
+  against a fresh read-only production query: 659 lines, md5
+  `9725a80c56c29dcf5e0dac53619c26a3`).
 - Not fingerprinted: sequence privileges, column-level privileges, MAINTAIN,
   foreign-table privileges and default privileges (`pg_default_acl`); the
   `relpriv` lines cover only `arwdDxt` on tables and views. Whenever
