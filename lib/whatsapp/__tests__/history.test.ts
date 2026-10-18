@@ -42,6 +42,15 @@ describe('logSystemMessage', () => {
         expect(h.fake.calls[0].upsertOpts).toEqual({ onConflict: 'org_id,phone_number', ignoreDuplicates: true });
     });
 
+    it('logs a chat row the database refused, and still tries the note', async () => {
+        h.fake = makeFakeSupabase({
+            resolve: (c) => (c.table === 'whatsapp_chats' ? { data: null, error: { code: '57014' } } : { data: null, error: null }),
+        });
+        await logSystemMessage(ORG, PHONE, 'Catatan uji');
+        expect(h.error).toHaveBeenCalledWith('System message: the chat row could not be written', { code: '57014' });
+        expect(h.fake.calls.map((c) => c.table)).toEqual(['whatsapp_chats', 'whatsapp_messages']);
+    });
+
     it('logs a note the database refused', async () => {
         h.fake = makeFakeSupabase({
             resolve: (c) => (c.table === 'whatsapp_messages' ? { data: null, error: { code: '23503' } } : { data: null, error: null }),

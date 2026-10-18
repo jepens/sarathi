@@ -353,7 +353,7 @@ async function processConversation(jobs: QueueJob[], supabase: SupabaseClient): 
         // 'processing' and are reclaimed only after the wide stale window — not
         // resent now, but then answered a second time (supabase-js returns the
         // error rather than throwing it).
-        const completeFailed = `Failed to mark jobs completed after sending to ${phoneNumber}: reply already sent and not resent now, but the stale-job reclaim (~10 min) will answer this burst again`;
+        const completeFailed = `Failed to mark jobs completed after sending to ${phoneNumber}: reply already sent and not resent now, but the stale-job reclaim (~10 min) answers this burst again, or fails it if this was its last attempt`;
         try {
             const completeError = await markJobsCompleted(supabase, ids);
             if (completeError) whatsappLogger.error(completeFailed, completeError);
@@ -439,7 +439,14 @@ async function processConversation(jobs: QueueJob[], supabase: SupabaseClient): 
                 orgId,
                 detail: `${jobs.length} pesan, ${jobs[0].max_retries} percobaan: ${describeErrorForOps(error)}`,
             });
-            await logSystemMessage(orgId, phoneNumber, `Error: gagal memproses pesan setelah ${jobs[0].max_retries} percobaan. Penyebab: ${errorMessage}`);
+            // The customer's message still needs a human reply (only an apology
+            // goes out): the note must not mark the chat answered.
+            await logSystemMessage(
+                orgId,
+                phoneNumber,
+                `Error: gagal memproses pesan setelah ${jobs[0].max_retries} percobaan. Penyebab: ${errorMessage}`,
+                { touchChat: false },
+            );
 
             // Send a single fallback message for the whole conversation.
             try {

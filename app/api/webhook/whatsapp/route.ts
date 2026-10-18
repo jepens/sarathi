@@ -566,7 +566,9 @@ export async function POST(request: Request) {
                         await supabase
                             .from('whatsapp_chats')
                             .upsert(patch, { onConflict: 'org_id,phone_number' });
-                        await logSystemMessage(waCtx.orgId, contactKey, `Customer shared contact info — phone tersimpan: ${recovered}`);
+                        // Not a reply to the customer: an earlier unanswered
+                        // message keeps the chat "Belum dibalas".
+                        await logSystemMessage(waCtx.orgId, contactKey, `Customer shared contact info — phone tersimpan: ${recovered}`, { touchChat: false });
                         whatsappLogger.info(`Contact share captured for ${contactKey}: ${recovered}`);
                     } else {
                         whatsappLogger.warn(`Contact share from ${contactKey} had no usable phone`);
@@ -656,7 +658,9 @@ export async function POST(request: Request) {
                         whatsappLogger.warn(`Rate limit exceeded for ${contactKey}`);
                         const warnTarget = await resolveSendTarget(supabase, waCtx.orgId, contactKey);
                         await sendWhatsAppMessage(warnTarget, 'Mohon tunggu sebentar sebelum mengirim pesan lagi.', { phoneNumberId: waCtx.phoneNumberId, accessToken: waCtx.accessToken });
-                        await logSystemMessage(waCtx.orgId, contactKey, 'Rate limit exceeded. User warned.');
+                        // The dropped message was not answered: keep the chat
+                        // "Belum dibalas" for the operators.
+                        await logSystemMessage(waCtx.orgId, contactKey, 'Rate limit exceeded. User warned.', { touchChat: false });
                         return new NextResponse('EVENT_RECEIVED', { status: 200 });
                     }
 

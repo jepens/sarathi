@@ -177,6 +177,23 @@ describe('webhook text message: the org inbound quota', () => {
         expect(h.queueState).not.toHaveBeenCalled();
         expect(h.consume).not.toHaveBeenCalled();
         expect(h.enqueue).not.toHaveBeenCalled();
+        // The note keeps the chat "Belum dibalas" (the dropped message got no answer).
+        expect(h.logSystem).toHaveBeenCalledWith(expect.anything(), '620000000006', 'Rate limit exceeded. User warned.', { touchChat: false });
+    });
+
+    it('a shared contact card is noted without marking the chat answered', async () => {
+        const body = {
+            object: 'whatsapp_business_account',
+            entry: [{ changes: [{ field: 'messages', value: {
+                metadata: { phone_number_id: 'phone-number-id' },
+                contacts: [{ wa_id: '620000000007' }],
+                messages: [{ from: '620000000007', id: 'wamid.fake-card-1', type: 'contacts',
+                    contacts: [{ name: { formatted_name: 'Pelanggan Palsu' }, phones: [{ wa_id: '620000000007' }] }] }],
+            } }] }],
+        };
+        const res = await POST(new Request('http://localhost/api/webhook/whatsapp', { method: 'POST', body: JSON.stringify(body) }));
+        expect(res.status).toBe(200);
+        expect(h.logSystem).toHaveBeenCalledWith(expect.anything(), '620000000007', expect.stringContaining('Customer shared contact info'), { touchChat: false });
     });
 
     it('a chat in manual mode is not counted', async () => {

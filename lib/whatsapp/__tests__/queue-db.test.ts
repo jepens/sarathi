@@ -66,6 +66,8 @@ interface Scenario {
     failHistoryWrite?: boolean;
     /** The reply's history insert answers with an error. */
     historyWriteError?: boolean;
+    /** The chat summary upsert after the reply answers with an error. */
+    chatWriteError?: boolean;
 }
 
 // Build a fake client whose resolver answers each table/op the pipeline touches.
@@ -93,6 +95,9 @@ function clientFor(s: Scenario) {
             if (s.failHistoryWrite) throw new Error('DB down: history insert failed');
             if (s.historyWriteError) return { data: null, error: { message: 'statement timeout', code: '57014' } };
             return { data: null, error: null };
+        }
+        if (table === 'whatsapp_chats' && op === 'upsert' && s.chatWriteError) {
+            return { data: null, error: { message: 'statement timeout', code: '57014' } };
         }
         // chat upsert, queue update (pending/failed), anything else
         return { data: null, error: null };
@@ -347,11 +352,22 @@ describe('processQueue — V3 resend safety', () => {
         await processQueue(fake.client);
         expect(sendMock).toHaveBeenCalledTimes(1);
         expect(vi.mocked(whatsappLogger.error)).toHaveBeenCalledWith(
-            expect.stringContaining('will answer this burst again'),
+            expect.stringContaining('answers this burst again, or fails it if this was its last attempt'),
             expect.objectContaining({ code: '57014' }),
         );
         expect(queueUpdates(fake.calls, 'pending')).toHaveLength(0);
         expect(queueUpdates(fake.calls, 'failed')).toHaveLength(0);
+    });
+
+    it('logs a chat summary write the database refused after the send, without resending', async () => {
+        const fake = clientFor({ jobs: [job('j1', 'm1', '2026-06-20T10:00:00.000Z')], chatWriteError: true });
+        await processQueue(fake.client);
+        expect(sendMock).toHaveBeenCalledTimes(1);
+        expect(vi.mocked(whatsappLogger.error)).toHaveBeenCalledWith(
+            expect.stringContaining('Chat summary write failed'),
+            expect.objectContaining({ code: '57014' }),
+        );
+        expect(queueUpdates(fake.calls, 'pending')).toHaveLength(0);
     });
 
     it('logs a reply history write the database refused, without resending', async () => {
@@ -403,6 +419,8 @@ describe('processQueue — retry & exhaustion on send failure', () => {
         await processQueue(fake.client);
         expect(queueUpdates(fake.calls, 'failed')).toHaveLength(1);
         expect(logSystemMock).toHaveBeenCalledTimes(1);
+        // The customer still needs a human: the note keeps the chat unanswered.
+        expect(logSystemMock).toHaveBeenCalledWith(ORG, PHONE, expect.stringContaining('gagal memproses pesan'), { touchChat: false });
         // failed attempt + one fallback message
         expect(sendMock).toHaveBeenCalledTimes(2);
         expect(sendMock.mock.calls[1][1]).toMatch(/Maaf, terjadi kesalahan/);
