@@ -5,6 +5,7 @@ import { getWhatsAppSendCreds } from './credentials';
 import { generateRAGResponse } from '@/lib/ai/rag';
 import { whatsappLogger } from '@/lib/utils/logger';
 import { logSystemMessage } from '@/lib/whatsapp/history';
+import { describeErrorForOps, isWhatsAppTokenError, recordOpsEvent } from '@/lib/ops/events';
 
 import { SupabaseClient } from '@supabase/supabase-js';
 
@@ -304,6 +305,10 @@ async function processConversation(jobs: QueueJob[], supabase: SupabaseClient): 
         whatsappLogger.error(`Conversation ${phoneNumber} failed`, error);
 
         const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+        // Team alert (3.5): an invalid or expired token stops every reply.
+        if (isWhatsAppTokenError(error)) {
+            await recordOpsEvent(supabase, 'whatsapp_token_invalid', { orgId, detail: 'saat membalas dari antrean' });
+        }
         // The send failed (mark-completed runs only after a successful send), so
         // retry the whole group. Exhaust only when every job is out of budget.
         const exhausted = jobs.every((j) => j.retries + 1 >= j.max_retries);
@@ -320,6 +325,10 @@ async function processConversation(jobs: QueueJob[], supabase: SupabaseClient): 
                 .in('id', ids);
 
             whatsappLogger.error(`Conversation ${phoneNumber} permanently failed after ${jobs[0].max_retries} retries`);
+            await recordOpsEvent(supabase, 'queue_job_failed', {
+                orgId,
+                detail: `${jobs.length} pesan, ${jobs[0].max_retries} percobaan: ${describeErrorForOps(error)}`,
+            });
             await logSystemMessage(orgId, phoneNumber, `Error: gagal memproses pesan setelah ${jobs[0].max_retries} percobaan. Penyebab: ${errorMessage}`);
 
             // Send a single fallback message for the whole conversation.
