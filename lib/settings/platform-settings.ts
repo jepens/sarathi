@@ -50,3 +50,26 @@ export async function getPlatformSetting(
     }
     return nonEmpty(data?.value);
 }
+
+/**
+ * Like getPlatformSetting, but a read error throws instead of reading as "not
+ * configured", for callers that must not fall back on an error (the webhook:
+ * Fase 2 task 2.2a). Returns null only when the key really is not configured.
+ */
+export async function getPlatformSettingStrict(
+    client: SupabaseClient,
+    key: PlatformSettingKey,
+): Promise<string | null> {
+    const { data, error } = await client
+        .from('platform_settings')
+        .select('value')
+        .eq('key', key)
+        .maybeSingle();
+    if (error) {
+        // Keep the database code for the alert detail (describeErrorForOps).
+        const err = new Error(`platform setting ${key} could not be read (${error.code ?? 'no code'})`);
+        err.name = 'PlatformSettingReadError';
+        throw Object.assign(err, { code: error.code });
+    }
+    return nonEmpty(data?.value);
+}

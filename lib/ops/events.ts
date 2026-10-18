@@ -11,6 +11,8 @@ import { redactPII } from '@/lib/utils/logger';
 export type OpsEventKind =
     | 'webhook_signature_invalid'
     | 'webhook_error'
+    | 'webhook_unrouted'
+    | 'webhook_unconfigured'
     | 'queue_job_failed'
     | 'whatsapp_token_invalid'
     | 'quota_inbound_exceeded'

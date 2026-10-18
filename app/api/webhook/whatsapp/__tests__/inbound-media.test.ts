@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Inbound media in the WhatsApp webhook (tracker 1.11, migration 0067, owner
 // decision D20): the customer's file is copied to the private chat-media
@@ -57,6 +57,7 @@ function serviceClient() {
 vi.mock('@supabase/supabase-js', () => ({ createClient: vi.fn(() => serviceClient()) }));
 vi.mock('@/lib/whatsapp/security', () => ({ verifyWhatsAppSignature: vi.fn(async () => true) }));
 vi.mock('@/lib/whatsapp/credentials', () => ({
+    envWebhookApp: () => ({ appSecret: 'app-secret', phoneNumberId: 'phone-number-id' }),
     resolveWhatsAppContext: vi.fn(async () => ({
         orgId: ORG,
         phoneNumberId: 'phone-number-id',
@@ -122,6 +123,9 @@ async function deliver(req: Request): Promise<Record<string, unknown>> {
 
 beforeEach(() => {
     vi.clearAllMocks();
+    // The webhook only works with the service-role client.
+    vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'http://localhost:54321');
+    vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', 'service-role-key');
     h.inserts = [];
     h.rpcs = [];
     h.buckets = [];
@@ -129,6 +133,10 @@ beforeEach(() => {
     h.insertError = null;
     h.upload.mockResolvedValue({ data: { path: 'ignored' }, error: null });
     h.remove.mockResolvedValue({ data: [], error: null });
+});
+
+afterEach(() => {
+    vi.unstubAllEnvs();
 });
 
 describe('webhook inbound media: the chat-media copy', () => {

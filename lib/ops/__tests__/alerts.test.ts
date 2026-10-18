@@ -97,7 +97,7 @@ describe('maybeSendOpsAlerts', () => {
         expect(await run()).toEqual({ sent: false, kinds: [] });
         expect(h.send).not.toHaveBeenCalled();
         expect(fns()).toEqual(['claim_ops_alerts']);
-        expect(fake.rpcCalls[0].args).toEqual({ p_cooldown_seconds: 3600, p_daily_kinds: [] });
+        expect(fake.rpcCalls[0].args).toEqual({ p_cooldown_seconds: 3600, p_daily_kinds: ['webhook_unrouted'] });
     });
 
     it('emails every claimed group once, then marks the events sent with the claim stamp', async () => {

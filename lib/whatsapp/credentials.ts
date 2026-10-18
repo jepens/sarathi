@@ -1,5 +1,5 @@
 import { SupabaseClient } from '@supabase/supabase-js';
-import { getDefaultOrgId } from '@/lib/settings/org-context';
+import { getDefaultOrgIdStrict } from '@/lib/settings/org-context';
 
 // WhatsApp credential resolution. Single-tenant: credentials come from the
 // server environment (WHATSAPP_PHONE_NUMBER_ID / WHATSAPP_ACCESS_TOKEN /
@@ -28,11 +28,23 @@ function envCreds(): WhatsAppSendCreds & { appSecret: string | null } {
 }
 
 /**
+ * The Meta app the webhook URL serves today (Fase 2 task 2.2a, phase 0: one
+ * app, from env): the secret its signatures are checked with, and the one
+ * number it routes. Needs no database, so the signature is checked before
+ * anything else happens.
+ */
+export function envWebhookApp(): { appSecret: string | null; phoneNumberId: string } {
+    const env = envCreds();
+    return { appSecret: env.appSecret, phoneNumberId: env.phoneNumberId };
+}
+
+/**
  * Resolve the org + credentials for an inbound webhook. Single-tenant: always
- * the env credentials + the one org.
+ * the env credentials + the default org, read strictly (a read error throws,
+ * never the seed org).
  */
 export async function resolveWhatsAppContext(client: SupabaseClient): Promise<WhatsAppContext> {
-    return { ...envCreds(), orgId: await getDefaultOrgId(client) };
+    return { ...envCreds(), orgId: await getDefaultOrgIdStrict(client) };
 }
 
 /**

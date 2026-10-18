@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import { NextResponse } from 'next/server';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { verifyWhatsAppSignature } from '@/lib/whatsapp/security';
@@ -5,7 +6,7 @@ import { checkRateLimit } from '@/lib/whatsapp/rate-limiter-db';
 import { enqueueMessage, inboundQueueState, processQueue, getDebounceSeconds } from '@/lib/whatsapp/queue-db';
 import { sendWhatsAppMessage, downloadWhatsAppMedia } from '@/lib/whatsapp/client';
 import { resolveSendTarget } from '@/lib/whatsapp/recipient';
-import { resolveWhatsAppContext } from '@/lib/whatsapp/credentials';
+import { envWebhookApp, resolveWhatsAppContext } from '@/lib/whatsapp/credentials';
 import { whatsappLogger } from '@/lib/utils/logger';
 import { webhookSummary } from '@/lib/whatsapp/webhook-summary';
 import { logSystemMessage } from '@/lib/whatsapp/history';
@@ -186,6 +187,7 @@ async function handleInboundMedia(params: InboundMediaParams): Promise<void> {
             const { data: existing } = await supabase
                 .from('whatsapp_messages')
                 .select('id')
+                .eq('org_id', orgId)
                 .eq('wa_message_id', inboundWamid)
                 .maybeSingle<{ id: string }>();
             if (existing) {
@@ -323,81 +325,110 @@ export async function POST(request: Request) {
     let verified = false;
     let alertOrgId: string | null = null;
     try {
-        // Get raw body for signature verification.
-        // MUST be the raw bytes — re-stringifying parsed JSON breaks the HMAC.
-        const rawBody = await request.text();
+        // The exact bytes Meta signed, at most Meta's 3 MB: a larger body is
+        // refused before it is read in full (anyone can POST here). The
+        // signature is checked over these bytes before anything reads the
+        // payload (Fase 2 task 2.2a). request.text() would decode them first,
+        // and a re-encoded string is not guaranteed to be the same bytes.
+        const rawBody = await readBodyCapped(request);
+        if (!rawBody) {
+            whatsappLogger.warn('Webhook body over 3 MB — refused');
+            return new NextResponse('Payload Too Large', { status: 413 });
+        }
         const signature = request.headers.get('x-hub-signature-256');
 
-        // Always verify signature unless an operator explicitly opts out.
-        // Use the env flag only for local dev or replay testing — never in prod.
-        const skipSignatureVerification =
-            process.env.WHATSAPP_WEBHOOK_SKIP_SIGNATURE === 'true';
+        // One Meta app (env) serves this URL today: its secret and its number.
+        const webhookApp = envWebhookApp();
+        if (!(await verifyWhatsAppSignature(rawBody, signature, webhookApp.appSecret))) {
+            whatsappLogger.warn('Rejected webhook with invalid/missing signature');
+            // Team alert (3.5) for what points at our side: no secret set, or a
+            // signature that does not match (a wrong or rotated secret makes
+            // every real delivery fail). A request without the header is
+            // internet noise, since Meta always signs: logged only. A flood is
+            // throttled inside recordOpsEvent.
+            const alertClient = !webhookApp.appSecret || signature ? serviceRoleClient() : null;
+            if (alertClient) {
+                await recordOpsEvent(alertClient, 'webhook_signature_invalid', {
+                    detail: !webhookApp.appSecret ? 'WHATSAPP_APP_SECRET tidak diset di server' : 'tanda tangan tidak cocok',
+                });
+            }
+            return new NextResponse('Forbidden', { status: 403 });
+        }
+        verified = true;
 
-        // Parse BEFORE verifying: multi-tenant signatures use the sending org's
-        // app_secret, which we only know after reading phone_number_id from the
-        // body. Parsing is side-effect-free; nothing acts on the payload until
-        // the signature is verified below (right after we resolve the org).
-        // Meta always sends a JSON object, so a body that does not parse is not
-        // a Meta delivery: refuse it, without an alert.
+        // Signed by our app, so a body that does not parse now will not parse on
+        // a retry either: acknowledge it instead of making Meta retry for days.
         let body;
         try {
-            body = JSON.parse(rawBody);
+            body = JSON.parse(rawBody.toString('utf8'));
         } catch {
-            whatsappLogger.warn('Webhook body is not valid JSON — refused');
-            return new NextResponse('Bad Request', { status: 400 });
+            whatsappLogger.error('Signed webhook body is not valid JSON — acknowledged without processing');
+            return new NextResponse('EVENT_RECEIVED', { status: 200 });
         }
         if (!body || typeof body !== 'object') {
-            whatsappLogger.warn('Webhook body is not a JSON object — refused');
-            return new NextResponse('Bad Request', { status: 400 });
+            whatsappLogger.warn('Signed webhook body is not a JSON object — acknowledged without processing');
+            return new NextResponse('EVENT_RECEIVED', { status: 200 });
         }
 
         // What arrived, never the payload itself: it holds customers' phone
         // numbers, names and message text (audit KEA-21, UU PDP).
         whatsappLogger.info(`Webhook received: ${webhookSummary(body)}`);
 
-        // Initialize Supabase client with Service Role Key for backend operations
-        // This bypasses RLS policies to ensure we can always log messages
-        const supabase = createClient(
-            process.env.NEXT_PUBLIC_SUPABASE_URL!,
-            process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-        );
+        // The service-role client (RLS bypassed: the webhook has no user). With
+        // any other key RLS would silently drop every write, so without it the
+        // answer is 503 and Meta retries once it is configured.
+        const supabase = serviceRoleClient();
+        if (!supabase) {
+            whatsappLogger.error('Webhook cannot store anything: NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is not set');
+            return new NextResponse('Service Unavailable', { status: 503 });
+        }
 
         // Check if this is an event from a WhatsApp Business Account
         if (body.object === 'whatsapp_business_account') {
-            // Extract metadata (phone_number_id is logged only; single-tenant
-            // resolves credentials from env).
             const change = body.entry?.[0]?.changes?.[0];
             const metadata = change?.value?.metadata;
             const phoneNumberId = metadata?.phone_number_id;
 
-            whatsappLogger.info(`Webhook from phone_number_id: ${phoneNumberId}`);
-
-            // Single-tenant: org + credentials come from env.
-            const waCtx = await resolveWhatsAppContext(supabase);
-
-            // Verify the signature with THIS org's app_secret now that we know
-            // which org the payload claims to come from. Nothing above acted on
-            // the body, so this is still a pre-action gate.
-            if (skipSignatureVerification) {
-                whatsappLogger.warn(
-                    '⚠️  Webhook signature verification SKIPPED via WHATSAPP_WEBHOOK_SKIP_SIGNATURE=true. ' +
-                        'This is INSECURE and must NEVER be set in production.'
-                );
-            } else {
-                const valid = await verifyWhatsAppSignature(rawBody, signature, waCtx.appSecret);
-                if (!valid) {
-                    whatsappLogger.warn('Rejected webhook with invalid/missing signature');
-                    await recordOpsEvent(supabase, 'webhook_signature_invalid', {
-                        detail: !waCtx.appSecret
-                            ? 'WHATSAPP_APP_SECRET tidak diset di server'
-                            : signature
-                              ? 'tanda tangan tidak cocok'
-                              : 'header X-Hub-Signature-256 tidak ada',
-                    });
-                    return new NextResponse('Forbidden', { status: 403 });
-                }
+            // One-number routing (Fase 2 task 2.2a, phase 0). The app is
+            // subscribed to the whole WABA, so the events of its other numbers
+            // arrive here too. They are not this org's conversations (the AI
+            // would answer from the wrong number), so they are dropped and the
+            // team is told (daily). WHATSAPP_OTHER_NUMBER_EVENTS=process stores
+            // them in the default org's inbox instead, without AI replies or any
+            // automatic send, while the team finds out what such a number is
+            // used for. Without a configured number nothing can be routed: 503
+            // (Meta retries once it is set) and an alert.
+            if (!webhookApp.phoneNumberId) {
+                whatsappLogger.error('Webhook cannot route: WHATSAPP_PHONE_NUMBER_ID is not set');
+                await recordOpsEvent(supabase, 'webhook_unconfigured', { detail: 'WHATSAPP_PHONE_NUMBER_ID tidak diset di server' });
+                return new NextResponse('Service Unavailable', { status: 503 });
             }
-            verified = true;
+            // Store-only: an event of another number kept in the inbox (no AI,
+            // no automatic send from the wrong number).
+            let storeOnly = false;
+            if (phoneNumberId !== undefined && phoneNumberId !== null && String(phoneNumberId) !== webhookApp.phoneNumberId) {
+                const ref = `h${createHash('sha256').update(String(phoneNumberId)).digest('hex').slice(0, 10)}`;
+                const otherNumbers = otherNumberMode();
+                if (otherNumbers.unknownValue !== undefined) {
+                    await recordOpsEvent(supabase, 'webhook_unconfigured', {
+                        detail: `WHATSAPP_OTHER_NUMBER_EVENTS tidak dikenal ("${otherNumbers.unknownValue}"), diperlakukan sebagai process`,
+                    });
+                }
+                if (otherNumbers.mode === 'drop') {
+                    whatsappLogger.warn(`Webhook for another number of the WABA (${ref}) — dropped`);
+                    await recordOpsEvent(supabase, 'webhook_unrouted', { detail: `phone_number_id ${ref}; dibuang` });
+                    return new NextResponse('EVENT_RECEIVED', { status: 200 });
+                }
+                whatsappLogger.warn(`Webhook for another number of the WABA (${ref}) — stored without AI (WHATSAPP_OTHER_NUMBER_EVENTS=process)`);
+                await recordOpsEvent(supabase, 'webhook_unrouted', {
+                    detail: `phone_number_id ${ref}; disimpan di inbox tanpa balasan AI (WHATSAPP_OTHER_NUMBER_EVENTS=process)`,
+                });
+                storeOnly = true;
+            }
+
+            // Single-tenant: org + credentials come from env; the org is read
+            // strictly (a read error throws → 500, Meta retries).
+            const waCtx = await resolveWhatsAppContext(supabase);
             alertOrgId = waCtx.orgId;
 
             // ========== HANDLE user_id_update (Phase B) ==========
@@ -468,9 +499,11 @@ export async function POST(request: Request) {
                         }
                     }
 
+                    // Scoped to the org: a wamid is only unique per org.
                     const { error: updateErr } = await supabase
                         .from('whatsapp_messages')
                         .update(patch)
+                        .eq('org_id', waCtx.orgId)
                         .eq('wa_message_id', wamid);
 
                     if (updateErr) {
@@ -485,8 +518,8 @@ export async function POST(request: Request) {
             }
 
             // ========== HANDLE INBOUND MESSAGES ==========
-            if (body.entry && body.entry[0].changes && body.entry[0].changes[0].value.messages && body.entry[0].changes[0].value.messages[0]) {
-                const value = body.entry[0].changes[0].value;
+            if (change?.value?.messages?.[0]) {
+                const value = change.value;
                 const message = value.messages[0];
                 const from = message.from; // phone today; may be a BSUID from June 2026
                 const messageType = message.type;
@@ -586,7 +619,7 @@ export async function POST(request: Request) {
                 // lib/whatsapp/flow-response.ts.
                 if (messageType === 'interactive') {
                     const interactive = message.interactive;
-                    if (interactive?.type === 'nfm_reply' && interactive.nfm_reply) {
+                    if (interactive?.type === 'nfm_reply' && interactive.nfm_reply && !storeOnly) {
                         await handleFlowReply({
                             supabase,
                             orgId: waCtx.orgId,
@@ -653,7 +686,8 @@ export async function POST(request: Request) {
                     // org so two tenants who share a customer don't share a rate
                     // bucket (one tenant could otherwise exhaust the other's quota
                     // for that number). Pass service role client to bypass RLS.
-                    const allowed = await checkRateLimit(`${waCtx.orgId}:${contactKey}`, supabase);
+                    // (Store-only events send nothing, so no rate-limit warning either.)
+                    const allowed = storeOnly || (await checkRateLimit(`${waCtx.orgId}:${contactKey}`, supabase));
                     if (!allowed) {
                         whatsappLogger.warn(`Rate limit exceeded for ${contactKey}`);
                         const warnTarget = await resolveSendTarget(supabase, waCtx.orgId, contactKey);
@@ -675,7 +709,7 @@ export async function POST(request: Request) {
                         .eq('org_id', waCtx.orgId)
                         .eq('phone_number', contactKey)
                         .maybeSingle<{ ai_enabled: boolean | null; contact_name: string | null }>();
-                    const aiEnabled = aiRow?.ai_enabled !== false;
+                    const aiEnabled = !storeOnly && aiRow?.ai_enabled !== false;
 
                     // Org quota (tracker 3.4, migration 0071): at most N new AI
                     // bursts a minute per org. A fragment that joins this chat's
@@ -839,21 +873,64 @@ export async function POST(request: Request) {
             }
             return new NextResponse('EVENT_RECEIVED', { status: 200 });
         } else {
-            whatsappLogger.warn('Received non-WhatsApp event');
-            return new NextResponse('Not a WhatsApp event', { status: 404 });
+            // Signed by our app but not a WhatsApp Business Account event:
+            // acknowledge it (a 404 would make Meta retry it for days).
+            whatsappLogger.warn('Received non-WhatsApp event — acknowledged without processing');
+            return new NextResponse('EVENT_RECEIVED', { status: 200 });
         }
 
     } catch (error) {
         whatsappLogger.error('Error processing webhook', error);
         // Team alert (3.5): Meta retries the delivery, but a webhook that keeps
         // failing loses messages once Meta gives up. Signed deliveries only.
-        if (verified && process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
-            await recordOpsEvent(
-                createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY),
-                'webhook_error',
-                { orgId: alertOrgId, detail: describeErrorForOps(error) },
-            );
+        const alertClient = verified ? serviceRoleClient() : null;
+        if (alertClient) {
+            await recordOpsEvent(alertClient, 'webhook_error', { orgId: alertOrgId, detail: describeErrorForOps(error) });
         }
         return new NextResponse('Internal Server Error', { status: 500 });
     }
+}
+
+// WHATSAPP_OTHER_NUMBER_EVENTS: '' or 'drop' (default) drops the events of the
+// WABA's other numbers; 'process' stores them without AI. Any other value is a
+// typo (e.g. 'proses'): treated as 'process', the safer side, and alerted.
+function otherNumberMode(): { mode: 'drop' | 'store'; unknownValue?: string } {
+    const raw = (process.env.WHATSAPP_OTHER_NUMBER_EVENTS ?? '').trim().toLowerCase();
+    if (raw === '' || raw === 'drop') return { mode: 'drop' };
+    if (raw === 'process') return { mode: 'store' };
+    return { mode: 'store', unknownValue: raw.replace(/[^a-z0-9_-]/g, '').slice(0, 40) };
+}
+
+// Meta's largest webhook payload (developers.facebook.com, set-up-webhooks).
+const MAX_WEBHOOK_BYTES = 3 * 1024 * 1024;
+
+// The request body, or null when it is over MAX_WEBHOOK_BYTES: by the declared
+// length before reading, else while reading (a chunked body is cancelled as
+// soon as it passes the limit).
+async function readBodyCapped(request: Request): Promise<Buffer | null> {
+    const declared = Number(request.headers.get('content-length') ?? '');
+    if (Number.isFinite(declared) && declared > MAX_WEBHOOK_BYTES) return null;
+    if (!request.body) return Buffer.alloc(0);
+    const reader = request.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        total += value.byteLength;
+        if (total > MAX_WEBHOOK_BYTES) {
+            await reader.cancel().catch(() => {});
+            return null;
+        }
+        chunks.push(value);
+    }
+    return Buffer.concat(chunks);
+}
+
+// The service-role client the webhook works with, or null when it is not
+// configured. Never the anon key: under RLS every write would silently fail.
+function serviceRoleClient(): SupabaseClient | null {
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    return url && key ? createClient(url, key) : null;
 }

@@ -80,7 +80,7 @@ scripts/
 ├── test-whatsapp-local.mjs
 ├── get-ngrok-url.mjs
 ├── check-ngrok-traffic.mjs
-└── test-webhook-post.mjs
+└── test-webhook-post.mjs (dihapus 2026-10-18; pakai scripts/test-webhook.js)
 ```
 
 ---

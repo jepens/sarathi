@@ -341,7 +341,7 @@ export function describeWhatsAppError(err: WhatsAppApiError): string {
             return `Parameter tidak valid: ${err.details ?? 'tidak ada detail'}. (Kode 100)`;
         // From Graph v23.0, template parameter problems at send time.
         case 132018:
-            return `Parameter template ditolak Meta: ${err.details ?? 'tidak ada detail'}. Periksa isi variabel (tanpa baris baru atau tab, maksimal 4 spasi berturut-turut). (Kode 132018)`;
+            return `Parameter template ditolak Meta: ${err.details ?? 'tidak ada detail'}. Periksa jumlah dan isi variabel (tanpa baris baru atau tab, maksimal 4 spasi berturut-turut) dan tombol Flow template. (Kode 132018)`;
         default:
             return err.message;
     }
