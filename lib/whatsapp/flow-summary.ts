@@ -75,6 +75,21 @@ export function contactCardSummary(contacts: unknown): string {
         : '👤 Kartu kontak dibagikan (isi tidak terbaca)';
 }
 
+// Types where the customer wrote nothing: a number change ('system'), opening
+// the chat ('request_welcome'), a reaction to a message. Not stored for
+// another number (they would show as an unanswered message with a push), only
+// acknowledged, as on the main number.
+const NOT_STORED_TYPES = new Set(['system', 'request_welcome', 'reaction']);
+
+/** Whether a message of this type sent to another number is kept in the inbox. */
+export function isStoredOtherMessageType(type: unknown): boolean {
+    return !NOT_STORED_TYPES.has(text(type));
+}
+
+function oneLine(value: string): string {
+    return value.replace(/\s+/g, ' ').trim();
+}
+
 /** Any other message type (one webhook messages[] entry) as one line. */
 export function otherMessageSummary(message: unknown): string {
     const m = record(message);
@@ -83,22 +98,34 @@ export function otherMessageSummary(message: unknown): string {
         case 'button': {
             // A template's quick-reply button.
             const button = record(m.button);
-            return `🔘 Tombol: ${cut(text(button.text) || text(button.payload) || '-')}`;
+            return `🔘 Tombol: ${cut(oneLine(text(button.text) || text(button.payload) || '-'))}`;
         }
         case 'interactive': {
             const interactive = record(m.interactive);
-            const reply = record(interactive.button_reply ?? interactive.list_reply);
-            return `🔘 Pilihan: ${cut(text(reply.title) || text(reply.id) || '-')}`;
+            const reply = interactive.button_reply ?? interactive.list_reply;
+            if (reply === undefined || reply === null) {
+                return `Pesan interaktif "${cut(oneLine(text(interactive.type) || 'tidak dikenal'))}" (isinya tidak ditampilkan di Sarathi)`;
+            }
+            return `🔘 Pilihan: ${cut(oneLine(text(record(reply).title) || text(record(reply).id) || '-'))}`;
         }
         case 'location': {
             const location = record(m.location);
             const place = [text(location.name), text(location.address)].filter(Boolean).join(', ');
             const coordinates = [text(location.latitude), text(location.longitude)].filter(Boolean).join(', ');
-            return `📍 Lokasi: ${cut(place || coordinates || '-')}`;
+            return `📍 Lokasi: ${cut(oneLine(place || coordinates || '-'))}`;
         }
         case 'reaction':
-            return `Reaksi: ${cut(text(record(m.reaction).emoji) || '(dihapus)')}`;
+            return `Reaksi: ${cut(oneLine(text(record(m.reaction).emoji) || '(dihapus)'))}`;
         default:
-            return `Pesan jenis "${cut(type)}" (isinya tidak ditampilkan di Sarathi)`;
+            return `Pesan jenis "${cut(oneLine(type))}" (isinya tidak ditampilkan di Sarathi)`;
     }
+}
+
+/**
+ * The chat-list preview and push body of such a message: the summary, except
+ * for a location, whose address or coordinates stay in the message only (a
+ * push shows on the lock screen of every admin device).
+ */
+export function otherMessagePreview(message: unknown): string {
+    return text(record(message).type) === 'location' ? '📍 Lokasi' : otherMessageSummary(message);
 }

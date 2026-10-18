@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { contactCardSummary, flowSubmissionSummary, otherMessageSummary } from '@/lib/whatsapp/flow-summary';
+import {
+    contactCardSummary,
+    flowSubmissionSummary,
+    isStoredOtherMessageType,
+    otherMessagePreview,
+    otherMessageSummary,
+} from '@/lib/whatsapp/flow-summary';
 
 // A lone surrogate: half of an emoji, not valid UTF-8 (the database refuses it).
 const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
@@ -32,6 +38,13 @@ describe('flowSubmissionSummary', () => {
         }
     });
 
+    it('keeps a value of exactly 200 code points whole and cuts one of 201', () => {
+        expect(flowSubmissionSummary({ a: 'x'.repeat(200) })).toBe(`📋 Form WhatsApp dikirim\na: ${'x'.repeat(200)}`);
+        expect(flowSubmissionSummary({ a: 'x'.repeat(201) })).toBe(`📋 Form WhatsApp dikirim\na: ${'x'.repeat(200)}…`);
+        expect(contactCardSummary([{ name: { formatted_name: 'n'.repeat(250) }, phones: [] }]))
+            .toBe(`👤 Kartu kontak dibagikan\n${'n'.repeat(200)}…`);
+    });
+
     it('never cuts an emoji in half', () => {
         const summary = flowSubmissionSummary({ catatan: `${'a'.repeat(199)}😀😀` });
         expect(summary).not.toMatch(LONE_SURROGATE);
@@ -54,6 +67,25 @@ describe('otherMessageSummary', () => {
         expect(otherMessageSummary({ type: 'reaction', reaction: { message_id: 'wamid.x' } })).toBe('Reaksi: (dihapus)');
         expect(otherMessageSummary({ type: 'unsupported' })).toBe('Pesan jenis "unsupported" (isinya tidak ditampilkan di Sarathi)');
         expect(otherMessageSummary(null)).toBe('Pesan jenis "tidak dikenal" (isinya tidak ditampilkan di Sarathi)');
+    });
+
+    it('falls back to the payload, names an unknown interactive subtype, cuts long text and stays on one line', () => {
+        expect(otherMessageSummary({ type: 'button', button: { text: '', payload: 'MINTA_INFO' } })).toBe('🔘 Tombol: MINTA_INFO');
+        expect(otherMessageSummary({ type: 'button', button: { text: 'y'.repeat(300) } })).toBe(`🔘 Tombol: ${'y'.repeat(200)}…`);
+        expect(otherMessageSummary({ type: 'interactive', interactive: { type: 'call_permission_reply' } }))
+            .toBe('Pesan interaktif "call_permission_reply" (isinya tidak ditampilkan di Sarathi)');
+        expect(otherMessageSummary({ type: 'location', location: { name: 'Kantor\nLantai 2', address: 'Jl. Contoh\n1' } }))
+            .toBe('📍 Lokasi: Kantor Lantai 2, Jl. Contoh 1');
+    });
+
+    it('stores what the customer wrote, not events where they wrote nothing', () => {
+        for (const type of ['button', 'interactive', 'location', 'order', 'unsupported', 'tidak-ada']) expect(isStoredOtherMessageType(type)).toBe(true);
+        for (const type of ['system', 'request_welcome', 'reaction']) expect(isStoredOtherMessageType(type)).toBe(false);
+    });
+
+    it('keeps a location out of the preview and the push', () => {
+        expect(otherMessagePreview({ type: 'location', location: { address: 'Jl. Contoh 1' } })).toBe('📍 Lokasi');
+        expect(otherMessagePreview({ type: 'button', button: { text: 'Ya' } })).toBe('🔘 Tombol: Ya');
     });
 });
 

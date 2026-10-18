@@ -11,7 +11,13 @@ import { webhookSummary } from '@/lib/whatsapp/webhook-summary';
 import { logSystemMessage } from '@/lib/whatsapp/history';
 import { sendPushToOrg } from '@/lib/notifications/web-push';
 import { handleFlowReply } from '@/lib/whatsapp/flow-response';
-import { contactCardSummary, flowSubmissionSummary, otherMessageSummary } from '@/lib/whatsapp/flow-summary';
+import {
+    contactCardSummary,
+    flowSubmissionSummary,
+    isStoredOtherMessageType,
+    otherMessagePreview,
+    otherMessageSummary,
+} from '@/lib/whatsapp/flow-summary';
 import {
     firstOtherNumberLimitNote,
     firstOtherNumberNote,
@@ -320,11 +326,14 @@ async function handleInboundMedia(params: InboundMediaParams): Promise<void> {
     }
 }
 
-// A Flow submission or a contact card sent to another number of the WABA
-// (store-only): kept for the operators as a readable row, with the chat
-// summary, the unread badge and the push of any inbound message. Nothing acts
-// on it: no Brief Acara lead or confirmation (flow-response.ts; it would go
-// out from the main number), no verified_phone taken from a shared card.
+// A Flow submission, a contact card or any other non-text message sent to
+// another number of the WABA (store-only): kept for the operators as a
+// readable row, with the chat summary, the unread badge and the push of any
+// inbound message. Nothing acts on it: no Brief Acara lead or confirmation
+// (flow-response.ts; it would go out from the main number), no verified_phone
+// taken from a shared card. Within the contact's own rate limit for messages
+// to another number (shared with text; over it: not stored, a note once a
+// minute).
 async function storeOtherNumberMessage(params: {
     supabase: SupabaseClient;
     orgId: string;
@@ -338,6 +347,13 @@ async function storeOtherNumberMessage(params: {
     other: OtherNumber;
 }): Promise<void> {
     const { supabase, orgId, contactKey, bsuid, waId, inboundWamid, content, preview, other } = params;
+    if (!(await checkRateLimit(`${orgId}:other:${contactKey}`, supabase))) {
+        whatsappLogger.warn(`Rate limit exceeded for ${contactKey} on another number of the WABA — not stored`);
+        if (firstOtherNumberLimitNote(`${orgId}:${contactKey}`)) {
+            await logSystemMessage(orgId, contactKey, otherNumberLimitNotice(other), { touchChat: false });
+        }
+        return;
+    }
     const nowIso = new Date().toISOString();
     // last_inbound_at: an inbound message for the inbox cues (see
     // lib/whatsapp/other-number.ts; the note explains the 24-hour marker).
@@ -1056,12 +1072,17 @@ export async function POST(request: Request) {
                     return new NextResponse('EVENT_RECEIVED', { status: 200 });
                 }
 
-                // Any other type sent to another number of the WABA (a
-                // template's quick-reply button, a location, a reaction, a type
+                // Any other type the customer sent to another number of the WABA
+                // (a template's quick-reply button, a location, an order, a type
                 // Sarathi does not show) is kept too, as one readable line, so
-                // process mode loses nothing that arrived.
+                // process mode loses no message that arrived. Events where the
+                // customer wrote nothing (a number change, opening the chat, a
+                // reaction) are only acknowledged, as on the main number.
+                if (storeOnly && !isStoredOtherMessageType(messageType)) {
+                    whatsappLogger.info(`${messageType} event for another number of the WABA — acknowledged without storing`);
+                    return new NextResponse('EVENT_RECEIVED', { status: 200 });
+                }
                 if (storeOnly) {
-                    const summary = otherMessageSummary(message);
                     await storeOtherNumberMessage({
                         supabase,
                         orgId: waCtx.orgId,
@@ -1069,8 +1090,8 @@ export async function POST(request: Request) {
                         bsuid,
                         waId,
                         inboundWamid,
-                        content: summary,
-                        preview: summary,
+                        content: otherMessageSummary(message),
+                        preview: otherMessagePreview(message),
                         other: storeOnly,
                     });
                     return new NextResponse('EVENT_RECEIVED', { status: 200 });

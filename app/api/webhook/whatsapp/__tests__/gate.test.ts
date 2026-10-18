@@ -428,14 +428,7 @@ describe('webhook gate: one-number routing', () => {
         expect(opsKinds()).toEqual(['webhook_unrouted_new', 'webhook_unrouted', 'webhook_unrouted']);
     });
 
-    it.each([
-        ['button', { button: { text: 'Ya, saya tertarik', payload: 'YA' } }, '🔘 Tombol: Ya, saya tertarik'],
-        ['interactive', { interactive: { type: 'list_reply', list_reply: { id: 'p2', title: 'Paket B' } } }, '🔘 Pilihan: Paket B'],
-        ['location', { location: { name: 'Kantor', latitude: -6.2, longitude: 106.8 } }, '📍 Lokasi: Kantor'],
-        ['reaction', { reaction: { message_id: 'wamid.x', emoji: '👍' } }, 'Reaksi: 👍'],
-        ['unsupported', {}, 'Pesan jenis "unsupported" (isinya tidak ditampilkan di Sarathi)'],
-    ])('process mode keeps a %s message to another number as one readable line', async (type, extra, content) => {
-        vi.stubEnv('WHATSAPP_OTHER_NUMBER_EVENTS', 'process');
+    function otherEvent(type: string, extra: Record<string, unknown>): { raw: string; wamid: string } {
         seq += 1;
         const wamid = `wamid.fake-other-${seq}`;
         const body = {
@@ -446,12 +439,50 @@ describe('webhook gate: one-number routing', () => {
                 messages: [{ from: PHONE, id: wamid, type, ...extra }],
             } }] }],
         };
-        expect((await POST(post(JSON.stringify(body)))).status).toBe(200);
+        return { raw: JSON.stringify(body), wamid };
+    }
+
+    it.each([
+        ['button', { button: { text: 'Ya, saya tertarik', payload: 'YA' } }, '🔘 Tombol: Ya, saya tertarik', '🔘 Tombol: Ya, saya tertarik'],
+        ['interactive', { interactive: { type: 'list_reply', list_reply: { id: 'p2', title: 'Paket B' } } }, '🔘 Pilihan: Paket B', '🔘 Pilihan: Paket B'],
+        // The address or coordinates stay in the message, not in the preview or the push.
+        ['location', { location: { name: 'Kantor', latitude: -6.2, longitude: 106.8 } }, '📍 Lokasi: Kantor', '📍 Lokasi'],
+        ['unsupported', {}, 'Pesan jenis "unsupported" (isinya tidak ditampilkan di Sarathi)', 'Pesan jenis "unsupported" (isinya tidak ditampilkan di Sarathi)'],
+    ])('process mode keeps a %s message to another number as one readable line', async (type, extra, content, preview) => {
+        vi.stubEnv('WHATSAPP_OTHER_NUMBER_EVENTS', 'process');
+        const { raw, wamid } = otherEvent(type, extra);
+        expect((await POST(post(raw))).status).toBe(200);
         const stored = touched('whatsapp_messages').find((c) => c.op === 'insert')!.payload as Record<string, unknown>;
         expect(stored).toMatchObject({ role: 'user', wa_message_id: wamid, content, metadata: { other_number: expect.stringMatching(/^h[0-9a-f]{10}$/) } });
-        expect(touched('whatsapp_chats').find((c) => c.op === 'upsert')!.payload).toMatchObject({ last_message: content });
+        expect(touched('whatsapp_chats').find((c) => c.op === 'upsert')!.payload).toMatchObject({ last_message: preview });
+        expect(sendPushToOrg).toHaveBeenCalledWith(expect.anything(), ORG, expect.objectContaining({ body: preview }));
         expect(sendWhatsAppMessage).not.toHaveBeenCalled();
         expect(handleFlowReply).not.toHaveBeenCalled();
+    });
+
+    it.each([
+        ['system', { system: { type: 'user_changed_number', body: 'nomor berubah' } }],
+        ['request_welcome', {}],
+        ['reaction', { reaction: { message_id: 'wamid.x', emoji: '👍' } }],
+        ['reaction', { reaction: { message_id: 'wamid.x', emoji: '' } }],
+    ])('process mode only acknowledges a %s event for another number (the customer wrote nothing)', async (type, extra) => {
+        vi.stubEnv('WHATSAPP_OTHER_NUMBER_EVENTS', 'process');
+        expect((await POST(post(otherEvent(type, extra).raw))).status).toBe(200);
+        expect(touched('whatsapp_messages')).toEqual([]);
+        expect(touched('whatsapp_chats')).toEqual([]);
+        expect(h.fake.rpcCalls.map((c) => c.name)).not.toContain('bump_unread');
+        expect(sendPushToOrg).not.toHaveBeenCalled();
+        expect(logSystemMessage).not.toHaveBeenCalled();
+    });
+
+    it('over the contact\'s own rate limit, a non-text message to another number is not stored either (a note once a minute)', async () => {
+        vi.stubEnv('WHATSAPP_OTHER_NUMBER_EVENTS', 'process');
+        h.rateOk.mockResolvedValueOnce(false);
+        expect((await POST(post(otherEvent('button', { button: { text: 'Ya' } }).raw))).status).toBe(200);
+        expect(h.rateOk).toHaveBeenCalledWith(`${ORG}:other:${PHONE}`, expect.anything());
+        expect(touched('whatsapp_messages')).toEqual([]);
+        expect(sendPushToOrg).not.toHaveBeenCalled();
+        expect(logSystemMessage).toHaveBeenCalledWith(ORG, PHONE, expect.stringContaining('melebihi batas per menit'), { touchChat: false });
     });
 
     it('an unsupported message type to its own number is still only acknowledged', async () => {
