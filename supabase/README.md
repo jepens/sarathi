@@ -446,6 +446,15 @@ run before the redeploy is harmless. After the flip the default is to roll
 forward with a patch build, and once a second tenant has real data the
 bucket is never made public again (above).
 
+Done 2026-10-18: build live since the deploy of 2026-10-18 (the dashboard
+showed a new dashboard image and a new inbound phone image through
+`object/sign` requests, no `object/public/chat-media` request in the logs);
+pre-flip check 25/25/25 (23 rows with the old public URL, 2 bare keys);
+0067 applied 12:53 UTC (version `20261018125353`): `f`, `52428800`, `19`,
+the 30 objects untouched; production fingerprint 701 lines, md5
+`5a7feadb1272324db7f97d63aad90653`, equal to the expectation; security
+advisors unchanged.
+
 ## Schema fingerprint (production vs replay)
 
 `fingerprint/schema_fingerprint.sql` prints one sorted line per app-owned
@@ -463,12 +472,9 @@ line to `production.txt`.
   (`<` only in production, `>` only in the replay), each with a reason:
   permanent ones, or *pending* lines of a migration not yet applied to
   production (see above). Entries that no longer differ fail as stale. It
-  currently holds one pending block: the contract 0067 (the 2 `bucket
-  chat-media` lines; applied after the deploy of its PR). The block is
-  deleted when production.txt is refreshed after its apply. Apart from it
-  the replay matches production exactly (re-checked 2026-10-18 after
-  applying 0071, against a fresh read-only production query: 701 lines,
-  md5 `4c8aaa2e5eea2cdfa2af99a288697c26`).
+  currently holds no pending block: the replay matches production exactly
+  (re-checked 2026-10-18 after applying 0067, against a fresh read-only
+  production query: 701 lines, md5 `5a7feadb1272324db7f97d63aad90653`).
 - Not fingerprinted: sequence privileges, column-level privileges, MAINTAIN,
   foreign-table privileges and default privileges (`pg_default_acl`); the
   `relpriv` lines cover only `arwdDxt` on tables and views. Whenever

@@ -14,8 +14,3 @@
 #    migration is applied to production with apply_migration, refresh
 #    production.txt and delete these lines in the same commit.
 #
-
-# pending production apply: 0067_chat_media_private
-# CONTRACT (tracker 1.11, KEA-4): applied only after this PR's build is live and every dashboard tab is reloaded, so the block stays pending through the merge; delete it when production.txt is refreshed after 0067.
-< bucket chat-media public=t size_limit=- mime=-
-> bucket chat-media public=f size_limit=52428800 mime=image/jpeg,image/png,image/webp,audio/aac,audio/amr,audio/mpeg,audio/mp4,audio/ogg,video/mp4,video/3gpp,application/pdf,text/plain,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/octet-stream

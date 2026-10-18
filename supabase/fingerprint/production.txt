@@ -1,4 +1,4 @@
-bucket chat-media public=t size_limit=- mime=-
+bucket chat-media public=f size_limit=52428800 mime=image/jpeg,image/png,image/webp,audio/aac,audio/amr,audio/mpeg,audio/mp4,audio/ogg,video/mp4,video/3gpp,application/pdf,text/plain,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/octet-stream
 bucket documents public=f size_limit=- mime=-
 bucket proposals public=f size_limit=10485760 mime=application/pdf
 col public.app_settings.created_at type=timestamp with time zone notnull=f default=now() identity=- generated=-
