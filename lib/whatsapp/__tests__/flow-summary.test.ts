@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { flowSubmissionSummary } from '@/lib/whatsapp/flow-summary';
+import { contactCardSummary, flowSubmissionSummary } from '@/lib/whatsapp/flow-summary';
 
 // The summary of a Flow submission to another number of the WABA, stored for
 // the operators (the form is unknown to this app). Fake answers only.
@@ -26,6 +26,23 @@ describe('flowSubmissionSummary', () => {
     it('says so when nothing can be read', () => {
         for (const raw of ['bukan json', '[1,2]', '{}', null, undefined, 42]) {
             expect(flowSubmissionSummary(raw)).toBe('📋 Form WhatsApp dikirim (isian tidak terbaca)');
+        }
+    });
+});
+
+describe('contactCardSummary', () => {
+    it('lists each card as name: phones (the typed phone, else the wa_id)', () => {
+        expect(
+            contactCardSummary([
+                { name: { formatted_name: ' Teman Palsu ' }, phones: [{ phone: '+62 800-0000-0099' }, { wa_id: '6280000000098' }] },
+                { name: {}, phones: [] },
+            ]),
+        ).toBe('👤 Kartu kontak dibagikan\nTeman Palsu: +62 800-0000-0099, 6280000000098\ntanpa nama: tanpa nomor');
+    });
+
+    it('says so when nothing can be read', () => {
+        for (const raw of [null, undefined, 'x', [], [null, 3]]) {
+            expect(contactCardSummary(raw)).toBe('👤 Kartu kontak dibagikan (isi tidak terbaca)');
         }
     });
 });

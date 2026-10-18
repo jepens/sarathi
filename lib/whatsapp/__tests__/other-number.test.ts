@@ -1,10 +1,12 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { makeFakeSupabase } from './fakeSupabase';
 import {
+    firstOtherNumberLimitNote,
     firstOtherNumberNote,
     isNewOtherNumber,
     isOtherNumberRow,
     otherNumberLabel,
+    otherNumberLimitNotice,
     otherNumberMetadata,
     otherNumberMode,
     otherNumberNotice,
@@ -51,10 +53,13 @@ describe('otherNumberMode', () => {
         ['process', 'store', undefined],
         [" 'Process' ", 'store', undefined],
         ['store', 'store', undefined],
-        ['proses', 'store', 'proses'],
-        ['off', 'store', 'off'],
-        ['"drop', 'store', 'drop'],
-        ['<script>', 'store', 'script'],
+        ['proses', 'store', '"proses"'],
+        ['off', 'store', '"off"'],
+        ['"drop', 'store', '"drop"'],
+        ['<script>', 'store', '"script"'],
+        // Longer: more likely something pasted into the wrong variable (even a
+        // secret), so only its length is reported.
+        ['EAAG' + 'x'.repeat(60), 'store', 'nilai 64 karakter'],
     ])('%j means %s', (raw, mode, unknownValue) => {
         expect(otherNumberMode(raw)).toEqual(unknownValue === undefined ? { mode } : { mode, unknownValue });
     });
@@ -88,9 +93,26 @@ describe('isNewOtherNumber', () => {
         expect(await isNewOtherNumber(fake.client, other)).toBe(false);
     });
 
-    it('a read error counts as known (the daily alert still comes)', async () => {
-        const fake = makeFakeSupabase({ resolve: () => ({ data: null, error: { code: '57014' } }) });
+    it('a read error counts as known for that event, and the next event looks again', async () => {
+        let fail = true;
+        const fake = makeFakeSupabase({ resolve: () => (fail ? { data: null, error: { code: '57014' } } : { data: [], error: null }) });
         expect(await isNewOtherNumber(fake.client, other)).toBe(false);
+        fail = false;
+        expect(await isNewOtherNumber(fake.client, other)).toBe(true);
+        expect(fake.calls).toHaveLength(2);
+    });
+
+    it('concurrent callers share one lookup and only the first gets true', async () => {
+        let release: (v: { data: unknown[]; error: null }) => void = () => {};
+        const fake = makeFakeSupabase({ resolve: () => new Promise((r) => { release = r; }) });
+        const first = isNewOtherNumber(fake.client, other);
+        const second = isNewOtherNumber(fake.client, other);
+        await Promise.resolve();
+        await Promise.resolve();
+        release({ data: [], error: null });
+        expect(await first).toBe(true);
+        expect(await second).toBe(false);
+        expect(fake.calls).toHaveLength(1);
     });
 });
 
@@ -108,6 +130,15 @@ describe('the note for the operators', () => {
         const bare = otherNumberOf(OTHER, null);
         expect(otherNumberNotice(bare)).toContain(bare.ref);
         expect(otherNumberNotice(bare)).toContain('AI tidak membalasnya');
+        expect(otherNumberNotice(bare)).toContain('kirim template');
+        expect(otherNumberLimitNotice(bare)).toContain('melebihi batas per menit');
+    });
+
+    it('the "over the limit" note comes once a minute per chat', () => {
+        const t0 = Date.parse('2026-10-18T10:00:00Z');
+        expect(firstOtherNumberLimitNote('org:62800', t0)).toBe(true);
+        expect(firstOtherNumberLimitNote('org:62800', t0 + 30_000)).toBe(false);
+        expect(firstOtherNumberLimitNote('org:62800', t0 + 60_000)).toBe(true);
     });
 });
 

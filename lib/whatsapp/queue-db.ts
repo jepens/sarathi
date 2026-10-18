@@ -290,6 +290,9 @@ async function processConversation(jobs: QueueJob[], supabase: SupabaseClient): 
             .select('role, content, wa_message_id, metadata')
             .eq('org_id', orgId)
             .eq('phone_number', phoneNumber)
+            // Not messages to another number of the WABA (below), so they do
+            // not take the 30 places either.
+            .is('metadata->>other_number', null)
             .order('created_at', { ascending: false })
             .limit(30);
 

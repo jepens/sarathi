@@ -6,11 +6,12 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 // WHATSAPP_PHONE_NUMBER_ID reach the webhook too. They are not this org's
 // conversations: dropped by default, or with WHATSAPP_OTHER_NUMBER_EVENTS=
 // process kept in the default org's inbox without AI ("store-only") while the
-// team finds out what such a number is used for. A stored one does not touch
-// last_inbound_at (Meta's 24-hour window is per business number, and the main
-// number has none with this customer), is marked in metadata so the AI
+// team finds out what such a number is used for. A stored one shows in the
+// inbox like any customer message (unread, "Belum dibalas", notifications;
+// it stamps last_inbound_at, so the chat's 24-hour marker follows it although
+// Meta's window is per business number), is marked in metadata so the AI
 // history leaves it out (queue-db.ts), and the chat gets a note for the
-// operators once a day.
+// operators once a day that says so.
 
 export interface OtherNumber {
     /** 'h' + 10 hex of the sha256 of its phone_number_id; never the id itself. */
@@ -32,37 +33,33 @@ export function otherNumberLabel(other: OtherNumber): string {
     return `phone_number_id ${other.ref}${other.last4 ? `; nomor berakhiran ${other.last4}` : ''}`;
 }
 
+const UNKNOWN_ECHO_MAX = 12;
+
 /**
  * WHATSAPP_OTHER_NUMBER_EVENTS: '' or 'drop' (the default) drops the events;
  * 'process' (or 'store') stores them without AI. Surrounding quotes are
  * ignored. Any other value is a typo (e.g. 'proses'): treated as 'process',
- * the side that loses nothing, and reported as unknownValue for an alert.
+ * the side that loses nothing, and described in unknownValue for the alert:
+ * a short value quoted, a longer one (more likely something pasted into the
+ * wrong variable, even a secret) only by its length.
  */
 export function otherNumberMode(raw = process.env.WHATSAPP_OTHER_NUMBER_EVENTS): { mode: 'drop' | 'store'; unknownValue?: string } {
     const value = (raw ?? '').trim().replace(/^(["'])(.*)\1$/, '$2').trim().toLowerCase();
     if (value === '' || value === 'drop') return { mode: 'drop' };
     if (value === 'process' || value === 'store') return { mode: 'store' };
-    return { mode: 'store', unknownValue: value.replace(/[^a-z0-9_-]/g, '').slice(0, 40) };
+    const unknownValue = value.length <= UNKNOWN_ECHO_MAX
+        ? `"${value.replace(/[^a-z0-9_-]/g, '')}"`
+        : `nilai ${value.length} karakter`;
+    return { mode: 'store', unknownValue };
 }
 
-// Numbers this server process already looked up (a WABA has a handful).
-const checked = new Set<string>();
-const CHECKED_MAX = 100;
+// The lookup of each number this server process has looked up or is looking
+// up (a WABA has a handful).
+const lookups = new Map<string, Promise<boolean>>();
+const LOOKUPS_MAX = 100;
 const SEEN_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
-/**
- * Whether no webhook_unrouted event named this number in the last 7 days: a
- * number new to the WABA, or the app's own number when WHATSAPP_PHONE_NUMBER_ID
- * is wrong. Such a number is alerted within the hour (webhook_unrouted_new); a
- * known one only daily. Call it before this event is recorded. Looked up once
- * per number per server process; a read error counts as known (the daily
- * alert still comes). ops_events keeps one example detail per minute, so a
- * number whose events always share their minute with another number's may
- * look new again after a restart: an extra email, never a missing one.
- */
-export async function isNewOtherNumber(client: SupabaseClient, other: OtherNumber, now = Date.now()): Promise<boolean> {
-    if (checked.has(other.ref)) return false;
-    if (checked.size < CHECKED_MAX) checked.add(other.ref);
+async function lookUpNew(client: SupabaseClient, other: OtherNumber, now: number): Promise<boolean> {
     const { data, error } = await client
         .from('ops_events')
         .select('id')
@@ -70,31 +67,80 @@ export async function isNewOtherNumber(client: SupabaseClient, other: OtherNumbe
         .like('detail', `phone_number_id ${other.ref};%`)
         .gte('minute', new Date(now - SEEN_WINDOW_MS).toISOString())
         .limit(1);
-    if (error) return false;
+    if (error) throw error;
     return !data || data.length === 0;
+}
+
+/**
+ * Whether no webhook_unrouted event named this number in the last 7 days: a
+ * number new to the WABA, or the app's own number when WHATSAPP_PHONE_NUMBER_ID
+ * is wrong. Such a number is alerted within the hour (webhook_unrouted_new); a
+ * known one only daily. Call it before this event is recorded: concurrent
+ * deliveries of the same number wait for one lookup, and only the first of
+ * them gets true, so no event of this number is recorded before the lookup
+ * ran. Looked up once per number per server process (a restart looks again);
+ * a read error counts as known for that event (the daily alert still comes)
+ * and the next event looks again. ops_events keeps one example detail per
+ * minute, so a number whose events always share their minute with another
+ * number's may look new again after a restart: an extra email, never a
+ * missing one.
+ */
+export async function isNewOtherNumber(client: SupabaseClient, other: OtherNumber, now = Date.now()): Promise<boolean> {
+    const pending = lookups.get(other.ref);
+    if (pending) {
+        await pending.catch(() => false);
+        return false;
+    }
+    const lookup = lookUpNew(client, other, now);
+    if (lookups.size < LOOKUPS_MAX) lookups.set(other.ref, lookup);
+    try {
+        return await lookup;
+    } catch {
+        lookups.delete(other.ref);
+        return false;
+    }
 }
 
 const notes = new Map<string, number>();
 const NOTE_EVERY_MS = 24 * 60 * 60 * 1000;
+const limitNotes = new Map<string, number>();
+const LIMIT_NOTE_EVERY_MS = 60 * 1000;
 const NOTES_MAX = 1000;
+
+function firstIn(map: Map<string, number>, everyMs: number, key: string, now: number): boolean {
+    const last = map.get(key);
+    if (last !== undefined && now - last < everyMs) return false;
+    if (map.size >= NOTES_MAX) map.clear();
+    map.set(key, now);
+    return true;
+}
 
 /** Whether this chat gets the other-number note now: once a day per chat and server process. */
 export function firstOtherNumberNote(chatKey: string, now = Date.now()): boolean {
-    const last = notes.get(chatKey);
-    if (last !== undefined && now - last < NOTE_EVERY_MS) return false;
-    if (notes.size >= NOTES_MAX) notes.clear();
-    notes.set(chatKey, now);
-    return true;
+    return firstIn(notes, NOTE_EVERY_MS, chatKey, now);
+}
+
+/** Whether this chat gets the "over the rate limit" note now: once a minute per chat and server process. */
+export function firstOtherNumberLimitNote(chatKey: string, now = Date.now()): boolean {
+    return firstIn(limitNotes, LIMIT_NOTE_EVERY_MS, chatKey, now);
+}
+
+function numberName(other: OtherNumber): string {
+    return other.last4 ? `nomor berakhiran ${other.last4}` : `nomor lain (${other.ref})`;
 }
 
 /** The note for the operators in a chat that received a store-only message. */
 export function otherNumberNotice(other: OtherNumber): string {
-    const which = other.last4 ? `nomor berakhiran ${other.last4}` : `nomor lain (${other.ref})`;
     return (
-        `Pesan dari kontak ini masuk ke ${which}, nomor WhatsApp lain di WABA ini, bukan nomor utama Sarathi. ` +
-        'AI tidak membalasnya. Balasan dari dashboard terkirim dari nomor utama; bila kontak belum mengirim pesan ke ' +
-        'nomor utama dalam 24 jam terakhir, hanya template yang bisa dikirim.'
+        `Pesan dari kontak ini masuk ke ${numberName(other)}, nomor WhatsApp lain di WABA ini, bukan nomor utama Sarathi. ` +
+        'AI tidak membalasnya. Balasan dari dashboard terkirim dari nomor utama, dan tanda 24 jam chat ini ikut pesan ke ' +
+        'nomor lain itu: bila kontak belum mengirim pesan ke nomor utama dalam 24 jam terakhir, kirim template (pesan biasa ditolak Meta).'
     );
+}
+
+/** The note when messages to another number were over the contact's rate limit and not stored. */
+export function otherNumberLimitNotice(other: OtherNumber): string {
+    return `Pesan dari kontak ini ke ${numberName(other)} melebihi batas per menit; sebagian tidak disimpan.`;
 }
 
 /** whatsapp_messages.metadata of a stored message from another number. */
@@ -111,8 +157,9 @@ export function isOtherNumberRow(metadata: unknown): boolean {
     );
 }
 
-/** Tests only: forget the numbers looked up and the notes written. */
+/** Tests only: forget the lookups and the notes. */
 export function resetOtherNumberState(): void {
-    checked.clear();
+    lookups.clear();
     notes.clear();
+    limitNotes.clear();
 }

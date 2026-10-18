@@ -11,11 +11,13 @@ import { webhookSummary } from '@/lib/whatsapp/webhook-summary';
 import { logSystemMessage } from '@/lib/whatsapp/history';
 import { sendPushToOrg } from '@/lib/notifications/web-push';
 import { handleFlowReply } from '@/lib/whatsapp/flow-response';
-import { flowSubmissionSummary } from '@/lib/whatsapp/flow-summary';
+import { contactCardSummary, flowSubmissionSummary } from '@/lib/whatsapp/flow-summary';
 import {
+    firstOtherNumberLimitNote,
     firstOtherNumberNote,
     isNewOtherNumber,
     otherNumberLabel,
+    otherNumberLimitNotice,
     otherNumberMetadata,
     otherNumberMode,
     otherNumberNotice,
@@ -240,18 +242,18 @@ async function handleInboundMedia(params: InboundMediaParams): Promise<void> {
         const nowIso = new Date().toISOString();
 
         // Chat summary + 24h-window reset. last_inbound_at is set on the inbound
-        // path only, and not for a file sent to another number of the WABA
-        // (lib/whatsapp/other-number.ts). bsuid / verified_phone recorded when
-        // Meta revealed them. .select() returns the row so we get contact_name
-        // for the push in one trip.
+        // path only (for a file sent to another number of the WABA too, for the
+        // inbox cues: lib/whatsapp/other-number.ts). bsuid / verified_phone
+        // recorded when Meta revealed them. .select() returns the row so we get
+        // contact_name for the push in one trip.
         const chatPatch: Record<string, unknown> = {
             org_id: orgId,
             phone_number: contactKey,
             last_message: summary,
             last_message_at: nowIso,
+            last_inbound_at: nowIso,
             updated_at: nowIso,
         };
-        if (!other) chatPatch.last_inbound_at = nowIso;
         if (bsuid) chatPatch.bsuid = bsuid;
         if (waId) chatPatch.verified_phone = waId;
         const { data: chatRow, error: chatErr } = await supabase
@@ -291,7 +293,7 @@ async function handleInboundMedia(params: InboundMediaParams): Promise<void> {
 
         whatsappLogger.info(`Inbound ${kind} stored for ${contactKey}`);
         if (other && firstOtherNumberNote(`${orgId}:${contactKey}`)) {
-            await logSystemMessage(orgId, contactKey, otherNumberNotice(other));
+            await logSystemMessage(orgId, contactKey, otherNumberNotice(other), { touchChat: false });
         }
 
         // Per-chat unread badge: atomic increment (best-effort).
@@ -318,28 +320,33 @@ async function handleInboundMedia(params: InboundMediaParams): Promise<void> {
     }
 }
 
-// A WhatsApp Flow submission to another number of the WABA (store-only): kept
-// for the operators as a summary of its answers, with the chat summary, the
-// unread badge and the push of any inbound message. Not the Brief Acara
-// handling of flow-response.ts: no lead, no confirmation (it would go out from
-// the main number) and no last_inbound_at (lib/whatsapp/other-number.ts).
-async function storeOtherNumberFlow(params: {
+// A Flow submission or a contact card sent to another number of the WABA
+// (store-only): kept for the operators as a readable row, with the chat
+// summary, the unread badge and the push of any inbound message. Nothing acts
+// on it: no Brief Acara lead or confirmation (flow-response.ts; it would go
+// out from the main number), no verified_phone taken from a shared card.
+async function storeOtherNumberMessage(params: {
     supabase: SupabaseClient;
     orgId: string;
     contactKey: string;
     bsuid: string | null;
     waId: string | null;
     inboundWamid: string | null;
-    responseJson: unknown;
+    content: string;
+    /** The chat-list preview and the push body. */
+    preview: string;
     other: OtherNumber;
 }): Promise<void> {
-    const { supabase, orgId, contactKey, bsuid, waId, inboundWamid, responseJson, other } = params;
+    const { supabase, orgId, contactKey, bsuid, waId, inboundWamid, content, preview, other } = params;
     const nowIso = new Date().toISOString();
+    // last_inbound_at: an inbound message for the inbox cues (see
+    // lib/whatsapp/other-number.ts; the note explains the 24-hour marker).
     const chatPatch: Record<string, unknown> = {
         org_id: orgId,
         phone_number: contactKey,
-        last_message: '📋 Mengisi form WhatsApp',
+        last_message: preview,
         last_message_at: nowIso,
+        last_inbound_at: nowIso,
         updated_at: nowIso,
     };
     if (bsuid) chatPatch.bsuid = bsuid;
@@ -349,41 +356,41 @@ async function storeOtherNumberFlow(params: {
         .upsert(chatPatch, { onConflict: 'org_id,phone_number' })
         .select('contact_name')
         .maybeSingle<{ contact_name: string | null }>();
-    if (chatErr) whatsappLogger.error('Error updating chat summary (Flow submission to another number)', chatErr);
+    if (chatErr) whatsappLogger.error('Error updating chat summary (message to another number)', chatErr);
 
     // wa_message_id makes a redelivery a 23505 instead of a second row.
     const { error: msgErr } = await supabase.from('whatsapp_messages').insert({
         org_id: orgId,
         phone_number: contactKey,
         role: 'user',
-        content: flowSubmissionSummary(responseJson),
+        content,
         wa_message_id: inboundWamid,
         metadata: otherNumberMetadata(other),
     });
     if (msgErr) {
         if (msgErr.code === '23505') {
-            whatsappLogger.info(`Duplicate Flow submission ${inboundWamid} to another number — already stored, skipping`);
+            whatsappLogger.info(`Duplicate message ${inboundWamid} to another number — already stored, skipping`);
         } else {
-            whatsappLogger.error('Error inserting a Flow submission to another number', msgErr);
+            whatsappLogger.error('Error inserting a message to another number', msgErr);
         }
         return;
     }
-    whatsappLogger.info(`Flow submission to another number of the WABA stored for ${contactKey} (no AI, no confirmation)`);
+    whatsappLogger.info(`Message to another number of the WABA stored for ${contactKey} (nothing sent, nothing acted on)`);
     if (firstOtherNumberNote(`${orgId}:${contactKey}`)) {
-        await logSystemMessage(orgId, contactKey, otherNumberNotice(other));
+        await logSystemMessage(orgId, contactKey, otherNumberNotice(other), { touchChat: false });
     }
     const { error: unreadErr } = await supabase.rpc('bump_unread', { p_org: orgId, p_phone: contactKey });
-    if (unreadErr) whatsappLogger.error('Failed to bump unread_count (Flow submission to another number)', unreadErr);
+    if (unreadErr) whatsappLogger.error('Failed to bump unread_count (message to another number)', unreadErr);
     if (inboundWamid) {
         try {
             await sendPushToOrg(supabase, orgId, {
                 title: chatRow?.contact_name || contactKey,
-                body: '📋 Mengisi form WhatsApp',
+                body: preview,
                 phone: contactKey,
                 url: `/dashboard/chats?phone=${encodeURIComponent(contactKey)}`,
             });
         } catch (pushErr) {
-            whatsappLogger.error('Web push fan-out failed (Flow submission to another number)', pushErr);
+            whatsappLogger.error('Web push fan-out failed (message to another number)', pushErr);
         }
     }
 }
@@ -524,12 +531,14 @@ export async function POST(request: Request) {
                 const otherNumbers = otherNumberMode();
                 if (otherNumbers.unknownValue !== undefined) {
                     await recordOpsEvent(supabase, 'webhook_unconfigured', {
-                        detail: `WHATSAPP_OTHER_NUMBER_EVENTS tidak dikenal ("${otherNumbers.unknownValue}"): diperlakukan sebagai process, event nomor lain disimpan tanpa AI`,
+                        detail: `WHATSAPP_OTHER_NUMBER_EVENTS tidak dikenal (${otherNumbers.unknownValue}): diperlakukan sebagai process, pesan nomor lain disimpan tanpa AI`,
                     });
                 }
+                // 'diproses': in process mode a message is stored (within the
+                // contact's rate limit); a status update only updates our rows.
                 const outcome = otherNumbers.mode === 'drop'
                     ? 'dibuang'
-                    : 'disimpan di inbox tanpa balasan AI (WHATSAPP_OTHER_NUMBER_EVENTS=process)';
+                    : 'diproses tanpa AI, pesan disimpan di inbox (WHATSAPP_OTHER_NUMBER_EVENTS=process)';
                 // Looked up before this event is recorded.
                 if (await isNewOtherNumber(supabase, other)) {
                     await recordOpsEvent(supabase, 'webhook_unrouted_new', { detail: `${otherNumberLabel(other)}; ${outcome}` });
@@ -675,7 +684,23 @@ export async function POST(request: Request) {
                 // When a customer taps the REQUEST_CONTACT_INFO button (or sends
                 // a contact card), Meta delivers a `contacts`-type message with
                 // the shared phone. Capture it into verified_phone and stop —
-                // no AI reply needed for a contact share.
+                // no AI reply needed for a contact share. A card sent to another
+                // number of the WABA (store-only) is only stored for the
+                // operators: it was not an answer to this number's request.
+                if (messageType === 'contacts' && storeOnly) {
+                    await storeOtherNumberMessage({
+                        supabase,
+                        orgId: waCtx.orgId,
+                        contactKey,
+                        bsuid,
+                        waId,
+                        inboundWamid,
+                        content: contactCardSummary(message.contacts),
+                        preview: '👤 Kartu kontak',
+                        other: storeOnly,
+                    });
+                    return new NextResponse('EVENT_RECEIVED', { status: 200 });
+                }
                 if (messageType === 'contacts') {
                     const shared = Array.isArray(message.contacts) ? message.contacts[0] : null;
                     const phones = shared && Array.isArray(shared.phones) ? shared.phones : [];
@@ -723,14 +748,15 @@ export async function POST(request: Request) {
                 if (messageType === 'interactive') {
                     const interactive = message.interactive;
                     if (interactive?.type === 'nfm_reply' && interactive.nfm_reply && storeOnly) {
-                        await storeOtherNumberFlow({
+                        await storeOtherNumberMessage({
                             supabase,
                             orgId: waCtx.orgId,
                             contactKey,
                             bsuid,
                             waId,
                             inboundWamid,
-                            responseJson: interactive.nfm_reply.response_json,
+                            content: flowSubmissionSummary(interactive.nfm_reply.response_json),
+                            preview: '📋 Mengisi form WhatsApp',
                             other: storeOnly,
                         });
                     } else if (interactive?.type === 'nfm_reply' && interactive.nfm_reply) {
@@ -803,12 +829,17 @@ export async function POST(request: Request) {
                     // for that number). Pass service role client to bypass RLS.
                     // A message to another number of the WABA (store-only) has its
                     // own bucket, so a flood there does not limit this customer on
-                    // the main number; over the limit it is not stored, and no
-                    // warning is sent (it would come from the main number).
+                    // the main number; over the limit it is not stored (like an
+                    // over-limit message to the main number), no warning is sent
+                    // (it would come from the main number), and the chat gets a
+                    // note once a minute so the operators know messages are missing.
                     const rateKey = storeOnly ? `${waCtx.orgId}:other:${contactKey}` : `${waCtx.orgId}:${contactKey}`;
                     const allowed = await checkRateLimit(rateKey, supabase);
                     if (!allowed && storeOnly) {
                         whatsappLogger.warn(`Rate limit exceeded for ${contactKey} on another number of the WABA — not stored, nothing sent`);
+                        if (firstOtherNumberLimitNote(`${waCtx.orgId}:${contactKey}`)) {
+                            await logSystemMessage(waCtx.orgId, contactKey, otherNumberLimitNotice(storeOnly), { touchChat: false });
+                        }
                         return new NextResponse('EVENT_RECEIVED', { status: 200 });
                     }
                     if (!allowed) {
@@ -897,19 +928,20 @@ export async function POST(request: Request) {
                             // (and ONLY here, on the inbound path) because the
                             // 24-hour customer service window resets every time
                             // the customer messages us. Outbound sends must not
-                            // touch it, nor a message to another number of the
-                            // WABA (the window is per business number). bsuid is
-                            // recorded so we can re-thread this contact later even
-                            // if they arrive phone-less.
+                            // touch it. A message to another number of the WABA
+                            // sets it too, for the inbox cues (see
+                            // lib/whatsapp/other-number.ts; its note explains the
+                            // marker). bsuid is recorded so we can re-thread this
+                            // contact later even if they arrive phone-less.
                             const inboundNow = new Date().toISOString();
                             const chatPatch: Record<string, unknown> = {
                                 org_id: waCtx.orgId,
                                 phone_number: contactKey,
                                 last_message: messageBody,
                                 last_message_at: inboundNow,
+                                last_inbound_at: inboundNow,
                                 updated_at: inboundNow,
                             };
-                            if (!storeOnly) chatPatch.last_inbound_at = inboundNow;
                             if (bsuid) chatPatch.bsuid = bsuid;
                             // Catch-all phone recovery: if Meta revealed a real
                             // phone on this webhook, keep it as verified_phone.
@@ -956,9 +988,10 @@ export async function POST(request: Request) {
                                     await logSystemMessage(waCtx.orgId, contactKey, inboundQuotaNotice(refusedByQuota), { touchChat: false });
                                 }
                                 // A message to another number of the WABA: tell
-                                // the operators, once a day per chat.
+                                // the operators, once a day per chat, keeping the
+                                // chat unanswered.
                                 if (storeOnly && firstOtherNumberNote(`${waCtx.orgId}:${contactKey}`)) {
-                                    await logSystemMessage(waCtx.orgId, contactKey, otherNumberNotice(storeOnly));
+                                    await logSystemMessage(waCtx.orgId, contactKey, otherNumberNotice(storeOnly), { touchChat: false });
                                 }
 
                                 // Per-chat unread badge: atomic increment (only on

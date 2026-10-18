@@ -6,8 +6,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // content type, media_url holds that bare key and media_mime keeps Meta's
 // original type; a file above the bucket limit is not uploaded at all while
 // the message is still recorded (media_url null); a file sent to another
-// number of the WABA in process mode is stored without the 24-hour window,
-// marked for the AI history, with a note. Everything around the
+// number of the WABA in process mode is stored like any inbound file, marked
+// for the AI history, with a note that keeps the chat unanswered. Everything around the
 // webhook (signature, credentials, Meta download, push) is stubbed; the media
 // handler runs fire-and-forget after the 200, so the tests wait for its insert.
 // Fake ids and phones only.
@@ -177,7 +177,7 @@ describe('webhook inbound media: the chat-media copy', () => {
         expect(h.upserts.find((u) => u.table === 'whatsapp_chats')!.row).toHaveProperty('last_inbound_at');
     });
 
-    it('a file sent to another number of the WABA (process mode): no 24-hour window, marked for the AI history, one note', async () => {
+    it('a file sent to another number of the WABA (process mode): marked for the AI history, one note that keeps the chat unanswered', async () => {
         vi.stubEnv('WHATSAPP_OTHER_NUMBER_EVENTS', 'process');
         h.download.mockResolvedValue({ bytes: new Uint8Array([1, 2, 3]), mime: 'image/jpeg', size: 3 });
 
@@ -185,11 +185,11 @@ describe('webhook inbound media: the chat-media copy', () => {
 
         expect(row).toMatchObject({ org_id: ORG, role: 'user', media_type: 'image', metadata: { other_number: expect.stringMatching(/^h[0-9a-f]{10}$/) } });
         const chat = h.upserts.find((u) => u.table === 'whatsapp_chats')!.row;
-        expect(chat).toMatchObject({ org_id: ORG, phone_number: PHONE });
-        expect(chat).not.toHaveProperty('last_inbound_at');
+        expect(chat).toMatchObject({ org_id: ORG, phone_number: PHONE, last_inbound_at: expect.any(String) });
         await vi.waitFor(() => expect(h.rpcs).toContain('bump_unread'));
         expect(logSystemMessage).toHaveBeenCalledTimes(1);
         expect(vi.mocked(logSystemMessage).mock.calls[0][2]).toContain('nomor WhatsApp lain');
+        expect(vi.mocked(logSystemMessage).mock.calls[0][3]).toEqual({ touchChat: false });
     });
 
     it('stores an unknown document type as application/octet-stream (a download), media_mime unchanged', async () => {

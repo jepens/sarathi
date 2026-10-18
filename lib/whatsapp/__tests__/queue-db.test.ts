@@ -627,6 +627,8 @@ describe('processQueue — history around the burst (tracker 3.4)', () => {
         expect(history).toEqual([{ role: 'assistant', content: 'jawaban lama' }]);
         const select = fake.calls.find((c) => c.table === 'whatsapp_messages' && c.op === 'select')!;
         expect(select.select).toContain('metadata');
+        // Left out in the query too, so they do not take the 30 places.
+        expect(select.filters).toContainEqual(['is', 'metadata->>other_number', null]);
     });
 
     it('skips a photo without a caption instead of sending an empty turn', async () => {
