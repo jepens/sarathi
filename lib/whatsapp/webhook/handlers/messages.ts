@@ -74,7 +74,7 @@ export async function handleInboundMessage(params: {
 
     // A phone-hidden payload with neither a phone nor a BSUID is
     // unroutable — ack so Meta doesn't retry-storm, and skip (never
-    // let an undefined key reach the phone_number PK writes below).
+    // let an undefined key reach the handlers' phone_number PK writes).
     if (!contactKey) {
         whatsappLogger.warn(`Inbound ${messageType} message has no usable identity (no phone, no BSUID) — acking without processing`);
         return;

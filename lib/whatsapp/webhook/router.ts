@@ -12,7 +12,9 @@ import { recordOpsEvent } from '@/lib/ops/events';
 import type { MetaJson } from '@/lib/whatsapp/webhook/types';
 
 // Which number of the WABA an event is for: this app's own (handled), or
-// another one (dropped or only stored).
+// another one (dropped or only stored). The caller must already have
+// answered 503 for an unusable WHATSAPP_PHONE_NUMBER_ID: envWebhookApp then
+// returns an empty id, and every event would look like another number's.
 
 export type ChangeRoute = { route: 'main' } | { route: 'dropped' } | { route: 'store_only'; other: OtherNumber };
 
@@ -25,8 +27,7 @@ export type ChangeRoute = { route: 'main' } | { route: 'dropped' } | { route: 's
 // automatic send. Either way the team is told: within the hour for a
 // number not seen in the last 7 days (a new number, or this app's
 // own number under a wrong WHATSAPP_PHONE_NUMBER_ID), daily after
-// that. Without a usable number id nothing can be routed: 503 (Meta
-// retries once it is fixed) and an alert.
+// that.
 export async function routeOtherNumber(supabase: SupabaseClient, webhookApp: WebhookApp, metadata: MetaJson): Promise<ChangeRoute> {
     const phoneNumberId = metadata?.phone_number_id;
     if (phoneNumberId !== undefined && phoneNumberId !== null && String(phoneNumberId) !== webhookApp.phoneNumberId) {

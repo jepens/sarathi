@@ -83,6 +83,8 @@ export async function processWebhook(request: Request): Promise<NextResponse> {
             const change = body.entry?.[0]?.changes?.[0];
             const metadata = change?.value?.metadata;
 
+            // Without a usable number id nothing can be routed: 503 (Meta
+            // retries once it is fixed) and an alert.
             if (!webhookApp.phoneNumberId) {
                 const notDigits = webhookApp.phoneNumberIdProblem === 'not_digits';
                 whatsappLogger.error(`Webhook cannot route: WHATSAPP_PHONE_NUMBER_ID is ${notDigits ? 'not a phone number id (digits only)' : 'not set'}`);

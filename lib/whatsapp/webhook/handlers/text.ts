@@ -211,7 +211,7 @@ export async function handleTextMessage(ctx: InboundMessageContext): Promise<voi
                     // insert above: the wamid unique index dedups Meta's
                     // at-least-once redeliveries (23505), so each message
                     // pushes exactly once. A wamid-less message (rare, and
-                    // logged as an anomaly above) has no idempotency key —
+                    // logged in handlers/messages.ts) has no idempotency key —
                     // its insert isn't deduped, so we skip the push rather
                     // than risk a double-notify on redelivery. Best-effort:
                     // a push failure must never affect message storage.
