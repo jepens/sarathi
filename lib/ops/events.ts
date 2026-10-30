@@ -14,6 +14,8 @@ export type OpsEventKind =
     | 'webhook_unrouted'
     | 'webhook_unrouted_new'
     | 'webhook_unconfigured'
+    | 'webhook_payload_invalid'
+    | 'webhook_deferred'
     | 'queue_job_failed'
     | 'whatsapp_token_invalid'
     | 'quota_inbound_exceeded'

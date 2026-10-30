@@ -26,18 +26,21 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 const ALERT_EVERY_S = 60 * 60;
 // Kinds whose events are expected to recur (e.g. the traffic of a number that
-// is not routed) and are emailed at most once a day.
-export const DAILY_ALERT_KINDS: string[] = ['webhook_unrouted'];
+// is not routed, or a webhook batch deferred under load: Meta sends it again)
+// and are emailed at most once a day.
+export const DAILY_ALERT_KINDS: string[] = ['webhook_unrouted', 'webhook_deferred'];
 const DAILY_HOUR_WIB = 8;
 const WIB_OFFSET_MS = 7 * 60 * 60 * 1000; // Asia/Jakarta has no daylight saving
 const ADDRESS_RE = /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/;
 
 export const OPS_KIND_LABELS: Record<string, string> = {
     webhook_signature_invalid: 'Webhook WhatsApp ditolak: tanda tangan tidak valid (403)',
-    webhook_error: 'Webhook WhatsApp gagal diproses (500)',
+    webhook_error: 'Webhook WhatsApp gagal diproses (503/500, Meta mengirim ulang)',
     webhook_unrouted: 'Webhook untuk nomor lain di WABA (bukan nomor org ini)',
     webhook_unrouted_new: 'Nomor lain di WABA mengirim event untuk pertama kali dalam 7 hari (bila ini nomor utama, periksa WHATSAPP_PHONE_NUMBER_ID)',
     webhook_unconfigured: 'Konfigurasi webhook WhatsApp bermasalah',
+    webhook_payload_invalid: 'Pesan WhatsApp tidak bisa diproses: disimpan sebagai pengganti tanpa isi, atau dilewati',
+    webhook_deferred: 'Webhook WhatsApp menunda sebagian event karena batas waktu (503, Meta mengirim ulang)',
     queue_job_failed: 'Balasan AI gagal setelah semua percobaan',
     whatsapp_token_invalid: 'Token WhatsApp tidak valid atau kedaluwarsa (Meta 190)',
     quota_inbound_exceeded: 'Kuota percakapan AI baru per menit tercapai: percakapan baru di menit itu tidak dibalas AI',

@@ -79,9 +79,7 @@ vi.mock('@/lib/whatsapp/client', () => ({
     sendWhatsAppMessage: vi.fn(),
 }));
 vi.mock('@/lib/notifications/web-push', () => ({ sendPushToOrg: h.sendPushToOrg }));
-vi.mock('@/lib/whatsapp/rate-limiter-db', () => ({ checkRateLimit: vi.fn(async () => true) }));
 vi.mock('@/lib/whatsapp/queue-db', () => ({
-    enqueueMessage: vi.fn(),
     processQueue: vi.fn(async () => {}),
     getDebounceSeconds: () => 0,
 }));

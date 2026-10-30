@@ -684,9 +684,12 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
 
     // ---- Reply / quote ----
     // Resolve a quoted message locally by matching reply_to_wamid to wa_message_id.
+    // System notes are skipped: a note can carry the wamid of the customer
+    // message it is about (a contact card's note), and a quote must show that
+    // message, not the note.
     const messageByWamid = useMemo(() => {
         const map = new Map<string, Message>();
-        for (const m of messages) if (m.wa_message_id) map.set(m.wa_message_id, m);
+        for (const m of messages) if (m.wa_message_id && m.role !== 'system') map.set(m.wa_message_id, m);
         return map;
     }, [messages]);
 

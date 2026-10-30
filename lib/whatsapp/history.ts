@@ -13,12 +13,24 @@ import { whatsappLogger } from '@/lib/utils/logger';
 // last_inbound_at as answered. The chat row is still created when missing
 // (the note's foreign key), e.g. when the queue answers a new contact before
 // the webhook's background store has written the chat.
+//
+// waMessageId keys the note to the inbound message it is about (the webhook's
+// contact-card note, D23-3): the unique index on (org_id, wa_message_id,
+// role) then turns a second note for the same message, from a redelivery,
+// into a 23505, reported as 'duplicate'.
+
+export interface SystemMessageResult {
+    status: 'stored' | 'duplicate' | 'failed';
+    /** The database or client error of a 'failed' note. */
+    error?: unknown;
+}
+
 export async function logSystemMessage(
     orgId: string,
     phoneNumber: string,
     content: string,
-    opts: { touchChat?: boolean } = {},
-) {
+    opts: { touchChat?: boolean; waMessageId?: string } = {},
+): Promise<SystemMessageResult> {
     try {
         const supabase = await createServiceOrServerClient();
 
@@ -48,11 +60,20 @@ export async function logSystemMessage(
                 org_id: orgId,
                 phone_number: phoneNumber,
                 role: 'system',
-                content: content
+                content: content,
+                ...(opts.waMessageId ? { wa_message_id: opts.waMessageId } : {}),
             });
-        if (noteError) whatsappLogger.error('System message could not be stored', noteError);
+        if (noteError) {
+            if (opts.waMessageId && (noteError as { code?: unknown }).code === '23505') {
+                return { status: 'duplicate' };
+            }
+            whatsappLogger.error('System message could not be stored', noteError);
+            return { status: 'failed', error: noteError };
+        }
+        return { status: 'stored' };
 
     } catch (error) {
         whatsappLogger.error('Failed to log system message', error);
+        return { status: 'failed', error };
     }
 }

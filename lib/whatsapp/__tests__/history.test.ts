@@ -5,7 +5,9 @@ import { makeFakeSupabase, type FakeSupabase } from './fakeSupabase';
 // chat's latest activity (last_message / last_message_at); with touchChat:
 // false the chat row is only created when missing (the note's foreign key),
 // so a chat whose customer message still needs a human reply keeps its
-// "Belum dibalas" state. Write errors are logged. Fake ids only.
+// "Belum dibalas" state. Keyed by waMessageId, a second note for the same
+// inbound message is a 23505, reported as 'duplicate' (the webhook's contact
+// card note, D23-3). Write errors are logged and reported. Fake ids only.
 
 const h = vi.hoisted(() => ({ fake: null as unknown as FakeSupabase, error: vi.fn() }));
 vi.mock('@/lib/supabase/service', () => ({ createServiceOrServerClient: async () => h.fake.client }));
@@ -23,7 +25,7 @@ beforeEach(() => {
 
 describe('logSystemMessage', () => {
     it("by default makes the note the chat's latest activity and stores it in the thread", async () => {
-        await logSystemMessage(ORG, PHONE, 'Catatan uji');
+        expect(await logSystemMessage(ORG, PHONE, 'Catatan uji')).toEqual({ status: 'stored' });
         expect(h.fake.calls.map((c) => [c.table, c.op])).toEqual([
             ['whatsapp_chats', 'upsert'],
             ['whatsapp_messages', 'insert'],
@@ -51,11 +53,45 @@ describe('logSystemMessage', () => {
         expect(h.fake.calls.map((c) => c.table)).toEqual(['whatsapp_chats', 'whatsapp_messages']);
     });
 
-    it('logs a note the database refused', async () => {
+    it('logs a note the database refused, and reports it as failed with the error', async () => {
         h.fake = makeFakeSupabase({
             resolve: (c) => (c.table === 'whatsapp_messages' ? { data: null, error: { code: '23503' } } : { data: null, error: null }),
         });
-        await logSystemMessage(ORG, PHONE, 'Catatan uji', { touchChat: false });
+        expect(await logSystemMessage(ORG, PHONE, 'Catatan uji', { touchChat: false })).toEqual({
+            status: 'failed',
+            error: { code: '23503' },
+        });
         expect(h.error).toHaveBeenCalledWith('System message could not be stored', { code: '23503' });
+    });
+
+    it('keys the note to an inbound message when given, and only then', async () => {
+        await logSystemMessage(ORG, PHONE, 'Catatan uji', { touchChat: false, waMessageId: 'wamid.fake-card-1' });
+        expect(h.fake.calls[1].payload).toEqual({
+            org_id: ORG,
+            phone_number: PHONE,
+            role: 'system',
+            content: 'Catatan uji',
+            wa_message_id: 'wamid.fake-card-1',
+        });
+        h.fake = makeFakeSupabase({});
+        await logSystemMessage(ORG, PHONE, 'Catatan uji', { touchChat: false });
+        expect(h.fake.calls[1].payload).not.toHaveProperty('wa_message_id');
+    });
+
+    it("a second note for the same inbound message (23505) is a 'duplicate', not an error", async () => {
+        h.fake = makeFakeSupabase({
+            resolve: (c) => (c.table === 'whatsapp_messages' ? { data: null, error: { code: '23505' } } : { data: null, error: null }),
+        });
+        expect(await logSystemMessage(ORG, PHONE, 'Catatan uji', { touchChat: false, waMessageId: 'wamid.fake-card-1' })).toEqual({
+            status: 'duplicate',
+        });
+        expect(h.error).not.toHaveBeenCalled();
+    });
+
+    it('never throws: a client that cannot be created is a failed note', async () => {
+        h.fake = { client: null, calls: [], rpcCalls: [] } as unknown as FakeSupabase;
+        const result = await logSystemMessage(ORG, PHONE, 'Catatan uji');
+        expect(result.status).toBe('failed');
+        expect(h.error).toHaveBeenCalledWith('Failed to log system message', expect.anything());
     });
 });

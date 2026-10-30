@@ -5,7 +5,12 @@ import { logSystemMessage } from '@/lib/whatsapp/history';
 import { sendPushToOrg } from '@/lib/notifications/web-push';
 import { firstOtherNumberNote, otherNumberMetadata, otherNumberNotice, type OtherNumber } from '@/lib/whatsapp/other-number';
 import { CHAT_MEDIA_BUCKET, CHAT_MEDIA_MAX_BYTES, safePhoneSegment, storageContentType } from '@/lib/storage/chat-media';
-import type { InboundMessageContext } from '@/lib/whatsapp/webhook/handlers/messages';
+import { resolveContactKey } from '@/lib/whatsapp/webhook/contact';
+import { MalformedPayloadError } from '@/lib/whatsapp/webhook/errors';
+import { isRecord } from '@/lib/whatsapp/webhook/payload';
+import { runInBackground } from '@/lib/whatsapp/webhook/background';
+import type { ItemResult } from '@/lib/whatsapp/webhook/outcome';
+import type { MessageContext } from '@/lib/whatsapp/webhook/types';
 
 // A photo, document, voice note, video or sticker from the customer: stored for
 // the admin, without the AI.
@@ -192,46 +197,48 @@ export async function handleInboundMedia(params: InboundMediaParams): Promise<vo
     }
 }
 
-export function handleMediaMessage(ctx: InboundMessageContext): void {
-    const { supabase, waCtx, message, messageType, contactKey, bsuid, waId, inboundWamid, inboundContextId, storeOnly } = ctx;
+export async function handleMediaMessage(ctx: MessageContext): Promise<ItemResult> {
+    const { supabase, waCtx, message, type, identity, storeOnly } = ctx;
 
     // ===== Inbound media (customer sent a photo / document / voice note / video) =====
     // The AI can't "see" media, so it stays silent (manual mode): we
     // download the file, store it in chat-media, insert a role:'user'
     // row, and notify the admin. A sticker is a webp image → stored as
     // 'image'. Fire-and-forget so Meta gets its fast 200; media
-    // downloads (up to video) can be slow.
-    if (messageType === 'image' || messageType === 'document' || messageType === 'audio'
-        || messageType === 'video' || messageType === 'sticker') {
-        const mediaObj = message[messageType] ?? {};
-        const mediaId: string | null = typeof mediaObj.id === 'string' ? mediaObj.id : null;
-        if (!mediaId) {
-            whatsappLogger.warn(`Inbound ${messageType} from ${contactKey} had no media id — skipping`);
-            return;
-        }
-        const kind: InboundMediaKind = messageType === 'sticker' ? 'image' : messageType;
-        const caption: string | null = typeof mediaObj.caption === 'string' ? mediaObj.caption : null;
-        const filename: string | null =
-            messageType === 'document' && typeof mediaObj.filename === 'string' ? mediaObj.filename : null;
-        const isVoice = messageType === 'audio' && mediaObj.voice === true;
+    // downloads (up to video) can be slow. Still part 1's code path in this
+    // build (PR-C3 moves it onto wa_ingest_inbound with a durable work row);
+    // the batch's pre-dedup keeps a resend from downloading it again.
+    const mediaType = type as 'image' | 'document' | 'audio' | 'video' | 'sticker';
+    const mediaObj: Record<string, unknown> = isRecord(message[mediaType]) ? message[mediaType] : {};
+    const mediaId: string | null = typeof mediaObj.id === 'string' && mediaObj.id ? mediaObj.id : null;
+    // Without an id there is nothing to download: stored as a placeholder.
+    if (!mediaId) throw new MalformedPayloadError('berkas tanpa id media');
+    const kind: InboundMediaKind = mediaType === 'sticker' ? 'image' : mediaType;
+    const caption: string | null = typeof mediaObj.caption === 'string' ? mediaObj.caption : null;
+    const filename: string | null =
+        mediaType === 'document' && typeof mediaObj.filename === 'string' ? mediaObj.filename : null;
+    const isVoice = mediaType === 'audio' && mediaObj.voice === true;
 
-        void handleInboundMedia({
+    const contactKey = await resolveContactKey(supabase, waCtx.orgId, identity.from, identity.bsuid);
+    if (!contactKey) return 'skipped'; // unreachable: the prelude requires a phone or a BSUID
+
+    runInBackground('inbound media', () =>
+        handleInboundMedia({
             supabase,
             orgId: waCtx.orgId,
             creds: { phoneNumberId: waCtx.phoneNumberId, accessToken: waCtx.accessToken },
             contactKey,
-            bsuid,
-            waId,
-            inboundWamid,
-            replyToWamid: inboundContextId,
+            bsuid: identity.bsuid,
+            waId: identity.waId,
+            inboundWamid: ctx.key,
+            replyToWamid: ctx.replyTo,
             kind,
             mediaId,
             caption,
             filename,
             isVoice,
             other: storeOnly,
-        });
-
-        return;
-    }
+        }),
+    );
+    return 'legacy';
 }

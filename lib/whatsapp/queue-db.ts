@@ -44,6 +44,19 @@ export function getDebounceSeconds(): number {
 
 const nowIso = (): string => new Date().toISOString();
 
+/**
+ * Whether a stored whatsapp_messages row is a placeholder the webhook wrote
+ * for a message it could not process (metadata.unprocessable = its type).
+ */
+function isUnprocessableRow(metadata: unknown): boolean {
+    return (
+        metadata !== null &&
+        typeof metadata === 'object' &&
+        (metadata as Record<string, unknown>).unprocessable !== undefined &&
+        (metadata as Record<string, unknown>).unprocessable !== null
+    );
+}
+
 // Operator-facing note logged when a handoff switches the chat to manual mode.
 export const HANDOFF_MANUAL_MODE_NOTICE =
     'Handoff ke tim: balasan otomatis AI dimatikan untuk chat ini. Balas customer secara manual, atau nyalakan lagi lewat switch "AI aktif".';
@@ -51,86 +64,6 @@ export const HANDOFF_MANUAL_MODE_NOTICE =
 // Operator-facing note logged when the org's daily AI quota stops a reply.
 export function aiQuotaReachedNotice(limit: number): string {
     return `Batas ${limit} balasan AI per hari untuk organisasi ini sudah tercapai, jadi pesan ini tidak dibalas AI. Balas customer secara manual; AI membalas lagi mulai pukul 00.00 WIB.`;
-}
-
-/**
- * Add an inbound message to the queue.
- *
- * Returns the new job id, or `null` when the message was a duplicate webhook
- * delivery (Meta delivers webhooks at-least-once). We dedupe on the inbound
- * message id (wamid) via a unique index, so a redelivery can never enqueue the
- * same message twice and trigger a second reply.
- */
-export async function enqueueMessage(
-    orgId: string,
-    phoneNumber: string,
-    messageText: string,
-    client?: SupabaseClient,
-    waMessageId?: string | null,
-): Promise<string | null> {
-    try {
-        const supabase = client || await createClient();
-
-        const { data, error } = await supabase
-            .from('message_queue')
-            .insert({
-                org_id: orgId,
-                phone_number: phoneNumber,
-                message_text: messageText,
-                wa_message_id: waMessageId ?? null,
-                status: 'pending'
-            })
-            .select('id')
-            .single();
-
-        if (error) {
-            // 23505 = unique violation on (org_id, wa_message_id): a duplicate
-            // webhook delivery. Not a failure — just skip the re-enqueue.
-            if (error.code === '23505') {
-                whatsappLogger.info(`Duplicate inbound message ${waMessageId} — already queued, skipping`);
-                return null;
-            }
-            throw error;
-        }
-
-        whatsappLogger.info(`Message enqueued: ${data.id}`);
-        return data.id;
-
-    } catch (error) {
-        whatsappLogger.error('Failed to enqueue message', error);
-        throw error;
-    }
-}
-
-/**
- * Before the org's inbound quota counts a message (tracker 3.4): is it a
- * redelivery (its wamid is already queued, or already stored, e.g. a message
- * the quota refused or one sent in manual mode), or does it join a burst of
- * this chat still waiting in the queue? A redelivery is neither counted nor
- * queued again; a joining fragment adds no AI call, so it is queued without
- * being counted. A read error answers false (the message is counted).
- *
- * Must run BEFORE this delivery stores its own message: the stored-message
- * check would otherwise take every first delivery for a redelivery.
- */
-export async function inboundQueueState(
-    client: SupabaseClient,
-    orgId: string,
-    phoneNumber: string,
-    waMessageId: string | null,
-): Promise<{ duplicate: boolean; joinsBurst: boolean }> {
-    const none = Promise.resolve({ data: [] as unknown[], error: null });
-    const [queued, stored, pending] = await Promise.all([
-        waMessageId
-            ? client.from('message_queue').select('id').eq('org_id', orgId).eq('wa_message_id', waMessageId).limit(1)
-            : none,
-        waMessageId
-            ? client.from('whatsapp_messages').select('id').eq('org_id', orgId).eq('wa_message_id', waMessageId).eq('role', 'user').limit(1)
-            : none,
-        client.from('message_queue').select('id').eq('org_id', orgId).eq('phone_number', phoneNumber).eq('status', 'pending').limit(1),
-    ]);
-    const hit = (r: { data: unknown[] | null; error: unknown }) => !r.error && (r.data?.length ?? 0) > 0;
-    return { duplicate: hit(queued) || hit(stored), joinsBurst: hit(pending) };
 }
 
 /**
@@ -290,9 +223,11 @@ async function processConversation(jobs: QueueJob[], supabase: SupabaseClient): 
             .select('role, content, wa_message_id, metadata')
             .eq('org_id', orgId)
             .eq('phone_number', phoneNumber)
-            // Not messages to another number of the WABA (below), so they do
-            // not take the 30 places either.
+            // Not messages to another number of the WABA, nor placeholders of
+            // messages the webhook could not process (below), so they do not
+            // take the 30 places either.
             .is('metadata->>other_number', null)
+            .is('metadata->>unprocessable', null)
             .order('created_at', { ascending: false })
             .limit(30);
 
@@ -305,10 +240,19 @@ async function processConversation(jobs: QueueJob[], supabase: SupabaseClient): 
         // Empty rows (a photo or voice note without a caption) carry nothing for
         // the model and are skipped, and so are messages the customer sent to
         // another number of the WABA (kept for the operators by
-        // WHATSAPP_OTHER_NUMBER_EVENTS=process): not this number's conversation.
+        // WHATSAPP_OTHER_NUMBER_EVENTS=process): not this number's conversation;
+        // and placeholders the webhook stored for a message it could not
+        // process (metadata.unprocessable): a note for the operators, not
+        // something the customer wrote.
         const chrono = ((historyData || []) as { role: string; content: string; wa_message_id: string | null; metadata?: unknown }[])
             .reverse()
-            .filter((msg) => (msg.role === 'user' || msg.role === 'assistant') && !!msg.content?.trim() && !isOtherNumberRow(msg.metadata));
+            .filter(
+                (msg) =>
+                    (msg.role === 'user' || msg.role === 'assistant') &&
+                    !!msg.content?.trim() &&
+                    !isOtherNumberRow(msg.metadata) &&
+                    !isUnprocessableRow(msg.metadata),
+            );
         // The inbound burst is already stored in whatsapp_messages and is fed
         // to the model as combinedMessage, so it must not be in the history
         // too. When every job knows its wamid, drop exactly those rows and cut

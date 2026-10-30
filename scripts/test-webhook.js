@@ -13,6 +13,10 @@
  * database server itu, dan AI-nya benar-benar mencoba membalas TEST_PHONE dari
  * nomor WhatsApp server itu. Karena itu TEST_PHONE wajib diisi dengan nomor
  * milik Anda. Keluar dengan kode 1 bila ditolak atau gagal.
+ *
+ * --repeat=2 mengirim byte bertanda tangan yang sama dua kali, seperti Meta
+ * yang mengirim ulang: hasil yang benar = satu pesan tersimpan dan satu
+ * balasan (kiriman kedua dikenali sebagai duplikat).
  */
 
 const crypto = require('crypto');
@@ -24,6 +28,9 @@ const ALLOW_REMOTE = process.argv.includes('--allow-remote');
 const APP_SECRET = process.env.WHATSAPP_APP_SECRET || '';
 const PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID || '';
 const TEST_PHONE = process.env.TEST_PHONE || '';
+// --repeat=N: the same signed bytes N times (1-5), as Meta resends a delivery.
+const REPEAT_ARG = process.argv.find((a) => a.startsWith('--repeat='));
+const REPEAT = REPEAT_ARG ? Number(REPEAT_ARG.slice('--repeat='.length)) : 1;
 
 // Simulasi payload dari WhatsApp API
 const webhookPayload = {
@@ -84,37 +91,50 @@ async function testWebhook() {
         process.exitCode = 1;
         return;
     }
+    if (!Number.isInteger(REPEAT) || REPEAT < 1 || REPEAT > 5) {
+        console.error('❌ --repeat harus angka 1 sampai 5 (mis. --repeat=2).');
+        process.exitCode = 1;
+        return;
+    }
     if (!/^[0-9]{8,15}$/.test(TEST_PHONE)) {
         console.error('❌ TEST_PHONE wajib diisi dengan nomor milik Anda (angka saja, 8-15 digit, mis. 62812...).');
         console.error('   AI server tujuan benar-benar mencoba membalas nomor itu.');
         process.exitCode = 1;
         return;
     }
+    // Signed once: a repeat sends exactly the same bytes (and wamid), as a
+    // resend from Meta does.
     const raw = JSON.stringify(webhookPayload);
     const signature = 'sha256=' + crypto.createHmac('sha256', APP_SECRET).update(raw).digest('hex');
 
     try {
-        const response = await fetch(WEBHOOK_URL, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-Hub-Signature-256': signature,
-            },
-            body: raw
-        });
+        let allOk = true;
+        for (let attempt = 1; attempt <= REPEAT; attempt++) {
+            const response = await fetch(WEBHOOK_URL, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Hub-Signature-256': signature,
+                },
+                body: raw
+            });
 
-        console.log(`✅ Response Status: ${response.status} ${response.statusText}`);
+            const label = REPEAT > 1 ? ` (kiriman ${attempt}/${REPEAT})` : '';
+            console.log(`✅ Response Status${label}: ${response.status} ${response.statusText}`);
 
-        const responseText = await response.text();
-        console.log(`📄 Response Body: ${responseText}\n`);
+            const responseText = await response.text();
+            console.log(`📄 Response Body: ${responseText}\n`);
+            if (!response.ok) allOk = false;
+        }
 
-        if (response.ok) {
+        if (allOk) {
             console.log('✅ Webhook test SUCCESSFUL!');
             console.log('\n📋 Next Steps:');
             console.log('1. Check terminal logs for webhook processing');
             console.log('2. Open http://localhost:3000/dashboard/debug-chats');
             console.log(`3. Look for phone number: ${TEST_PHONE}`);
             console.log('4. Verify message: "Test message from script"');
+            if (REPEAT > 1) console.log(`5. Verify it was stored once and answered once (sent ${REPEAT} times)`);
         } else {
             process.exitCode = 1;
             console.log('❌ Webhook test FAILED!');

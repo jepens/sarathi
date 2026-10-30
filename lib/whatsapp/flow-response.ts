@@ -268,16 +268,25 @@ export async function handleFlowReply(params: HandleFlowReplyParams): Promise<vo
 
         // -- 2b. Advance the pipeline, but never DOWNGRADE: only new/unset
         //        moves to qualifying (a quoted/scheduled/booked lead who re-fills
-        //        the form keeps their stage).
-        const { data: stageRow } = await supabase
+        //        the form keeps their stage). A stage that could not be read is
+        //        not taken for unset: the lead keeps it. protectHumanStages
+        //        makes the write itself refuse a stage the team set meanwhile
+        //        (booked/won/lost, KEA-12).
+        const { data: stageRow, error: stageError } = await supabase
             .from('whatsapp_chats')
             .select('lead_stage')
             .eq('org_id', orgId)
             .eq('phone_number', contactKey)
             .maybeSingle();
-        const currentStage = stageRow?.lead_stage ?? null;
-        if (currentStage === null || currentStage === 'new') {
-            await updateLeadStage(orgId, contactKey, 'qualifying', 'Mengisi form Brief Acara (WhatsApp Flow)');
+        if (stageError) {
+            whatsappLogger.error('flow-response: lead stage could not be read — stage left unchanged', stageError);
+        } else {
+            const currentStage = stageRow?.lead_stage ?? null;
+            if (currentStage === null || currentStage === 'new') {
+                await updateLeadStage(orgId, contactKey, 'qualifying', 'Mengisi form Brief Acara (WhatsApp Flow)', {
+                    protectHumanStages: true,
+                });
+            }
         }
 
         // -- 3. Context for Nindra: the brief becomes a system message in the

@@ -1,140 +1,235 @@
-import type { SupabaseClient } from '@supabase/supabase-js';
-import type { WhatsAppContext } from '@/lib/whatsapp/credentials';
 import { whatsappLogger } from '@/lib/utils/logger';
-import { isStoredOtherMessageType, otherMessagePreview, otherMessageSummary } from '@/lib/whatsapp/flow-summary';
+import { recordOpsEvent } from '@/lib/ops/events';
+import { isStoredOtherMessageType } from '@/lib/whatsapp/flow-summary';
 import type { OtherNumber } from '@/lib/whatsapp/other-number';
-import type { MetaJson } from '@/lib/whatsapp/webhook/types';
-import { looksLikePhone, resolveContactKey } from '@/lib/whatsapp/webhook/contact';
+import { matchContact, senderIdentity, syntheticKey, type SenderIdentity } from '@/lib/whatsapp/webhook/contact';
+import { classify, describeItemError } from '@/lib/whatsapp/webhook/errors';
+import { POISON_LIMIT } from '@/lib/whatsapp/webhook/limits';
+import { clearPoison, isPoisoned, notePoison, type ItemResult } from '@/lib/whatsapp/webhook/outcome';
+import { isRecord, metaWord, parseMetaTimestamp, sanitizeForPg } from '@/lib/whatsapp/webhook/payload';
+import type { BatchRun, MessageContext, MetaJson } from '@/lib/whatsapp/webhook/types';
 import { handleContactsMessage } from '@/lib/whatsapp/webhook/handlers/contacts';
 import { handleInteractiveMessage } from '@/lib/whatsapp/webhook/handlers/interactive';
 import { handleMediaMessage } from '@/lib/whatsapp/webhook/handlers/media';
+import { handleOtherMessage } from '@/lib/whatsapp/webhook/handlers/other-types';
 import { handleTextMessage } from '@/lib/whatsapp/webhook/handlers/text';
-import { storeOtherNumberMessage } from '@/lib/whatsapp/webhook/handlers/store-only';
+import { ingestRow } from '@/lib/whatsapp/webhook/handlers/row';
 
-// An inbound message: who sent it, then the handler for its type.
+// An inbound message: who sent it, then the handler for its type, with the
+// per-item guard: an error of one message never stops the rest of the batch.
+// A message is never dropped silently: when its own payload cannot be stored
+// (or its error persists), it is stored as a placeholder that says so.
 
-export interface InboundMessageContext {
-    supabase: SupabaseClient;
-    waCtx: WhatsAppContext;
-    message: MetaJson;
-    messageType: MetaJson;
-    contactKey: string;
-    bsuid: string | null;
-    waId: string | null;
-    inboundWamid: string | null;
-    inboundContextId: string | null;
+/** One messages[] entry, read once before the batch is walked. */
+export interface MessagePlan {
+    /** The messages[] entry; null when it is not an object. */
+    message: Record<string, MetaJson> | null;
+    type: string;
+    /** Meta's wamid, or the syn. key of a message without one. */
+    key: string;
+    synthetic: boolean;
+    replyTo: string | null;
+    waTs: Date | null;
+    identity: SenderIdentity;
     storeOnly: OtherNumber | null;
+    /** Whether the type is stored at all (a reaction, for one, is not). */
+    stores: boolean;
 }
 
-export async function handleInboundMessage(params: {
-    supabase: SupabaseClient;
-    waCtx: WhatsAppContext;
-    value: MetaJson;
-    storeOnly: OtherNumber | null;
-}): Promise<void> {
-    const { supabase, waCtx, value, storeOnly } = params;
-    const message = value.messages[0];
-    const from = message.from; // phone today; may be a BSUID from June 2026
-    const messageType = message.type;
-    // Inbound message id (wamid). Meta delivers webhooks
-    // at-least-once, so this is our idempotency key: a redelivery of
-    // the same message must not enqueue (or store) it twice.
-    const inboundWamid: string | null = typeof message.id === 'string' ? message.id : null;
-    // If the customer replied to one of our messages, Meta includes
-    // the quoted message's wamid in message.context.id.
-    const inboundContextId: string | null =
-        message.context && typeof message.context.id === 'string' ? message.context.id : null;
-    if (!inboundWamid) {
-        // Well-formed messages always carry a wamid; a missing one
-        // means our at-least-once dedup (keyed on wamid) is bypassed
-        // for this message. Log it so the blind spot is observable.
-        whatsappLogger.warn(`Inbound ${messageType} message from ${from} has no usable message id — wamid dedup bypassed`);
-    }
-
-    // BSUID (business-scoped user ID). Present in contacts[].user_id
-    // and/or messages[].from_user_id. Used as a secondary identity
-    // so returning customers re-thread even if they arrive without
-    // a phone number once usernames roll out.
-    const bsuid: string | null =
-        value.contacts?.[0]?.user_id ?? message.from_user_id ?? null;
-
-    // Phase C — best-known real phone. Whenever Meta hands us a
-    // wa_id (or `from` is itself a phone), record it as
-    // verified_phone so we can still reach a contact whose PK is a
-    // BSUID. null when we only got an identifier.
-    const waId: string | null =
-        (looksLikePhone(value.contacts?.[0]?.wa_id) && value.contacts[0].wa_id) ||
-        (looksLikePhone(from) && from) ||
-        null;
-
-    // Canonical CRM key — reuse an existing contact's phone_number
-    // when we recognise the BSUID; otherwise use `from`, else the
-    // BSUID verbatim.
-    const contactKey = await resolveContactKey(supabase, waCtx.orgId, from, bsuid);
-
-    // A phone-hidden payload with neither a phone nor a BSUID is
-    // unroutable — ack so Meta doesn't retry-storm, and skip (never
-    // let an undefined key reach the phone_number PK writes below).
-    if (!contactKey) {
-        whatsappLogger.warn(`Inbound ${messageType} message has no usable identity (no phone, no BSUID) — acking without processing`);
-        return;
-    }
-
-    whatsappLogger.info(`Message details - From: ${from ?? 'none'}, BSUID: ${bsuid ?? 'none'}, Key: ${contactKey}, Type: ${messageType}`);
-
-    const ctx: InboundMessageContext = {
-        supabase,
-        waCtx,
+/**
+ * The prelude of a message (pure): its key, Meta time, reply context, the
+ * contact entry that describes its sender (matchContact: never another
+ * customer's), and the sender's identity. Every string that may reach the
+ * database is sanitised here, so the TS paths (cards, media, Flow) get clean
+ * values too.
+ */
+export function planMessage(entry: unknown, value: MetaJson, storeOnly: OtherNumber | null, now = Date.now()): MessagePlan {
+    const message = isRecord(entry) ? entry : null;
+    const type = typeof message?.type === 'string' ? message.type : '';
+    const id = typeof message?.id === 'string' && message.id.length > 0 ? message.id : null;
+    const metadata = isRecord(value) && isRecord(value.metadata) ? value.metadata : null;
+    const contact = matchContact(isRecord(value) ? value.contacts : undefined, entry);
+    const context = message && isRecord(message.context) ? message.context : null;
+    const replyTo = typeof context?.id === 'string' && context.id.length > 0 ? context.id : null;
+    return {
         message,
-        messageType,
-        contactKey,
-        bsuid,
-        waId,
-        inboundWamid,
-        inboundContextId,
+        type,
+        key: sanitizeForPg(id ?? syntheticKey(metadata?.phone_number_id, entry)),
+        synthetic: id === null,
+        replyTo: sanitizeForPg(replyTo),
+        waTs: parseMetaTimestamp(message?.timestamp, now),
+        identity: sanitizeForPg(senderIdentity(entry, contact)),
         storeOnly,
+        stores: message !== null && isStoredOtherMessageType(type),
     };
+}
 
-    if (messageType === 'contacts') {
-        await handleContactsMessage(ctx);
-        return;
-    }
-    if (messageType === 'interactive') {
-        await handleInteractiveMessage(ctx);
-        return;
-    }
-    if (messageType === 'image' || messageType === 'document' || messageType === 'audio'
-        || messageType === 'video' || messageType === 'sticker') {
-        handleMediaMessage(ctx);
-        return;
-    }
-    if (messageType === 'text') {
-        await handleTextMessage(ctx);
-        return;
-    }
+export function hasIdentity(plan: MessagePlan): boolean {
+    return plan.identity.from !== null || plan.identity.bsuid !== null;
+}
 
-    // Any other type the customer sent to another number of the WABA
-    // (a template's quick-reply button, a location, an order, a type
-    // Sarathi does not show) is kept too, as one readable line, so
-    // process mode loses no message that arrived. Events where the
-    // customer wrote nothing (a number change, opening the chat, a
-    // reaction) are only acknowledged, as on the main number.
-    if (storeOnly && !isStoredOtherMessageType(messageType)) {
-        whatsappLogger.info(`${messageType} event for another number of the WABA — acknowledged without storing`);
-        return;
+async function dispatchMessage(ctx: MessageContext): Promise<ItemResult> {
+    switch (ctx.type) {
+        case 'text':
+            return handleTextMessage(ctx);
+        case 'contacts':
+            return handleContactsMessage(ctx);
+        case 'interactive':
+            return handleInteractiveMessage(ctx);
+        case 'image':
+        case 'document':
+        case 'audio':
+        case 'video':
+        case 'sticker':
+            return handleMediaMessage(ctx);
+        default:
+            return handleOtherMessage(ctx);
     }
-    if (storeOnly) {
-        await storeOtherNumberMessage({
-            supabase,
-            orgId: waCtx.orgId,
-            contactKey,
-            bsuid,
-            waId,
-            inboundWamid,
-            content: otherMessageSummary(message),
-            preview: otherMessagePreview(message),
-            other: storeOnly,
+}
+
+/** The type as alerts, logs and the placeholder name it: Meta's word, or 'tidak dikenal'. */
+function typeLabel(type: string): string {
+    return type ? metaWord(type) : 'tidak dikenal';
+}
+
+async function alertPayload(run: BatchRun, detail: string): Promise<void> {
+    await recordOpsEvent(run.supabase, 'webhook_payload_invalid', { orgId: run.outcome.orgId, detail });
+}
+
+/**
+ * The fallback of a message that cannot be stored as it is: one row that says
+ * a message of this type arrived, without its content (metadata.unprocessable
+ * keeps it out of the AI history), unread and pushed like any message, no
+ * rate limit, no AI. If even that fails permanently the message is skipped;
+ * if it fails retryably the item stays retryable (503).
+ */
+async function storePlaceholder(run: BatchRun, ctx: MessageContext, cause: unknown): Promise<void> {
+    const { outcome } = run;
+    const type = typeLabel(ctx.type);
+    const why = describeItemError(cause);
+    const content = `Pesan jenis "${type}" tidak bisa diproses otomatis (isinya tidak ditampilkan di Sarathi)`;
+    try {
+        const result = await ingestRow(ctx, {
+            content,
+            preview: content,
+            metadata: { unprocessable: type },
+            rateLimited: false,
+            queueText: null,
+            lateAgeMs: null,
         });
+        clearPoison(ctx.key);
+        if (result.outcome === 'no_identity') {
+            await alertPayload(run, `pesan "${type}" tanpa identitas pengirim; dilewati`);
+            outcome.done('skipped');
+            return;
+        }
+        whatsappLogger.warn(`Inbound ${type} message stored as a placeholder (${why})`);
+        await alertPayload(run, `pesan "${type}": ${why}; disimpan sebagai pengganti`);
+        outcome.done('degraded');
+    } catch (error) {
+        if (ctx.signal.aborted) {
+            outcome.deferred();
+            return;
+        }
+        if (classify(error) === 'permanent') {
+            clearPoison(ctx.key);
+            whatsappLogger.error(`Inbound ${type} message skipped: not even a placeholder could be stored (${describeItemError(error)})`);
+            await alertPayload(run, `pesan "${type}": ${why}; dilewati`);
+            outcome.done('skipped');
+            return;
+        }
+        whatsappLogger.error(`Inbound ${type} message: the placeholder could not be stored either — retryable`, error);
+        outcome.failed(error);
+    }
+}
+
+/**
+ * One message of the batch (pass 2): skipped when the pre-dedup found it
+ * stored, deferred when the budget or the stop rule says so, else dispatched
+ * by type. A permanent error, or the POISON_LIMIT-th failure of the same key
+ * in this process, stores a placeholder; any other failure is retryable.
+ */
+export async function handleMessageItem(run: BatchRun, plan: MessagePlan, stored: ReadonlySet<string>): Promise<void> {
+    const { outcome } = run;
+    const type = typeLabel(plan.type);
+    if (plan.message === null) {
+        // Not even an object (e.g. messages: [42]): no type, no sender of its
+        // own, nothing a retry could read.
+        whatsappLogger.warn('Inbound message entry that is not an object — skipped');
+        await alertPayload(run, 'entri pesan tanpa isi terbaca; dilewati');
+        outcome.done('skipped');
         return;
+    }
+    if (!plan.stores) {
+        // A reaction, a number change or opening the chat: the customer wrote
+        // nothing, so there is nothing to store (as part 1).
+        whatsappLogger.info(`${type} event acknowledged without storing (the customer wrote nothing)`);
+        outcome.done('acked');
+        return;
+    }
+    if (!hasIdentity(plan)) {
+        // No phone and no BSUID: nothing can key the chat, not even a
+        // placeholder. Meta resending it would not help.
+        whatsappLogger.warn(`Inbound ${type} message without a sender (no from, no BSUID) — skipped`);
+        await alertPayload(run, `pesan "${type}" tanpa identitas pengirim; dilewati`);
+        outcome.done('skipped');
+        return;
+    }
+    if (stored.has(plan.key)) {
+        // A redelivery of a message already stored: nothing happens again.
+        outcome.done('duplicate');
+        return;
+    }
+    if (outcome.shouldDefer()) {
+        outcome.deferred();
+        return;
+    }
+    let waCtx;
+    try {
+        waCtx = await run.org();
+    } catch (error) {
+        outcome.failed(error); // not the message's fault: no poison count
+        return;
+    }
+    if (plan.synthetic) {
+        whatsappLogger.warn(`Inbound ${type} message without an id — stored under a synthetic key (syn.)`);
+    }
+    const ctx: MessageContext = {
+        supabase: run.supabase,
+        waCtx,
+        message: plan.message,
+        type: plan.type,
+        key: plan.key,
+        replyTo: plan.replyTo,
+        waTs: plan.waTs,
+        identity: plan.identity,
+        storeOnly: plan.storeOnly,
+        signal: outcome.signal(),
+        batch: run,
+    };
+    try {
+        const result = await dispatchMessage(ctx);
+        clearPoison(plan.key);
+        if (result === 'skipped') {
+            await alertPayload(run, `pesan "${type}" tanpa identitas pengirim; dilewati`);
+        }
+        outcome.done(result);
+    } catch (error) {
+        // The time budget ran out during the call: not the message's fault.
+        if (ctx.signal.aborted) {
+            outcome.deferred();
+            return;
+        }
+        if (classify(error) === 'permanent') {
+            await storePlaceholder(run, ctx, error);
+            return;
+        }
+        const failures = notePoison(plan.key);
+        if (isPoisoned(failures)) {
+            await storePlaceholder(run, ctx, error);
+            return;
+        }
+        whatsappLogger.error(`Inbound ${type} message not stored (failure ${failures} of ${POISON_LIMIT}) — retryable`, error);
+        outcome.failed(error);
     }
 }
