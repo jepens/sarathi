@@ -17,8 +17,12 @@ import { ingestRow } from '@/lib/whatsapp/webhook/handlers/row';
 
 // An inbound message: who sent it, then the handler for its type, with the
 // per-item guard: an error of one message never stops the rest of the batch.
-// A message is never dropped silently: when its own payload cannot be stored
-// (or its error persists), it is stored as a placeholder that says so.
+// A message is never dropped silently: when its own payload cannot be stored,
+// or a database error specific to it persists, it is stored as a placeholder
+// that says so (a thrown bug never gets there: Meta resends until it is
+// fixed, D24). The one exception is a contact card that carries no phone
+// from a sender without one: there is nothing to note, so it is only
+// acknowledged (handlers/contacts.ts).
 
 /** One messages[] entry, read once before the batch is walked. */
 export interface MessagePlan {
@@ -123,6 +127,12 @@ async function storePlaceholder(run: BatchRun, ctx: MessageContext, cause: unkno
             outcome.done('skipped');
             return;
         }
+        if (result.outcome === 'duplicate') {
+            // Stored already (e.g. as a placeholder by an earlier delivery whose
+            // resend got past a failed pre-dedup): nothing new, no second alert.
+            outcome.done('duplicate');
+            return;
+        }
         whatsappLogger.warn(`Inbound ${type} message stored as a placeholder (${why})`);
         await alertPayload(run, `pesan "${type}": ${why}; disimpan sebagai pengganti`);
         outcome.done('degraded');
@@ -146,8 +156,9 @@ async function storePlaceholder(run: BatchRun, ctx: MessageContext, cause: unkno
 /**
  * One message of the batch (pass 2): skipped when the pre-dedup found it
  * stored, deferred when the budget or the stop rule says so, else dispatched
- * by type. A permanent error, or the POISON_LIMIT-th failure of the same key
- * in this process, stores a placeholder; any other failure is retryable.
+ * by type. A permanent error, or the POISON_LIMIT-th counted failure of the
+ * same key in this process (a database answer specific to the message,
+ * countsTowardPoison), stores a placeholder; any other failure is retryable.
  */
 export async function handleMessageItem(run: BatchRun, plan: MessagePlan, stored: ReadonlySet<string>): Promise<void> {
     const { outcome } = run;
@@ -232,10 +243,11 @@ export async function handleMessageItem(run: BatchRun, plan: MessagePlan, stored
             await storePlaceholder(run, ctx, error);
             return;
         }
-        // An outage or a missing function fails every item alike: not the
-        // message's fault, so it never turns it into a placeholder.
+        // An outage, a missing function or a thrown bug (D24) is not the
+        // message's own fault: it never turns the message into a placeholder,
+        // and Meta's resend tries it again once the cause is gone.
         if (!countsTowardPoison(error)) {
-            whatsappLogger.error(`Inbound ${type} message not stored (database unavailable or not migrated) — retryable`, error);
+            whatsappLogger.error(`Inbound ${type} message not stored (not counted toward the poison bound) — retryable`, error);
             outcome.failed(error);
             return;
         }

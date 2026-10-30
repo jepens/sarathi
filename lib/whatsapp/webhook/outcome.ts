@@ -128,7 +128,8 @@ export class BatchOutcome {
 
     /**
      * Whether the database answered for any item of the batch (stored, found
-     * stored, counted, handed over, applied, or a BSUID moved).
+     * stored, counted, handed over, applied, or a BSUID moved or refused with
+     * 23505).
      */
     progressed(): boolean {
         const c = this.counts;
@@ -160,9 +161,12 @@ export class BatchOutcome {
 // The poison counter: how often each item failed in this server process,
 // keyed by item (a message's key, a status's id and status, a user_id_update
 // hash). At POISON_LIMIT a message is stored as a placeholder and a status or
-// user_id_update is skipped, so one item that always fails cannot keep the
-// batch in 503 for the days Meta keeps retrying. A restart forgets the counts
-// (an item then gets POISON_LIMIT more tries); the map keeps the newest keys.
+// user_id_update is skipped, so one item the database keeps refusing cannot
+// keep the batch in 503 for the days Meta keeps retrying. Only failures that
+// countsTowardPoison (errors.ts) counts are noted: a database answer specific
+// to the item; never an outage or a thrown bug (D24). A restart forgets the
+// counts (an item then gets POISON_LIMIT more tries); the map keeps the
+// newest keys.
 const poison = new Map<string, number>();
 const POISON_KEYS_MAX = 1000;
 

@@ -466,11 +466,12 @@ describe.skipIf(!ENABLED)('webhook against a local Supabase stack (PR-C2 end to 
         const leftovers = await read<{ id: string }>(db.from('organizations').select('id').like('name', `${ORG_PREFIX}%`));
         for (const { id } of leftovers) await purgeOrg(id);
         // drainNow() answers every settled job of the queue, whatever its org
-        // (claim_queue_jobs is not scoped): refuse a database that holds
-        // another org's pending jobs instead of answering them.
-        const pending = await read<{ id: string }>(db.from('message_queue').select('id').eq('status', 'pending').limit(1));
-        if (pending.length > 0) {
-            throw new Error('message_queue holds pending jobs of another org: run `npx supabase db reset` before this test');
+        // (claim_queue_jobs is not scoped and also reclaims a stale
+        // 'processing' job): refuse a database that holds another org's open
+        // jobs instead of answering them.
+        const open = await read<{ id: string }>(db.from('message_queue').select('id').in('status', ['pending', 'processing']).limit(1));
+        if (open.length > 0) {
+            throw new Error('message_queue holds open jobs of another org: run `npx supabase db reset` before this test');
         }
         previousDefault = previous[0]?.value ?? null;
         // A run killed before its cleanup left its own org as the default.

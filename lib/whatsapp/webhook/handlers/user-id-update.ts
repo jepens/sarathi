@@ -21,17 +21,21 @@ import type { BatchRun, MetaJson } from '@/lib/whatsapp/webhook/types';
 // We read the nested user_id.previous/current, and still fall back to a few
 // flat guesses in case Meta tweaks the shape during the 2026 rollout.
 
-/** The update entries of one change: value.user_id_update[] (or the plural, or the value itself). */
-export function userIdUpdatesOf(value: MetaJson): Array<Record<string, unknown>> {
+/** The elements of one change's updates: value.user_id_update[] (or the plural, or the value itself). */
+function updateElements(value: MetaJson): unknown[] {
     const v: Record<string, unknown> = isRecord(value) ? value : {};
     // Container: value.user_id_update[] (the documented shape); accept the
     // plural and a bare object too, defensively.
-    const container: unknown[] = Array.isArray(v.user_id_update)
+    return Array.isArray(v.user_id_update)
         ? v.user_id_update
         : Array.isArray(v.user_id_updates)
             ? v.user_id_updates
             : [v];
-    return container.filter(isRecord);
+}
+
+/** The update entries of one change (the elements that are objects). */
+export function userIdUpdatesOf(value: MetaJson): Array<Record<string, unknown>> {
+    return updateElements(value).filter(isRecord);
 }
 
 function pick(o: Record<string, unknown>, keys: string[]): string | null {
@@ -79,7 +83,17 @@ export async function handleUserIdUpdates(run: BatchRun, values: MetaJson[]): Pr
         .flatMap((value) => userIdUpdatesOf(value))
         .map((u, position) => ({ u, position, at: entryTime(u, now) }))
         .sort((a, b) => a.at - b.at || a.position - b.position);
-    outcome.items += entries.length;
+    // Elements that are not even objects: nothing to read, skipped with one alert.
+    const malformed = values.reduce<number>((n, value) => n + updateElements(value).filter((u) => !isRecord(u)).length, 0);
+    outcome.items += entries.length + malformed;
+    if (malformed > 0) {
+        whatsappLogger.warn(`${malformed} user_id_update entr${malformed === 1 ? 'y' : 'ies'} that are not objects — skipped`);
+        await recordOpsEvent(run.supabase, 'webhook_payload_invalid', {
+            orgId: outcome.orgId,
+            detail: `${malformed} user_id_update tanpa isi terbaca; dilewati`,
+        });
+        outcome.done('skipped', malformed);
+    }
 
     for (const { u } of entries) {
         const parsed = parseUserIdUpdate(u);

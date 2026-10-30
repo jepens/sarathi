@@ -188,13 +188,13 @@ describe('handleMessageItem', () => {
         expect(alerts()).toEqual(['webhook_payload_invalid: pesan "text": database 22P05; disimpan sebagai pengganti']);
     });
 
-    it(`a retryable error stays retryable ${POISON_LIMIT - 1} times; the ${POISON_LIMIT}th time a placeholder is stored`, async () => {
+    it(`a database answer specific to the message stays retryable ${POISON_LIMIT - 1} times; the ${POISON_LIMIT}th time a placeholder is stored`, async () => {
         const message = { from: PHONE, id: 'wamid.flaky', type: 'text', text: { body: 'halo' } };
         // Each attempt is a new delivery of the batch (Meta resending after a 503).
         const redeliver = async () => {
             outcome = new BatchOutcome();
             run.outcome = outcome;
-            h.replies.push({ throws: new Error('boom') });
+            h.replies.push({ error: { code: 'P0002' } });
             await handle(message);
         };
         for (let i = 1; i < POISON_LIMIT; i++) {
@@ -206,8 +206,22 @@ describe('handleMessageItem', () => {
         await redeliver();
         expect(ingests().at(-1)!.p_metadata).toEqual({ unprocessable: 'text' });
         expect(outcome.counts.degraded).toBe(1);
-        expect(alerts()).toEqual(['webhook_payload_invalid: pesan "text": Error; disimpan sebagai pengganti']);
+        expect(alerts()).toEqual(['webhook_payload_invalid: pesan "text": database P0002; disimpan sebagai pengganti']);
         expect(poisonCount('wamid.flaky')).toBe(0);
+    });
+
+    it('a thrown bug stays retryable however often it happens, and is never counted (D24)', async () => {
+        const message = { from: PHONE, id: 'wamid.bug', type: 'text', text: { body: 'halo' } };
+        for (let i = 0; i < POISON_LIMIT + 2; i++) {
+            outcome = new BatchOutcome();
+            run.outcome = outcome;
+            h.replies.push({ throws: new Error('boom') });
+            await handle(message);
+            expect(outcome.counts.retryable).toBe(1);
+        }
+        expect(poisonCount('wamid.bug')).toBe(0);
+        expect(ingests().every((a) => (a.p_metadata as Record<string, unknown>).unprocessable === undefined)).toBe(true);
+        expect(alerts()).toEqual([]);
     });
 
     it('a placeholder that fails retryably keeps the item retryable (503)', async () => {

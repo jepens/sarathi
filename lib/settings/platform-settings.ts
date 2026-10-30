@@ -60,16 +60,18 @@ export async function getPlatformSettingStrict(
     client: SupabaseClient,
     key: PlatformSettingKey,
 ): Promise<string | null> {
-    const { data, error } = await client
+    const { data, error, status } = await client
         .from('platform_settings')
         .select('value')
         .eq('key', key)
         .maybeSingle();
     if (error) {
-        // Keep the database code for the alert detail (describeErrorForOps).
+        // Keep the database code and the HTTP status for the alert detail and
+        // its hint (describeErrorForOps, opsHint): the webhook's first read,
+        // where a wrong API key or URL shows.
         const err = new Error(`platform setting ${key} could not be read (${error.code ?? 'no code'})`);
         err.name = 'PlatformSettingReadError';
-        throw Object.assign(err, { code: error.code });
+        throw Object.assign(err, { code: error.code, status });
     }
     return nonEmpty(data?.value);
 }

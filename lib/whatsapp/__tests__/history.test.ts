@@ -93,6 +93,8 @@ describe('logSystemMessage', () => {
         h.fake = { client: null, calls: [], rpcCalls: [] } as unknown as FakeSupabase;
         const result = await logSystemMessage(ORG, PHONE, 'Catatan uji');
         expect(result.status).toBe('failed');
+        // No HTTP status: the caller keeps a throw as it is (no database answer).
+        expect(result).not.toHaveProperty('httpStatus');
         expect(h.error).toHaveBeenCalledWith('Failed to log system message', expect.anything());
     });
 });

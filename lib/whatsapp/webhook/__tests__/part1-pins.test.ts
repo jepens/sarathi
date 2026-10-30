@@ -99,6 +99,17 @@ async function deliver(body: unknown): Promise<number> {
 }
 
 const settle = () => settleBackground();
+
+/** What the real handleFlowReply can read: response_json holding a JSON object. */
+function readableAnswers(raw: unknown): boolean {
+    if (typeof raw !== 'string' || raw === '') return false;
+    try {
+        const parsed: unknown = JSON.parse(raw);
+        return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed);
+    } catch {
+        return false;
+    }
+}
 const sends = () => vi.mocked(sendWhatsAppMessage).mock.calls;
 const replies = () => sends().filter((c) => c[1] === AI_REPLY);
 const warnings = () => sends().filter((c) => c[1] === RATE_LIMIT_WARNING);
@@ -149,7 +160,9 @@ beforeEach(() => {
     vi.mocked(sendPushToOrg).mockReset().mockResolvedValue(undefined);
     vi.mocked(generateRAGResponse).mockReset().mockResolvedValue({ message: AI_REPLY, sources: [] });
     vi.mocked(handleFlowReply).mockReset().mockImplementation(async (p) => {
-        // Like the real one: its own insert of the submission is its gate.
+        // Like the real one: answers that cannot be read are reported before
+        // any write, and its own insert of the submission is its gate.
+        if (!readableAnswers(p.nfmReply.response_json)) return { status: 'unreadable' };
         const { error, status } = await p.supabase.from('whatsapp_messages').insert({
             org_id: p.orgId,
             phone_number: p.contactKey,

@@ -12,7 +12,8 @@ import {
 // 503 and Meta sends the batch again; a permanent one is stored as a
 // placeholder or skipped (200). Only errors that say the input itself is
 // wrong are permanent; anything else, including what nobody foresaw, is
-// retryable (the poison counter bounds the retries).
+// retryable. The poison counter bounds the retries of a database answer
+// specific to the item; a thrown bug is retried until it is fixed (D24).
 
 // A PostgREST error as supabase-js returns it (not thrown).
 const pg = (code: string) => ({ code, message: 'm', details: '', hint: '' });
@@ -128,31 +129,47 @@ describe('countsTowardPoison', () => {
             '08006', '53300', '57P01', '25006',
             '40001', '40P01', '55P03', '57014',
             '42501', '42883', '42P01', '42703', '42P10',
-            '58030', 'XX000', 'XX001',
+            '58030', 'XX000', 'XX001', 'PGRSTX00',
         ]) {
             expect(countsTowardPoison(new RpcError('wa_ingest_inbound', pg(code), 503)), code).toBe(false);
+            expect(countsTowardPoison(pg(code)), `${code} unwrapped`).toBe(false);
         }
         expect(countsTowardPoison(Object.assign(new Error('x'), { name: 'AbortError' }))).toBe(false);
         expect(countsTowardPoison(Object.assign(new Error('x'), { name: 'PlatformSettingReadError', code: '23503' }))).toBe(false);
     });
 
-    it('no answer, or a gateway that refuses every call (a wrong API key or URL), never counts', () => {
-        for (const status of [0, 401, 403, 404, 408, 429, 500, 502, 503]) {
+    it('no answer, a busy gateway or a server error never counts', () => {
+        for (const status of [0, 408, 429, 500, 502, 503]) {
             expect(countsTowardPoison(new RpcError('wa_ingest_inbound', { code: '' }, status)), String(status)).toBe(false);
         }
     });
 
-    it('a thrown bug, a malformed answer and any other database code still count', () => {
-        expect(countsTowardPoison(new TypeError('x is not a function'))).toBe(true);
-        expect(countsTowardPoison('aneh')).toBe(true);
+    it('a database answer specific to the item counts: another code, or an HTTP error without a code on its own call (a wrong key or URL fails the org read first)', () => {
         for (const code of ['23503', '23505', 'P0002', '2BP01', 'ZZ999']) {
             expect(countsTowardPoison(new RpcError('wa_ingest_inbound', pg(code), 500)), code).toBe(true);
+            expect(countsTowardPoison(pg(code)), `${code} unwrapped`).toBe(true);
         }
-        for (const status of [400, 409, 413]) {
+        for (const status of [400, 401, 403, 404, 409, 413]) {
             expect(countsTowardPoison(new RpcError('wa_ingest_inbound', { code: '' }, status)), String(status)).toBe(true);
         }
-        // A raw error object (not an RpcError) without a code carries no HTTP status to judge by.
-        expect(countsTowardPoison({ code: '', message: 'TypeError: fetch failed' })).toBe(true);
+    });
+
+    it('a thrown bug, or anything else that is no database answer, never counts (D24)', () => {
+        for (const odd of [
+            new TypeError('x is not a function'),
+            new Error('boom'),
+            Object.assign(new Error('fetch failed'), { code: 'ECONNRESET' }),
+            Object.assign(new Error('Meta WhatsApp 190'), { code: 190 }),
+            'aneh',
+            42,
+            null,
+            undefined,
+            {},
+            { code: '', message: 'TypeError: fetch failed' },
+            { code: 22004 },
+        ]) {
+            expect(countsTowardPoison(odd), String(odd)).toBe(false);
+        }
     });
 });
 
@@ -167,9 +184,12 @@ describe('opsHint', () => {
         expect(opsHint(new RpcError('x', pg('42501'), 403))).toBe('izin database (grant) hilang');
         expect(opsHint(new RpcError('x', pg('42P10'), 400))).toBe('skema database tidak cocok dengan kode, periksa migrasi terakhir');
         expect(opsHint(new RpcError('x', pg('PGRST301'), 401))).toBe('kunci API Supabase ditolak, periksa SUPABASE_SERVICE_ROLE_KEY (rotasi kunci?)');
-        expect(opsHint(new RpcError('x', { code: '' }, 401))).toBe('kunci API Supabase ditolak, periksa SUPABASE_SERVICE_ROLE_KEY (rotasi kunci?)');
-        expect(opsHint(new RpcError('x', { code: '' }, 403))).toBe('kunci API Supabase ditolak, periksa SUPABASE_SERVICE_ROLE_KEY (rotasi kunci?)');
-        expect(opsHint(new RpcError('x', { code: '' }, 404))).toBe('alamat Supabase tidak ditemukan, periksa NEXT_PUBLIC_SUPABASE_URL');
+        // An item's own call: the org read of the delivery passed with the same key and URL.
+        for (const status of [401, 403, 404]) {
+            expect(opsHint(new RpcError('x', { code: '' }, status)), String(status)).toBe(
+                `gateway Supabase menolak permintaan ini (HTTP ${status}); kunci dan alamat berlaku`,
+            );
+        }
         expect(opsHint(new RpcError('x', { code: '' }, 429))).toBe('Supabase sibuk (batas permintaan atau waktu tunggu habis)');
         expect(opsHint(new RpcError('x', { code: '' }, 408))).toBe('Supabase sibuk (batas permintaan atau waktu tunggu habis)');
         expect(opsHint(new RpcError('x', pg('08006'), 503))).toBe('Supabase tidak terjangkau atau sedang gangguan');
@@ -180,6 +200,19 @@ describe('opsHint', () => {
         expect(opsHint(new RpcError('x', pg('57014'), 500))).toBe('query database dibatalkan karena terlalu lama');
         expect(opsHint(new RpcError('x', pg('XX000'), 500))).toBe('galat internal database, periksa Supabase');
         expect(opsHint(new RpcError('x', pg('58030'), 500))).toBe('galat internal database, periksa Supabase');
+        expect(opsHint(new RpcError('x', pg('PGRSTX00'), 500))).toBe('galat internal database, periksa Supabase');
+    });
+
+    it("the default org's read error, the delivery's first call, names a refused key or a wrong URL", () => {
+        const readError = (code: string | undefined, status: number) =>
+            Object.assign(new Error('platform setting default_org_id could not be read'), { name: 'PlatformSettingReadError', code, status });
+        const key = 'org default tidak terbaca: kunci API Supabase ditolak, periksa SUPABASE_SERVICE_ROLE_KEY (rotasi kunci?)';
+        expect(opsHint(readError(undefined, 401))).toBe(key);
+        expect(opsHint(readError(undefined, 403))).toBe(key);
+        expect(opsHint(readError('PGRST301', 401))).toBe(key);
+        expect(opsHint(readError(undefined, 404))).toBe('org default tidak terbaca: alamat Supabase tidak ditemukan, periksa NEXT_PUBLIC_SUPABASE_URL');
+        expect(opsHint(readError('57014', 500))).toBe('org default tidak terbaca, periksa Supabase');
+        expect(opsHint(readError(undefined, 0))).toBe('org default tidak terbaca, periksa Supabase');
         expect(opsHint(Object.assign(new Error('x'), { name: 'PlatformSettingReadError', code: '57014' }))).toBe(
             'org default tidak terbaca, periksa Supabase',
         );

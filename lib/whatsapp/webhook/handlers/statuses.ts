@@ -120,9 +120,10 @@ export async function handleChangeStatuses(run: BatchRun, list: unknown[]): Prom
             outcome.deferred(rows.length);
             return;
         }
-        // Trying again cannot help (permanent), or these statuses failed
-        // POISON_LIMIT times in this process: skipped, with an alert. A
-        // status is not worth a 503 for days.
+        // Trying again cannot help (permanent), or the database refused these
+        // statuses POISON_LIMIT counted times in this process (countsTowardPoison:
+        // never an outage or a thrown bug): skipped, with an alert. A status
+        // is not worth a 503 for days.
         const permanent = classify(error) === 'permanent';
         if (permanent || (countsTowardPoison(error) && keys.map(notePoison).every(isPoisoned))) {
             keys.forEach(clearPoison);

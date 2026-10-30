@@ -66,6 +66,7 @@ import { generateRAGResponse } from '@/lib/ai/rag';
 import { handleFlowReply } from '@/lib/whatsapp/flow-response';
 import { settleBackground } from '@/lib/whatsapp/webhook/background';
 import { poisonCount, resetPoison } from '@/lib/whatsapp/webhook/outcome';
+import { POISON_LIMIT } from '@/lib/whatsapp/webhook/limits';
 import {
     RATE_LIMIT_NOTE,
     RATE_LIMIT_WARNING,
@@ -102,6 +103,17 @@ const pushes = () => vi.mocked(sendPushToOrg).mock.calls.map((c) => c[2]);
 const details = (kind: string) => h.db.events(kind).map((e) => e.detail);
 const noteTexts = () => h.db.notes().map((n) => n.content);
 const batchLines = () => h.logs.map((l) => String(l[0])).filter((l) => l.startsWith('Webhook batch:'));
+
+/** What the real handleFlowReply can read: response_json holding a JSON object. */
+function readableAnswers(raw: unknown): boolean {
+    if (typeof raw !== 'string' || raw === '') return false;
+    try {
+        const parsed: unknown = JSON.parse(raw);
+        return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed);
+    } catch {
+        return false;
+    }
+}
 
 /**
  * POST's status, or 'blocked' when it has not answered after a few hundred
@@ -146,7 +158,9 @@ beforeEach(() => {
     vi.mocked(sendPushToOrg).mockReset().mockResolvedValue(undefined);
     vi.mocked(generateRAGResponse).mockReset().mockResolvedValue({ message: AI_REPLY, sources: [] });
     vi.mocked(handleFlowReply).mockReset().mockImplementation(async (p) => {
-        // Like the real one: its own insert of the submission is its gate.
+        // Like the real one: answers that cannot be read are reported before
+        // any write, and its own insert of the submission is its gate.
+        if (!readableAnswers(p.nfmReply.response_json)) return { status: 'unreadable' };
         const { error, status } = await p.supabase.from('whatsapp_messages').insert({
             org_id: p.orgId,
             phone_number: p.contactKey,
@@ -366,24 +380,36 @@ describe('contract harness (synthesis section 8, items 10-20)', () => {
         expect(h.db.events('webhook_error')).toEqual([]);
     });
 
-    it('15a. a thrown bug answers 503 four times; the fifth delivery stores a placeholder with an alert', async () => {
+    it('15a. a database answer specific to the message (P0002) answers 503 four times; the fifth delivery stores a placeholder with an alert', async () => {
         const body = delivery([change({ contacts: [contactOf(A)], messages: [textMsg(A, 'wamid.racun', 'halo')] })]);
         const notPlaceholder = (a: Record<string, unknown>) => !(a.p_metadata as Record<string, unknown>).unprocessable;
-        h.db.fail({ target: 'rpc:wa_ingest_inbound', match: notPlaceholder, throws: new TypeError('x is not a function'), times: Infinity });
+        h.db.fail({ target: 'rpc:wa_ingest_inbound', match: notPlaceholder, error: { code: 'P0002' }, times: Infinity });
         const answers: number[] = [];
         for (let i = 0; i < 5; i++) answers.push(await deliver(body));
         await settle();
         expect(answers).toEqual([503, 503, 503, 503, 200]);
-        expect(details('webhook_error')).toEqual(Array(4).fill('TypeError (1 dari 1 item)'));
-        expect(details('webhook_payload_invalid')).toEqual(['pesan "text": TypeError; disimpan sebagai pengganti']);
+        expect(details('webhook_error')).toEqual(Array(4).fill('database P0002 (1 dari 1 item)'));
+        expect(details('webhook_payload_invalid')).toEqual(['pesan "text": database P0002; disimpan sebagai pengganti']);
         expect(h.db.userRows().map((m) => [m.wa_message_id, m.metadata])).toEqual([['wamid.racun', { unprocessable: 'text' }]]);
         expect(pushes()).toHaveLength(1);
+    });
+
+    it('15c. a thrown bug never turns a text into a placeholder (D24): 503 past the poison bound, and once it is fixed the text is stored with its content', async () => {
+        const body = delivery([change({ contacts: [contactOf(A)], messages: [textMsg(A, 'wamid.bug', 'tolong dibalas')] })]);
+        h.db.fail({ target: 'rpc:wa_ingest_inbound', throws: new TypeError('x is not a function'), times: 7 });
+        const answers: number[] = [];
+        for (let i = 0; i < 8; i++) answers.push(await deliver(body));
+        await settle();
+        expect(answers).toEqual([503, 503, 503, 503, 503, 503, 503, 200]);
+        expect(details('webhook_error')).toEqual(Array(7).fill('TypeError (1 dari 1 item)'));
+        expect(h.db.events('webhook_payload_invalid')).toEqual([]);
+        expect(h.db.userRows().map((m) => [m.wa_message_id, m.content, m.metadata])).toEqual([['wamid.bug', 'tolong dibalas', {}]]);
     });
 
     it('15b. a placeholder that fails retryably keeps the answer 503; the next delivery stores it', async () => {
         const body = delivery([change({ contacts: [contactOf(A)], messages: [textMsg(A, 'wamid.racun-2', 'halo')] })]);
         const isPlaceholder = (a: Record<string, unknown>) => !!(a.p_metadata as Record<string, unknown>).unprocessable;
-        h.db.fail({ target: 'rpc:wa_ingest_inbound', match: (a) => !isPlaceholder(a), throws: new TypeError('boom'), times: Infinity });
+        h.db.fail({ target: 'rpc:wa_ingest_inbound', match: (a) => !isPlaceholder(a), error: { code: 'P0002' }, times: Infinity });
         h.db.fail({ target: 'rpc:wa_ingest_inbound', match: isPlaceholder, error: { code: '40001' } });
         const answers: number[] = [];
         for (let i = 0; i < 6; i++) answers.push(await deliver(body));
@@ -836,10 +862,13 @@ describe('the rest of the batch walk (C2_SPEC sections 6 and 7)', () => {
     it('a slow or contended database (57014, 55P03, 40P01) never skips a status: it stays 503 past the poison bound and applies once the database recovers', async () => {
         const row = h.db.seedAssistant('wamid.keluar-lambat-db', A, 'sent');
         const body = delivery([change({ statuses: [{ id: 'wamid.keluar-lambat-db', status: 'read', timestamp: metaTs(), recipient_id: A }] })]);
-        for (const code of ['57014', '55P03', '40P01']) h.db.fail({ target: 'rpc:wa_apply_statuses', error: { code }, times: 2 });
+        // Each code alone reaches the bound (it would skip the status if it
+        // counted); then one failure that counts, which must still answer 503.
+        for (const code of ['57014', '55P03', '40P01']) h.db.fail({ target: 'rpc:wa_apply_statuses', error: { code }, times: POISON_LIMIT });
+        h.db.fail({ target: 'rpc:wa_apply_statuses', error: { code: 'P0002' } });
         const answers: number[] = [];
-        for (let i = 0; i < 7; i++) answers.push(await deliver(body));
-        expect(answers).toEqual([503, 503, 503, 503, 503, 503, 200]);
+        for (let i = 0; i < 3 * POISON_LIMIT + 2; i++) answers.push(await deliver(body));
+        expect(answers).toEqual([...Array(3 * POISON_LIMIT + 1).fill(503), 200]);
         expect(h.db.events('webhook_payload_invalid')).toEqual([]);
         expect(row.status).toBe('read');
     });
@@ -855,15 +884,32 @@ describe('the rest of the batch walk (C2_SPEC sections 6 and 7)', () => {
         expect(h.db.chat(A)!.bsuid).toBe('ID.tiga');
     });
 
-    it('a user_id_update that keeps failing answers 503 four times, then is skipped with an alert (C2_SPEC 6.9)', async () => {
+    it('a user_id_update the database keeps refusing (P0002) answers 503 four times, then is skipped with an alert (C2_SPEC 6.9)', async () => {
         h.db.seedChat({ phone_number: A, bsuid: 'ID.lama' });
         const body = delivery([{ field: 'user_id_update', value: { user_id_update: [{ user_id: { previous: 'ID.lama', current: 'ID.baru' } }] } }]);
-        h.db.fail({ target: 'whatsapp_chats.update', throws: new TypeError('boom'), times: Infinity });
+        h.db.fail({ target: 'whatsapp_chats.update', error: { code: 'P0002' }, times: Infinity });
         const answers: number[] = [];
         for (let i = 0; i < 5; i++) answers.push(await deliver(body));
         expect(answers).toEqual([503, 503, 503, 503, 200]);
-        expect(details('webhook_payload_invalid')).toEqual(['user_id_update: TypeError; dilewati']);
+        expect(details('webhook_payload_invalid')).toEqual(['user_id_update: database P0002; dilewati']);
         expect(h.db.chat(A)!.bsuid).toBe('ID.lama');
+    });
+
+    it('a thrown bug never skips a user_id_update or a status (D24): both stay 503 past the poison bound and apply once it is fixed', async () => {
+        h.db.seedChat({ phone_number: A, bsuid: 'ID.bug-lama' });
+        const row = h.db.seedAssistant('wamid.keluar-bug', A, 'sent');
+        const body = delivery(
+            [{ field: 'user_id_update', value: { user_id_update: [{ user_id: { previous: 'ID.bug-lama', current: 'ID.bug-baru' } }] } }],
+            [change({ statuses: [{ id: 'wamid.keluar-bug', status: 'read', timestamp: metaTs(), recipient_id: A }] })],
+        );
+        h.db.fail({ target: 'whatsapp_chats.update', throws: new TypeError('boom'), times: 6 });
+        h.db.fail({ target: 'rpc:wa_apply_statuses', throws: new TypeError('boom'), times: 6 });
+        const answers: number[] = [];
+        for (let i = 0; i < 7; i++) answers.push(await deliver(body));
+        expect(answers).toEqual([503, 503, 503, 503, 503, 503, 200]);
+        expect(h.db.events('webhook_payload_invalid')).toEqual([]);
+        expect(h.db.chat(A)!.bsuid).toBe('ID.bug-baru');
+        expect(row.status).toBe('read');
     });
 
     it("the pre-dedup asks for 50 keys per query and finds only this org's rows: a wamid stored in another org does not skip the message", async () => {
@@ -913,7 +959,8 @@ describe('fixes after the independent review of PR-C2 (2026-10-30)', () => {
     it('a function missing before 0072 (PGRST202) never counts toward the poison bound: after it is fixed one more failure still answers 503, then the real text is stored', async () => {
         const body = delivery([change({ contacts: [contactOf(A)], messages: [textMsg(A, 'wamid.migrasi', 'halo')] })]);
         h.db.fail({ target: 'rpc:wa_ingest_inbound', error: { code: 'PGRST202' }, status: 404, times: 6 });
-        h.db.fail({ target: 'rpc:wa_ingest_inbound', error: { code: '57014' } });
+        // One failure that counts: had the outage raised the count, it would store a placeholder now.
+        h.db.fail({ target: 'rpc:wa_ingest_inbound', error: { code: 'P0002' } });
         const answers: number[] = [];
         for (let i = 0; i < 8; i++) answers.push(await deliver(body));
         await settle();
@@ -929,9 +976,11 @@ describe('fixes after the independent review of PR-C2 (2026-10-30)', () => {
         const row = h.db.seedAssistant('wamid.keluar-pgrst', A, 'sent');
         const body = delivery([change({ statuses: [{ id: 'wamid.keluar-pgrst', status: 'read', timestamp: metaTs(), recipient_id: A }] })]);
         h.db.fail({ target: 'rpc:wa_apply_statuses', error: { code: 'PGRST202' }, status: 404, times: 6 });
+        // One failure that counts: had the outage raised the count, it would skip the status now.
+        h.db.fail({ target: 'rpc:wa_apply_statuses', error: { code: 'P0002' } });
         const answers: number[] = [];
-        for (let i = 0; i < 7; i++) answers.push(await deliver(body));
-        expect(answers).toEqual([503, 503, 503, 503, 503, 503, 200]);
+        for (let i = 0; i < 8; i++) answers.push(await deliver(body));
+        expect(answers).toEqual([503, 503, 503, 503, 503, 503, 503, 200]);
         expect(h.db.events('webhook_payload_invalid')).toEqual([]);
         expect(row.status).toBe('read');
     });
@@ -1174,9 +1223,11 @@ describe('pins the final review asked for (2026-10-30)', () => {
         h.db.seedChat({ phone_number: A, bsuid: 'ID.lama' });
         const body = delivery([{ field: 'user_id_update', value: { user_id_update: [{ user_id: { previous: 'ID.lama', current: 'ID.baru' } }] } }]);
         h.db.fail({ target: 'whatsapp_chats.update', error: { code: '25006' }, status: 500, times: 6 });
+        // One failure that counts: had the outage raised the count, it would skip the move now.
+        h.db.fail({ target: 'whatsapp_chats.update', error: { code: 'P0002' } });
         const answers: number[] = [];
-        for (let i = 0; i < 7; i++) answers.push(await deliver(body));
-        expect(answers).toEqual([503, 503, 503, 503, 503, 503, 200]);
+        for (let i = 0; i < 8; i++) answers.push(await deliver(body));
+        expect(answers).toEqual([503, 503, 503, 503, 503, 503, 503, 200]);
         expect(h.db.chat(A)!.bsuid).toBe('ID.baru');
         expect(h.db.events('webhook_payload_invalid')).toEqual([]);
     });
@@ -1204,9 +1255,15 @@ describe('pins the final review asked for (2026-10-30)', () => {
             status: 0,
             times: 6,
         });
+        // One failure that counts: had the outage raised the count, it would store a placeholder now.
+        h.db.fail({
+            target: 'whatsapp_messages.insert',
+            match: (a) => JSON.stringify(a.payload ?? null).includes('"role":"system"'),
+            error: { code: 'P0002' },
+        });
         const answers: number[] = [];
-        for (let i = 0; i < 7; i++) answers.push(await deliver(body));
-        expect(answers).toEqual([503, 503, 503, 503, 503, 503, 200]);
+        for (let i = 0; i < 8; i++) answers.push(await deliver(body));
+        expect(answers).toEqual([503, 503, 503, 503, 503, 503, 503, 200]);
         expect(h.db.userRows()).toEqual([]);
         expect(noteTexts()).toEqual(['Customer shared contact info — phone tersimpan: 620000007777']);
         expect(h.db.events('webhook_payload_invalid')).toEqual([]);
@@ -1279,5 +1336,74 @@ describe('pins the final review asked for (2026-10-30)', () => {
         expect(await deliver(body)).toBe(200);
         expect(h.db.userRows().map((m) => m.wa_message_id)).toEqual(['wamid.flow-gerbang-harness']);
         expect(vi.mocked(handleFlowReply)).toHaveBeenCalledTimes(2);
+    });
+});
+
+describe('pins the review of the final-review fixes asked for (2026-10-31)', () => {
+    it('the batch line is written while the alert write still hangs', async () => {
+        h.db.fail({ target: 'rpc:wa_ingest_inbound', error: { code: '40001' } });
+        h.db.hang = (target) => target === 'rpc:record_ops_event';
+        const pending = POST(signedPost(delivery([change({ contacts: [contactOf(A)], messages: [textMsg(A, 'wamid.urutan', 'halo')] })])));
+        for (let i = 0; i < 500 && batchLines().length === 0; i++) await macrotask();
+        expect(batchLines()).toEqual([expect.stringMatching(/ retryable=1 .* http=503$/)]);
+        expect(h.db.events()).toEqual([]);
+        h.db.release();
+        expect((await pending).status).toBe(503);
+        expect(h.db.events().map((e) => e.kind)).toEqual(['webhook_error']);
+    });
+
+    it('a contact-card note whose write throws (a bug, not a database answer) is alerted by its own name, never as a Supabase outage, and never counts', async () => {
+        const card = {
+            from: A,
+            id: 'wamid.kartu-bug',
+            timestamp: metaTs(),
+            type: 'contacts',
+            contacts: [{ name: { formatted_name: 'Teman Palsu' }, phones: [{ phone: '+62 800-0000-7778', wa_id: '620000007778' }] }],
+        };
+        h.db.fail({
+            target: 'whatsapp_messages.insert',
+            match: (a) => JSON.stringify(a.payload ?? null).includes('"role":"system"'),
+            throws: new TypeError('x is not a function'),
+        });
+        expect(await deliver(delivery([change({ contacts: [contactOf(A)], messages: [card] })]))).toBe(503);
+        expect(details('webhook_error')).toEqual(['TypeError (1 dari 1 item)']);
+        expect(poisonCount('wamid.kartu-bug')).toBe(0);
+    });
+
+    it('user_id_update entries that are not objects are counted and skipped with one alert', async () => {
+        const body = delivery([{ field: 'user_id_update', value: { user_id_update: ['ID.bukan-objek', null] } }]);
+        expect(await deliver(body)).toBe(200);
+        expect(details('webhook_payload_invalid')).toEqual(['2 user_id_update tanpa isi terbaca; dilewati']);
+        expect(batchLines()[0]).toMatch(/^Webhook batch: items=2 .* skipped=2 /);
+    });
+
+    it('a placeholder already stored is only a duplicate when a resend gets past a failed pre-dedup: no second alert', async () => {
+        const flow = {
+            from: A,
+            id: 'wamid.flow-dua-kali',
+            timestamp: metaTs(),
+            type: 'interactive',
+            interactive: { type: 'nfm_reply', nfm_reply: { name: 'flow', body: 'Sent', response_json: '{"nama_pic":"Bud' } },
+        };
+        const body = delivery([change({ contacts: [contactOf(A)], messages: [flow] })]);
+        expect(await deliver(body)).toBe(200);
+        h.db.fail({ target: 'whatsapp_messages.select', error: { code: '57014' } }); // the resend's pre-dedup
+        expect(await deliver(body)).toBe(200);
+        expect(h.db.userRows().map((m) => m.wa_message_id)).toEqual(['wamid.flow-dua-kali']);
+        expect(details('webhook_payload_invalid')).toEqual(['pesan "interactive": kiriman form tidak terbaca; disimpan sebagai pengganti']);
+        expect(batchLines()[1]).toContain(' duplicate=1 ');
+    });
+
+    it("an HTTP 403 without a code on one message's own call is about that request (the org read passed with the same key): it counts, with a hint that does not blame the key", async () => {
+        const body = delivery([change({ contacts: [contactOf(A)], messages: [textMsg(A, 'wamid.ditolak', 'halo')] })]);
+        const notPlaceholder = (a: Record<string, unknown>) => !(a.p_metadata as Record<string, unknown>).unprocessable;
+        h.db.fail({ target: 'rpc:wa_ingest_inbound', match: notPlaceholder, error: { code: '', message: '<html>403 Forbidden</html>' }, status: 403, times: Infinity });
+        const answers: number[] = [];
+        for (let i = 0; i < POISON_LIMIT; i++) answers.push(await deliver(body));
+        expect(answers).toEqual([...Array(POISON_LIMIT - 1).fill(503), 200]);
+        expect(details('webhook_error')[0]).toBe(
+            'RpcHttp403 — gateway Supabase menolak permintaan ini (HTTP 403); kunci dan alamat berlaku (1 dari 1 item)',
+        );
+        expect(h.db.userRows().map((m) => m.metadata)).toEqual([{ unprocessable: 'text' }]);
     });
 });

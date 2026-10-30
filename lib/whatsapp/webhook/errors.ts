@@ -3,9 +3,10 @@ import { describeErrorForOps } from '@/lib/ops/events';
 // What a failed item means for Meta's delivery: retryable (answer 503, Meta
 // sends the batch again and the item is tried again) or permanent (trying
 // again cannot help: the item is stored as a placeholder or skipped, and the
-// answer is 200). An error nobody foresaw is retryable: the poison counter
-// (outcome.ts) bounds the retries, so an unknown error never drops a message
-// on its first occurrence and never makes Meta retry it for days either.
+// answer is 200). An error nobody foresaw is retryable, so it never drops a
+// message on its first occurrence. Only a database answer specific to the
+// item counts toward the poison bound (countsTowardPoison, outcome.ts); a
+// thrown bug keeps the delivery in 503 until it is fixed (owner decision D24).
 
 export type ErrorClass = 'retryable' | 'permanent';
 
@@ -74,36 +75,50 @@ export function describeItemError(error: unknown): string {
     return error instanceof MalformedPayloadError ? error.reason : describeErrorForOps(error);
 }
 
-// Errors that hit every item alike say nothing about the item: the database
-// or PostgREST unreachable, overloaded or slow (a statement or lock timeout,
-// a serialization failure or deadlock under load), the schema out of step
-// with the code (class 42: a function, table, column or grant missing, e.g.
-// the code deployed ahead of its migration), a read-only database, an
-// internal error (classes 58 and XX), a gateway that refuses every call (a
-// wrong API key or URL: HTTP 401/403/404 without a PostgREST code). Counted
-// toward an item's poison bound they would turn an outage, a slow database
-// or a deploy-order slip into placeholders and skipped statuses once it is
-// fixed. A thrown bug, a malformed answer and any other SQLSTATE (e.g. 23503,
-// a contact deleted meanwhile) still count.
+// Database answers that hit every item alike say nothing about the item: the
+// database or PostgREST unreachable, overloaded or slow (a statement or lock
+// timeout, a serialization failure or deadlock under load), the schema out of
+// step with the code (class 42: a function, table, column or grant missing,
+// e.g. the code deployed ahead of its migration), a read-only database, an
+// internal error (classes 58 and XX, PostgREST's PGRSTX00). Counted toward an
+// item's poison bound they would turn an outage, a slow database or a
+// deploy-order slip into placeholders and skipped statuses once it is fixed.
+// A wrong API key or URL never gets as far as an item: the delivery's org
+// read on the same client fails first (PlatformSettingReadError, never
+// counted), so an HTTP 401/403/404 without a code on one item's own call is
+// about that request, and counts like any other answer specific to the item
+// (e.g. 23503, a contact deleted meanwhile).
 const SYSTEMIC_CODES = new Set(['25006', '40001', '40P01', '55P03', '57014']);
-const SYSTEMIC_HTTP = new Set([0, 401, 403, 404, 408, 429]);
+const SYSTEMIC_HTTP = new Set([0, 408, 429]);
 
-/** Whether a retryable failure counts toward the item's poison bound (outcome.ts). */
-export function countsTowardPoison(error: unknown): boolean {
-    if (error === null || typeof error !== 'object') return true;
-    const e = error as { name?: unknown; code?: unknown };
-    if (e.name === 'AbortError' || e.name === 'TimeoutError' || e.name === 'PlatformSettingReadError') return false;
-    const code = typeof e.code === 'string' ? e.code : '';
-    if (code === '' && error instanceof RpcError) {
-        // No answer at all, a gateway refusing every call, or an HTTP error without a body.
-        return !(SYSTEMIC_HTTP.has(error.status) || error.status >= 500);
-    }
-    return !(
+function isSystemicCode(code: string): boolean {
+    return (
         SYSTEMIC_CODES.has(code) ||
-        /^PGRST[023]\d\d$/.test(code) ||
+        /^PGRST[023X]\d\d$/.test(code) ||
         /^(08|42|53|58|XX)[0-9A-Z]{3}$/.test(code) ||
         /^57P0\d$/.test(code)
     );
+}
+
+/**
+ * Whether a retryable failure counts toward the item's poison bound
+ * (outcome.ts): only an answer of the database or PostgREST that is specific
+ * to the item. A thrown bug, or anything else that is no database answer,
+ * never counts (owner decision D24): Meta keeps resending the delivery (up to
+ * 7 days, webhook_error every hour), and once the bug is fixed or rolled back
+ * the message is stored with its content instead of as a placeholder.
+ */
+export function countsTowardPoison(error: unknown): boolean {
+    if (error instanceof RpcError) {
+        // Without a code: no answer at all, or an HTTP error without a body.
+        if (error.code === '') return !(SYSTEMIC_HTTP.has(error.status) || error.status >= 500);
+        return !isSystemicCode(error.code);
+    }
+    // A database answer handed over without the RpcError wrapper: a plain
+    // object (never a thrown Error) carrying its code.
+    if (error === null || typeof error !== 'object' || error instanceof Error) return false;
+    const code = (error as { code?: unknown }).code;
+    return typeof code === 'string' && code !== '' && !isSystemicCode(code);
 }
 
 /**
@@ -112,9 +127,19 @@ export function countsTowardPoison(error: unknown): boolean {
  */
 export function opsHint(error: unknown): string | null {
     if (error === null || typeof error !== 'object') return null;
-    const e = error as { name?: unknown; code?: unknown };
-    if (e.name === 'PlatformSettingReadError') return 'org default tidak terbaca, periksa Supabase';
+    const e = error as { name?: unknown; code?: unknown; status?: unknown };
     const code = typeof e.code === 'string' ? e.code : '';
+    if (e.name === 'PlatformSettingReadError') {
+        // The delivery's first call on the client: a wrong API key or URL shows here.
+        const status = typeof e.status === 'number' ? e.status : 0;
+        if (/^PGRST3\d\d$/.test(code) || (code === '' && (status === 401 || status === 403))) {
+            return 'org default tidak terbaca: kunci API Supabase ditolak, periksa SUPABASE_SERVICE_ROLE_KEY (rotasi kunci?)';
+        }
+        if (code === '' && status === 404) {
+            return 'org default tidak terbaca: alamat Supabase tidak ditemukan, periksa NEXT_PUBLIC_SUPABASE_URL';
+        }
+        return 'org default tidak terbaca, periksa Supabase';
+    }
     if (code === 'PGRST202' || code === '42883') return 'fungsi database tidak ditemukan, migrasi belum diterapkan?';
     if (code === 'PGRST203') return 'dua versi fungsi database, periksa migrasi terakhir';
     if (code === 'PGRST204' || code === 'PGRST205' || code === '42703' || code === '42P01') {
@@ -128,17 +153,18 @@ export function opsHint(error: unknown): string | null {
     if (code === '55P03') return 'menunggu kunci database terlalu lama';
     if (code === '40001' || code === '40P01') return 'bentrok transaksi, aman bila jarang';
     if (code === '57014') return 'query database dibatalkan karena terlalu lama';
-    if (/^(58|XX)[0-9A-Z]{3}$/.test(code)) return 'galat internal database, periksa Supabase';
+    if (/^(58|XX)[0-9A-Z]{3}$/.test(code) || /^PGRSTX\d\d$/.test(code)) return 'galat internal database, periksa Supabase';
     if (/^PGRST00\d$/.test(code) || /^08[0-9A-Z]{3}$/.test(code) || /^57P0\d$/.test(code)) {
         return 'Supabase tidak terjangkau atau sedang gangguan';
     }
     if (code === '' && error instanceof RpcError) {
-        if (error.status === 401 || error.status === 403) {
-            return 'kunci API Supabase ditolak, periksa SUPABASE_SERVICE_ROLE_KEY (rotasi kunci?)';
-        }
-        if (error.status === 404) return 'alamat Supabase tidak ditemukan, periksa NEXT_PUBLIC_SUPABASE_URL';
         if (error.status === 408 || error.status === 429) return 'Supabase sibuk (batas permintaan atau waktu tunggu habis)';
         if (error.status === 0 || error.status >= 500) return 'Supabase tidak terjangkau atau sedang gangguan';
+        // The org read of this delivery passed with the same key and URL, so
+        // the gateway refused this request itself.
+        if (error.status === 401 || error.status === 403 || error.status === 404) {
+            return `gateway Supabase menolak permintaan ini (HTTP ${error.status}); kunci dan alamat berlaku`;
+        }
     }
     return null;
 }

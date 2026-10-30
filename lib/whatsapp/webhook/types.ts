@@ -10,9 +10,10 @@ import type { BatchOutcome } from '@/lib/whatsapp/webhook/outcome';
 // schema. The readers (payload.ts) and the handlers never trust a field's
 // shape: a malformed message becomes a placeholder or is skipped with an
 // alert (handlers/messages.ts, including a Flow whose answers cannot be
-// read), a malformed status or user_id_update entry is skipped with an alert
-// (handlers/statuses.ts, handlers/user-id-update.ts); never an exception out
-// of the pipeline.
+// read; a contact card with no phone from a sender without one is only
+// acknowledged, there being nothing to note), a malformed status or
+// user_id_update entry is skipped with an alert (handlers/statuses.ts,
+// handlers/user-id-update.ts); never an exception out of the pipeline.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type MetaJson = any;
 

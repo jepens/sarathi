@@ -161,11 +161,14 @@ auth runs). Without the container name the scenarios that alter the database
 for a moment (psql) are skipped. Localhost only: the run creates and deletes
 its own org, the default org until it ends. It refuses to start when the
 container is not the database of the stack the URL points at, or when the
-queue holds another org's pending jobs (its drains would answer them). A run
-with `LOCAL_DB_KEEP=1`, or one killed before its cleanup, can leave pending
-jobs, its org as the default org, or `wa_ingest_inbound` renamed or without its
-grant until the next run: `npx supabase db reset` before `npx supabase test db`
-on the same stack (080, 110 and 130 expect a clean queue and the seed org).
+queue holds another org's pending or processing jobs (its drains would answer
+them). A `LOCAL_DB_KEEP=1` run leaves its org, its rows and pending jobs (the
+default org is restored). A run killed before its cleanup can also leave its
+org as the default org, `wa_ingest_inbound` renamed or without its grant, or
+`platform_settings` unreadable for service_role; only a later run with
+`LOCAL_SUPABASE_DB_CONTAINER` set restores those. In both cases run
+`npx supabase db reset` before `npx supabase test db` or the local app on the
+same stack (080, 110 and 130 expect a clean queue and the seed org).
 
 ## Realtime org bus (0064 expand, client, 0068 contract)
 
