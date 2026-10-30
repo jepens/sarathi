@@ -26,11 +26,14 @@ export class MalformedPayloadError extends Error {
 
 // SQLSTATEs that say the input itself is wrong: class 22 (data exception), a
 // NOT NULL or CHECK violation, a RAISE in a function. PGRST1xx: PostgREST could
-// not read the request.
+// not read the request; it stays permanent because not all of it is a bug of
+// this code (PGRST116, no or several rows for a single object, depends on the
+// data).
 const PERMANENT_CODES = new Set(['23502', '23514', 'P0001']);
 // Except the parameter checks of the webhook's RPCs (22004/22023 raised by
 // wa_ingest_inbound and wa_apply_statuses): only a bug of this code can trip
-// them, so they follow D24 like a thrown bug: retryable, never counted.
+// them, so they follow D24 like a thrown bug: retryable, never counted. (The
+// header of migration 0072, written before D24, still calls them permanent.)
 const CALLER_BUG_CODES = new Set(['22004', '22023']);
 
 export function classify(error: unknown): ErrorClass {

@@ -52,17 +52,22 @@ export interface MessagePlan {
 export function planMessage(entry: unknown, value: MetaJson, storeOnly: OtherNumber | null, now = Date.now()): MessagePlan {
     const message = isRecord(entry) ? entry : null;
     const type = typeof message?.type === 'string' ? message.type : '';
-    const id = typeof message?.id === 'string' && message.id.length > 0 ? message.id : null;
+    // Cleaned before the emptiness check: an id made only of U+0000 would
+    // otherwise become '' (refused by wa_ingest_inbound with 22023) instead
+    // of a syn. key.
+    const cleanId = typeof message?.id === 'string' ? sanitizeForPg(message.id) : '';
+    const id = cleanId.length > 0 ? cleanId : null;
     const metadata = isRecord(value) && isRecord(value.metadata) ? value.metadata : null;
     const contact = matchContact(isRecord(value) ? value.contacts : undefined, entry);
     const context = message && isRecord(message.context) ? message.context : null;
-    const replyTo = typeof context?.id === 'string' && context.id.length > 0 ? context.id : null;
+    const cleanReplyTo = typeof context?.id === 'string' ? sanitizeForPg(context.id) : '';
+    const replyTo = cleanReplyTo.length > 0 ? cleanReplyTo : null;
     return {
         message,
         type,
-        key: sanitizeForPg(id ?? syntheticKey(metadata?.phone_number_id, entry)),
+        key: id ?? syntheticKey(metadata?.phone_number_id, entry),
         synthetic: id === null,
-        replyTo: sanitizeForPg(replyTo),
+        replyTo,
         waTs: parseMetaTimestamp(message?.timestamp, now),
         identity: sanitizeForPg(senderIdentity(entry, contact)),
         storeOnly,

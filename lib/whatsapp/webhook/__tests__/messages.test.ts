@@ -124,6 +124,16 @@ describe('planMessage (the prelude)', () => {
         });
     });
 
+    it('an id or a reply context is cleaned before it is judged empty: one made only of U+0000 gets a syn. key (no reply context), never an empty key', () => {
+        const value = { metadata: { phone_number_id: PNID } };
+        const nulOnly = planMessage({ from: PHONE, id: '\u0000\u0000', type: 'text', text: { body: 'halo' }, context: { id: '\u0000' } }, value, null);
+        expect(nulOnly.synthetic).toBe(true);
+        expect(nulOnly.key).toMatch(/^syn\.[0-9a-f]{64}$/);
+        expect(nulOnly.replyTo).toBeNull();
+        const withNul = planMessage({ from: PHONE, id: 'wamid.a\u0000b', type: 'text', text: { body: 'halo' }, context: { id: 'wamid.q\u0000' } }, value, null);
+        expect([withNul.key, withNul.synthetic, withNul.replyTo]).toEqual(['wamid.ab', false, 'wamid.q']);
+    });
+
     it('a message without an id gets a stable synthetic key; reply context and Meta time are read', () => {
         const ts = Math.floor(Date.now() / 1000) - 30;
         const message = { from: PHONE, type: 'text', timestamp: String(ts), text: { body: 'halo' }, context: { id: 'wamid.quoted' } };

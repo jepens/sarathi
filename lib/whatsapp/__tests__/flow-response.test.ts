@@ -122,6 +122,18 @@ describe('handleFlowReply: its insert of the submission is the redelivery gate',
         expect(sendWhatsAppMessage).not.toHaveBeenCalled();
     });
 
+    it('a gate insert that throws (not an answer with an error) is still before the gate: thrown to the webhook, no lead or confirmation', async () => {
+        h.fake = makeFakeSupabase({
+            resolve: (c) => {
+                if (c.table === 'whatsapp_messages' && c.op === 'insert') throw new TypeError('x is not a function');
+                return { data: null, error: null };
+            },
+        });
+        await expect(submit()).rejects.toThrow(TypeError);
+        expect(saveLeadInfo).not.toHaveBeenCalled();
+        expect(sendWhatsAppMessage).not.toHaveBeenCalled();
+    });
+
     it('an error after the gate is only logged: the stored submission is handled (a 503 would make the resend a duplicate)', async () => {
         vi.mocked(saveLeadInfo).mockRejectedValueOnce(new TypeError('x is not a function'));
         expect(await submit()).toEqual({ status: 'handled' });
