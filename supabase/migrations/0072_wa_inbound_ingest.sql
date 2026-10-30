@@ -307,6 +307,8 @@ begin
     --    is per key) can commit in between: then the message insert finds
     --    that row, the savepoint of this block undoes the chat this call
     --    inserted (and its broadcast), and the call answers 'duplicate'.
+    --    The rate count of step 4 stays: one extra slot of the losing key,
+    --    which has no chat (accepted; this race needs two keys for one wamid).
     begin
         insert into public.whatsapp_chats as c (org_id, phone_number, last_message_at)
         values (p_org, v_key, null)
@@ -389,7 +391,11 @@ begin
         returning w.id, w.state into v_work_id, v_work_state;
     end if;
 
-    -- 10. AI decision.
+    -- 10. AI decision. Not serialised with claim_queue_jobs: a fragment that
+    --     sees its burst still pending here while the drainer claims that
+    --     burst is queued as 'joined' without a unit, and becomes a burst of
+    --     its own (a second AI reply the minute quota does not count; the
+    --     daily quota, ai_reply_day, still counts it). Accepted, as before.
     if p_ai_eligible then
         if not v_ai_enabled then
             queue_outcome := 'manual';
@@ -574,8 +580,10 @@ $$;
 -- 5. Work claim and cleanup (callers from PR-C3)
 -- ---------------------------------------------------------------------------
 
--- Returns, first, the running rows whose lease ran out on their last attempt,
--- now failed (the caller tells the operators), then the due rows it claimed,
+-- Returns, first, the rows with no attempt left that nobody works on (a
+-- running row whose lease ran out on its last attempt, or a pending row a
+-- worker rescheduled after it), now failed, at most p_limit (the caller tells
+-- the operators), then the due rows it claimed,
 -- oldest due first: pending rows whose next attempt is due and running rows
 -- whose lease ran out, with attempts left; each claim counts one attempt and
 -- leases the row for p_lease_seconds. Rows locked by another claimer are
@@ -603,10 +611,12 @@ begin
      where w.id in (
            select x.id
              from public.whatsapp_inbound_work x
-            where x.state = 'running'
-              and (x.lease_until is null or x.lease_until < now())
+            where (   x.state = 'pending'
+                   or (x.state = 'running' and (x.lease_until is null or x.lease_until < now())))
               and x.attempts >= x.max_attempts
               and (p_id is null or x.id = p_id)
+            order by x.next_attempt_at, x.id
+            limit p_limit
               for update skip locked)
     returning w.*;
 

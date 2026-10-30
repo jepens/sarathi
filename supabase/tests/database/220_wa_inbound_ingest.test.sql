@@ -20,7 +20,7 @@
 --   5. chat summary
 --   6. rate limit
 begin;
-select plan(126);
+select plan(135);
 
 select tests.create_two_orgs();
 
@@ -51,7 +51,8 @@ create function tests._220_in(
     p_work_payload jsonb default null,
     p_verified_phone text default null,
     p_metadata jsonb default '{}'::jsonb,
-    p_media_type text default null)
+    p_media_type text default null,
+    p_content text default null)
 returns void
 language sql
 as $$
@@ -59,7 +60,7 @@ as $$
     select p_label, to_jsonb(r)
       from public.wa_ingest_inbound(
                p_org => p_org, p_from => p_from, p_bsuid => p_bsuid, p_wamid => p_wamid,
-               p_wa_ts => p_wa_ts, p_content => p_preview, p_preview => p_preview,
+               p_wa_ts => p_wa_ts, p_content => coalesce(p_content, p_preview), p_preview => p_preview,
                p_verified_phone => p_verified_phone, p_reply_to_wamid => null,
                p_media_type => p_media_type, p_media_mime => null, p_media_filename => null,
                p_metadata => p_metadata, p_unread => p_unread, p_rate_scope => p_rate_scope,
@@ -258,6 +259,13 @@ select is(
     'timestamp with time zone notnull=f default=-',
     'whatsapp_messages.wa_timestamp is a nullable timestamptz without a default (a catalog-only change)');
 
+select ok(
+    pg_get_functiondef('public.wa_ingest_inbound(uuid, text, text, text, timestamptz, text, text, text, text,
+        text, text, text, jsonb, boolean, text, integer, boolean, text, integer, text, jsonb)'::regprocedure)
+        ~* 'for\s+no\s+key\s+update',
+    'step 7 reads the chat row FOR NO KEY UPDATE, so a concurrent summary write is never overwritten '
+    || 'with an older Meta time');
+
 -- ---------------------------------------------------------------------------
 -- 2. Parameters and missing identity (permanent errors for the webhook; the
 --    texts name the parameter only, never a phone, BSUID or message text)
@@ -272,6 +280,11 @@ select throws_ok(
     $$ select tests._220_in('v.x2', null, '620022000001', 'wamid.220.v', p_preview => null) $$,
     '22004', 'wa_ingest_inbound: p_org, p_content, p_preview must not be null',
     'every missing parameter is named');
+select throws_ok(
+    $$ select * from public.wa_ingest_inbound(tests.org_a(), '620022000001', null, 'wamid.220.x8', null,
+           'x', 'x', null, null, null, null, null, null, null, null, null, null, null, null, null, null) $$,
+    '22004', 'wa_ingest_inbound: p_metadata, p_unread, p_ai_eligible must not be null',
+    'a missing metadata, unread flag or AI flag is refused too, each named');
 select throws_ok(
     $$ select tests._220_in('v.x3', tests.org_a(), '620022000001', 'wamid.220.v',
                             p_ai_eligible => true, p_queue_text => null) $$,
@@ -738,6 +751,22 @@ select is(
     'new/already_queued/- jobs=1 refused=2',
     'a job of this wamid from the old code path: the message is stored, without a second job or a quota unit');
 
+-- The old code path's job of this wamid was already answered, and the
+-- minute quota is used up: the quota must not even be asked.
+insert into public.message_queue (org_id, phone_number, message_text, wa_message_id, status)
+values (tests.org_b(), '620022000511', 'jalur lama, sudah dibalas', 'wamid.220.q8b', 'completed');
+select tests._220_in('q8b', tests.org_b(), '620022000511', 'wamid.220.q8b', p_ai_eligible => true,
+                     p_inbound_limit => 2);
+select is(
+    tests._220_f('q8b', 'outcome', 'queue_outcome', 'quota_limit', 'quota_first_refusal')
+    || format(' jobs=%s used=%s refused=%s',
+        (select count(*) from public.message_queue where org_id = tests.org_b() and wa_message_id = 'wamid.220.q8b'),
+        (select sum(used) from public.org_usage_counters where org_id = tests.org_b() and metric = 'inbound_minute'),
+        (select sum(refused) from public.org_usage_counters where org_id = tests.org_b() and metric = 'inbound_minute')),
+    'new/already_queued/-/- jobs=1 used=2 refused=2',
+    'an answered job of this wamid from the old code path: no second job, and the used-up quota is not asked '
+    || '(no refusal, no note)');
+
 -- The same wamid queued by another delivery while the quota was counted.
 select tests.clear_authentication();
 create function tests._220_queue_race()
@@ -771,6 +800,38 @@ select is(
         (select count(*) from public.message_queue where org_id = tests.org_b() and phone_number = '620022000510')),
     'new/-/-/- jobs=0',
     'a message that is not AI-eligible (another number, a late text, a summary line) gets no AI decision');
+
+-- Only a burst still pending is joined (org A, limit 30).
+insert into tests._220_res (label, res)
+select 'q11.used', to_jsonb(coalesce(sum(u.used), 0))
+  from public.org_usage_counters u where u.org_id = tests.org_a() and u.metric = 'inbound_minute';
+insert into public.message_queue (org_id, phone_number, message_text, wa_message_id, status) values
+    (tests.org_a(), '620022000512', 'burst sudah dibalas', 'wamid.220.q11.old', 'completed'),
+    (tests.org_a(), '620022000513', 'burst sedang diproses', 'wamid.220.q12.old', 'processing');
+select tests._220_in('q11', tests.org_a(), '620022000512', 'wamid.220.q11', p_ai_eligible => true);
+select tests._220_in('q12', tests.org_a(), '620022000513', 'wamid.220.q12', p_ai_eligible => true);
+select is(
+    tests._220_f('q11', 'queue_outcome', 'quota_limit') || ' ' || tests._220_f('q12', 'queue_outcome', 'quota_limit')
+    || format(' units=%s',
+        (select coalesce(sum(u.used), 0) from public.org_usage_counters u
+          where u.org_id = tests.org_a() and u.metric = 'inbound_minute')
+        - (tests._220_r('q11.used'))::int),
+    'queued/30 queued/30 units=2',
+    'after an answered or a running burst a new message opens a burst of its own and spends a quota unit '
+    || '(only a pending burst is joined)');
+
+-- Content, preview and queue text are three values (a location's summary
+-- line, its chat-list preview, the text the AI gets).
+select tests._220_in('q13', tests.org_a(), '620022000514', 'wamid.220.q13', p_preview => 'pratinjau',
+                     p_content => 'isi lengkap', p_ai_eligible => true, p_queue_text => 'teks antrean');
+select is(
+    (select format('%s|%s|%s', m.content, c.last_message, q.message_text)
+       from public.whatsapp_messages m
+       join public.whatsapp_chats c on c.org_id = m.org_id and c.phone_number = m.phone_number
+       join public.message_queue q on q.org_id = m.org_id and q.wa_message_id = m.wa_message_id
+      where m.org_id = tests.org_a() and m.wa_message_id = 'wamid.220.q13' and m.role = 'user'),
+    'isi lengkap|pratinjau|teks antrean',
+    'the row keeps the full content, the chat list shows the preview and the job gets the queue text');
 
 select ok(
     tests._220_lock_held(tests.org_b(), '620022000501') and not tests._220_lock_held(tests.org_a(), '620022000501'),
@@ -885,6 +946,28 @@ select case when tests.realtime_partition_ready()
             'duplicate ',
             'a duplicate broadcasts nothing')
     else skip('no realtime.messages partition for today (150 reports it)', 1) end;
+
+-- A re-issued BSUID of a known phone replaces the stored one.
+insert into public.whatsapp_chats (org_id, phone_number, bsuid) values (tests.org_a(), '620022000620', 'ID.220.LAMA');
+select tests._220_in('i10', tests.org_a(), '620022000620', 'wamid.220.i10', p_bsuid => 'ID.220.BARU');
+select is(
+    tests._220_f('i10', 'outcome', 'bsuid_conflict') || ' '
+    || (select c.bsuid from public.whatsapp_chats c where c.org_id = tests.org_a() and c.phone_number = '620022000620'),
+    'new/false ID.220.BARU',
+    'a newer BSUID of the contact replaces the stored one, so a later phone-less message finds this chat');
+
+-- Only the user row is the redelivery gate (a contact card's note is keyed by
+-- the card's wamid, as a system row).
+insert into public.whatsapp_chats (org_id, phone_number) values (tests.org_a(), '620022000621');
+insert into public.whatsapp_messages (org_id, phone_number, role, content, wa_message_id)
+values (tests.org_a(), '620022000621', 'system', 'catatan untuk operator', 'wamid.220.i11');
+select tests._220_in('i11', tests.org_a(), '620022000621', 'wamid.220.i11');
+select is(
+    tests._220_f('i11', 'outcome') || format(' user_rows=%s',
+        (select count(*) from public.whatsapp_messages m
+          where m.org_id = tests.org_a() and m.wa_message_id = 'wamid.220.i11' and m.role = 'user')),
+    'new user_rows=1',
+    'a system row with the same wamid is not a redelivery: the message is stored');
 
 -- ---------------------------------------------------------------------------
 -- 9. Statuses: forward only, on the org's assistant rows
@@ -1054,6 +1137,29 @@ select is(
     '1/0 620022000702=ID.220.B1,620022000703=ID.220.OLD,620022000704=-',
     'the recipient''s BSUID is backfilled only on a chat without one, and only while no chat of the org holds it');
 
+-- The backfill stays in the org: org B has a chat with the same phone and no
+-- BSUID, and another chat of org B holds the BSUID org A's status reports.
+insert into public.whatsapp_chats (org_id, phone_number, bsuid) values
+    (tests.org_b(), '620022000708', null),
+    (tests.org_b(), '620022000799', 'ID.220.B8'),
+    (tests.org_a(), '620022000708', null),
+    (tests.org_a(), '620022000709', null);
+select tests._220_st('st8', tests.org_a(), jsonb_build_array(
+    jsonb_build_object('id', 'wamid.220.b8', 'status', 'sent',
+                       'recipient_id', '620022000708', 'recipient_user_id', 'ID.220.B9'),
+    jsonb_build_object('id', 'wamid.220.b9', 'status', 'sent',
+                       'recipient_id', '620022000709', 'recipient_user_id', 'ID.220.B8')));
+select is(
+    tests._220_f('st8', 'bsuid_filled', 'bsuid_conflicts') || ' '
+    || (select string_agg(format('%s:%s=%s', case when c.org_id = tests.org_a() then 'A' else 'B' end,
+                                 c.phone_number, coalesce(c.bsuid, '-')),
+                          ',' order by c.org_id = tests.org_b(), c.phone_number)
+          from public.whatsapp_chats c
+         where c.org_id in (tests.org_a(), tests.org_b())
+           and c.phone_number in ('620022000708', '620022000709', '620022000799')),
+    '2/0 A:620022000708=ID.220.B9,A:620022000709=ID.220.B8,B:620022000708=-,B:620022000799=ID.220.B8',
+    'the backfill writes only the org''s own chats, and a BSUID held in another org does not block it');
+
 -- Another chat takes the BSUID within the backfill's own statement.
 insert into public.whatsapp_chats (org_id, phone_number) values
     (tests.org_a(), '620022000706'),
@@ -1174,6 +1280,26 @@ select is(
             = tests._220_r('w4') ->> 'work_id'),
     't|t',
     'p_limit bounds a claim, the earliest due first; a row not due yet is not claimed');
+
+-- Pending rows with no attempt left (a worker rescheduled after its last
+-- attempt): failed, at most p_limit per claim, never claimed again.
+select tests._220_in('w6', tests.org_a(), '620022000805', 'wamid.220.w6', p_work_kind => 'media');
+select tests._220_in('w7', tests.org_a(), '620022000806', 'wamid.220.w7', p_work_kind => 'media');
+update public.whatsapp_inbound_work set attempts = 6, next_attempt_at = now() - interval '1 minute'
+ where id in ((tests._220_r('w6') ->> 'work_id')::uuid, (tests._220_r('w7') ->> 'work_id')::uuid);
+select tests._220_claim('wc9', 1, 60);
+select tests._220_claim('wc10', 1, 60);
+select tests._220_claim('wc11', 10, 60);
+select is(
+    format('%s|%s|%s',
+        (select string_agg(format('%s/%s', e ->> 'state', e ->> 'attempts'), ',')
+           from jsonb_array_elements(tests._220_r('wc9')) e),
+        (select string_agg(format('%s/%s', e ->> 'state', e ->> 'attempts'), ',')
+           from jsonb_array_elements(tests._220_r('wc10')) e),
+        tests._220_r('wc11')::text),
+    'failed/6|failed/6|[]',
+    'a pending row with no attempt left is failed instead of stranded, at most p_limit per claim, '
+    || 'and never claimed for a 7th attempt');
 
 -- Finished and open rows, 6 and 8 days after their last change (an insert
 -- sets updated_at freely; only an update runs set_updated_at).

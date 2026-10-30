@@ -139,7 +139,7 @@ stops the `supabase_*_sarathi` containers; never use `--all`.
   Its behaviour block tells messages apart by id, not by `inserted_at`
   (production's default is `now()`, newer Realtime images use
   `clock_timestamp()`). `220_wa_inbound_ingest.test.sql` counts the
-  broadcasts of one ingest call the same way and skips those three
+  broadcasts of one ingest call the same way and skips those four
   assertions without that partition (150 reports it).
 - `220_wa_inbound_ingest.test.sql` stages what one session cannot run, a
   second delivery committing in the middle of a call or a step that fails,
