@@ -14,3 +14,55 @@
 #    migration is applied to production with apply_migration, refresh
 #    production.txt and delete these lines in the same commit.
 #
+
+# pending production apply: 0072_wa_inbound_ingest
+# EXPAND (tracker 2.2a part 2, PR-C2): applied with apply_migration after the owner's review (D1) and before the PR-C2 deploy (the code on main never calls these objects); then refresh production.txt and delete this block in the same PR.
+> col public.whatsapp_inbound_work.attempts type=integer notnull=t default=0 identity=- generated=-
+> col public.whatsapp_inbound_work.created_at type=timestamp with time zone notnull=t default=now() identity=- generated=-
+> col public.whatsapp_inbound_work.id type=uuid notnull=t default=gen_random_uuid() identity=- generated=-
+> col public.whatsapp_inbound_work.kind type=text notnull=t default=- identity=- generated=-
+> col public.whatsapp_inbound_work.last_error type=text notnull=f default=- identity=- generated=-
+> col public.whatsapp_inbound_work.lease_until type=timestamp with time zone notnull=f default=- identity=- generated=-
+> col public.whatsapp_inbound_work.max_attempts type=integer notnull=t default=6 identity=- generated=-
+> col public.whatsapp_inbound_work.message_id type=uuid notnull=t default=- identity=- generated=-
+> col public.whatsapp_inbound_work.next_attempt_at type=timestamp with time zone notnull=t default=now() identity=- generated=-
+> col public.whatsapp_inbound_work.org_id type=uuid notnull=t default=- identity=- generated=-
+> col public.whatsapp_inbound_work.payload type=jsonb notnull=t default='{}'::jsonb identity=- generated=-
+> col public.whatsapp_inbound_work.state type=text notnull=t default='pending'::text identity=- generated=-
+> col public.whatsapp_inbound_work.steps type=jsonb notnull=t default='{}'::jsonb identity=- generated=-
+> col public.whatsapp_inbound_work.updated_at type=timestamp with time zone notnull=t default=now() identity=- generated=-
+> col public.whatsapp_messages.wa_timestamp type=timestamp with time zone notnull=f default=- identity=- generated=-
+> con public.whatsapp_inbound_work whatsapp_inbound_work_kind_check CHECK ((kind = ANY (ARRAY['media'::text, 'flow'::text])))
+> con public.whatsapp_inbound_work whatsapp_inbound_work_last_error_check CHECK ((char_length(last_error) <= 200))
+> con public.whatsapp_inbound_work whatsapp_inbound_work_max_attempts_check CHECK (((max_attempts >= 1) AND (max_attempts <= 20)))
+> con public.whatsapp_inbound_work whatsapp_inbound_work_message_id_fkey FOREIGN KEY (message_id) REFERENCES whatsapp_messages(id) ON DELETE CASCADE
+> con public.whatsapp_inbound_work whatsapp_inbound_work_org_id_fkey FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
+> con public.whatsapp_inbound_work whatsapp_inbound_work_org_message_kind_key UNIQUE (org_id, message_id, kind)
+> con public.whatsapp_inbound_work whatsapp_inbound_work_pkey PRIMARY KEY (id)
+> con public.whatsapp_inbound_work whatsapp_inbound_work_state_check CHECK ((state = ANY (ARRAY['pending'::text, 'running'::text, 'done'::text, 'failed'::text])))
+> fn public.claim_inbound_work(p_limit integer, p_lease_seconds integer, p_id uuid) returns=SETOF whatsapp_inbound_work lang=plpgsql volatile=v secdef=f config=search_path="" owner=postgres body_md5=4c7b4cb05db1c8dc266f5332c9360c4c
+> fn public.cleanup_old_inbound_work() returns=void lang=sql volatile=v secdef=f config=search_path="" owner=postgres body_md5=39ebebf67e4434de6a060a753c1eca44
+> fn public.wa_apply_statuses(p_org uuid, p_statuses jsonb) returns=TABLE(applied integer, stale integer, unknown integer, unknown_ids text[], bsuid_filled integer, bsuid_conflicts integer) lang=plpgsql volatile=v secdef=f config=search_path="";lock_timeout=3s owner=postgres body_md5=33d3e219bc96157d3bd57f58fcede231
+> fn public.wa_ingest_inbound(p_org uuid, p_from text, p_bsuid text, p_wamid text, p_wa_ts timestamp with time zone, p_content text, p_preview text, p_verified_phone text, p_reply_to_wamid text, p_media_type text, p_media_mime text, p_media_filename text, p_metadata jsonb, p_unread boolean, p_rate_scope text, p_rate_max integer, p_ai_eligible boolean, p_queue_text text, p_inbound_limit integer, p_work_kind text, p_work_payload jsonb) returns=TABLE(outcome text, contact_key text, message_id uuid, chat_created boolean, summary_applied boolean, contact_name text, ai_enabled boolean, queue_outcome text, quota_limit integer, quota_first_refusal boolean, quota_error text, rate_first boolean, rate_error text, bsuid_conflict boolean, work_id uuid, work_state text) lang=plpgsql volatile=v secdef=f config=search_path="";lock_timeout=3s owner=postgres body_md5=26065a5be85f43737ed91dc631c2362f
+> fnexec public.claim_inbound_work(p_limit integer, p_lease_seconds integer, p_id uuid) anon=f
+> fnexec public.claim_inbound_work(p_limit integer, p_lease_seconds integer, p_id uuid) authenticated=f
+> fnexec public.claim_inbound_work(p_limit integer, p_lease_seconds integer, p_id uuid) service_role=t
+> fnexec public.cleanup_old_inbound_work() anon=f
+> fnexec public.cleanup_old_inbound_work() authenticated=f
+> fnexec public.cleanup_old_inbound_work() service_role=t
+> fnexec public.wa_apply_statuses(p_org uuid, p_statuses jsonb) anon=f
+> fnexec public.wa_apply_statuses(p_org uuid, p_statuses jsonb) authenticated=f
+> fnexec public.wa_apply_statuses(p_org uuid, p_statuses jsonb) service_role=t
+> fnexec public.wa_ingest_inbound(p_org uuid, p_from text, p_bsuid text, p_wamid text, p_wa_ts timestamp with time zone, p_content text, p_preview text, p_verified_phone text, p_reply_to_wamid text, p_media_type text, p_media_mime text, p_media_filename text, p_metadata jsonb, p_unread boolean, p_rate_scope text, p_rate_max integer, p_ai_eligible boolean, p_queue_text text, p_inbound_limit integer, p_work_kind text, p_work_payload jsonb) anon=f
+> fnexec public.wa_ingest_inbound(p_org uuid, p_from text, p_bsuid text, p_wamid text, p_wa_ts timestamp with time zone, p_content text, p_preview text, p_verified_phone text, p_reply_to_wamid text, p_media_type text, p_media_mime text, p_media_filename text, p_metadata jsonb, p_unread boolean, p_rate_scope text, p_rate_max integer, p_ai_eligible boolean, p_queue_text text, p_inbound_limit integer, p_work_kind text, p_work_payload jsonb) authenticated=f
+> fnexec public.wa_ingest_inbound(p_org uuid, p_from text, p_bsuid text, p_wamid text, p_wa_ts timestamp with time zone, p_content text, p_preview text, p_verified_phone text, p_reply_to_wamid text, p_media_type text, p_media_mime text, p_media_filename text, p_metadata jsonb, p_unread boolean, p_rate_scope text, p_rate_max integer, p_ai_eligible boolean, p_queue_text text, p_inbound_limit integer, p_work_kind text, p_work_payload jsonb) service_role=t
+> idx public.whatsapp_inbound_work CREATE INDEX whatsapp_inbound_work_due_idx ON public.whatsapp_inbound_work USING btree (next_attempt_at) WHERE (state = ANY (ARRAY['pending'::text, 'running'::text]))
+> idx public.whatsapp_inbound_work CREATE INDEX whatsapp_inbound_work_message_id_idx ON public.whatsapp_inbound_work USING btree (message_id)
+> idx public.whatsapp_inbound_work CREATE UNIQUE INDEX whatsapp_inbound_work_org_message_kind_key ON public.whatsapp_inbound_work USING btree (org_id, message_id, kind)
+> idx public.whatsapp_inbound_work CREATE UNIQUE INDEX whatsapp_inbound_work_pkey ON public.whatsapp_inbound_work USING btree (id)
+> pol public.whatsapp_inbound_work "service_role only" PERMISSIVE cmd=ALL roles=anon,authenticated using=false check=false
+> rel public.whatsapp_inbound_work kind=r owner=postgres rls=t force_rls=f
+> relpriv public.whatsapp_inbound_work anon=
+> relpriv public.whatsapp_inbound_work authenticated=
+> relpriv public.whatsapp_inbound_work service_role=rawdDxt
+> trg public.whatsapp_inbound_work CREATE TRIGGER trg_whatsapp_inbound_work_updated_at BEFORE UPDATE ON public.whatsapp_inbound_work FOR EACH ROW EXECUTE FUNCTION set_updated_at()

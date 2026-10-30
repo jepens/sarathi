@@ -31,6 +31,17 @@ tenant data that means at least:
   catalog in a dedicated test (`whatsapp_integrations`, 0069:
   `190_whatsapp_integrations_locked.test.sql`).
 
+**Service-role-only tables.** RLS on, the deny policy "service_role only" for
+`anon` and `authenticated`, no table privilege for either, and the functions
+that serve them executable by the service role only:
+`whatsapp_integrations` (0069, `190`), `ops_events` and `ops_alert_state`
+(0070, `200`), `org_usage_counters` and `org_quota_overrides` (0071, `210`),
+`whatsapp_inbound_work` (0072: the webhook's durable follow-up work, whose
+payload can hold a Flow's answers; catalog, both orgs' members and anon
+pinned in `220_wa_inbound_ingest.test.sql`). `message_queue` and
+`rate_limits` carry the same deny policy but still grant `authenticated` its
+table privileges (RLS refuses every row, `010`).
+
 **anon gets no table privileges (since 0063).** A table, view or sequence that
 `postgres` creates in `public` (migrations run as `postgres`) gives `anon`
 nothing: 0063 removed `anon` from the default privileges of `postgres` in
@@ -127,7 +138,14 @@ stops the `supabase_*_sarathi` containers; never use `--all`.
   (the user's role and claims plus `realtime.topic`; a null user = anon key).
   Its behaviour block tells messages apart by id, not by `inserted_at`
   (production's default is `now()`, newer Realtime images use
-  `clock_timestamp()`).
+  `clock_timestamp()`). `220_wa_inbound_ingest.test.sql` counts the
+  broadcasts of one ingest call the same way and skips those three
+  assertions without that partition (150 reports it).
+- `220_wa_inbound_ingest.test.sql` stages what one session cannot run, a
+  second delivery committing in the middle of a call or a step that fails,
+  with temporary triggers (on `rate_limits`, `org_usage_counters`,
+  `message_queue`, `whatsapp_chats`) that it creates and drops inside its own
+  transaction.
 
 ## Realtime org bus (0064 expand, client, 0068 contract)
 
@@ -472,9 +490,11 @@ line to `production.txt`.
   (`<` only in production, `>` only in the replay), each with a reason:
   permanent ones, or *pending* lines of a migration not yet applied to
   production (see above). Entries that no longer differ fail as stale. It
-  currently holds no pending block: the replay matches production exactly
-  (re-checked 2026-10-18 after applying 0067, against a fresh read-only
-  production query: 701 lines, md5 `5a7feadb1272324db7f97d63aad90653`).
+  currently holds one pending block, `0072_wa_inbound_ingest` (expand, PR-C2,
+  applied before that build is deployed); apart from it the replay matches
+  production exactly (re-checked 2026-10-18 after applying 0067, against a
+  fresh read-only production query: 701 lines, md5
+  `5a7feadb1272324db7f97d63aad90653`).
 - Not fingerprinted: sequence privileges, column-level privileges, MAINTAIN,
   foreign-table privileges and default privileges (`pg_default_acl`); the
   `relpriv` lines cover only `arwdDxt` on tables and views. Whenever
