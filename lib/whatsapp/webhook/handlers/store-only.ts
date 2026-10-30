@@ -2,8 +2,8 @@ import type { ItemResult } from '@/lib/whatsapp/webhook/outcome';
 import type { MessageContext } from '@/lib/whatsapp/webhook/types';
 import { ingestRow, rowResult } from '@/lib/whatsapp/webhook/handlers/row';
 
-// A message other than text sent to another number of the WABA (process mode):
-// stored for the operators, never acted on.
+// A message to another number of the WABA (process mode) that is neither
+// text nor media: stored for the operators, never acted on.
 
 // A Flow submission or a contact card sent to another number of the WABA
 // (store-only): kept for the operators as a readable row, with the chat

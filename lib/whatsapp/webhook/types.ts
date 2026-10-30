@@ -7,7 +7,9 @@ import type { BatchOutcome } from '@/lib/whatsapp/webhook/outcome';
 // Types shared by the webhook modules.
 
 // Meta's webhook JSON as JSON.parse returns it: not validated against a
-// schema, so every field of it is read defensively.
+// schema. The readers (payload.ts) and the handlers never trust a field's
+// shape: a malformed item becomes a placeholder or is skipped with an alert
+// (handlers/messages.ts), never an exception out of the pipeline.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type MetaJson = any;
 

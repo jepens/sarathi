@@ -39,9 +39,9 @@ export interface MessagePlan {
 /**
  * The prelude of a message (pure): its key, Meta time, reply context, the
  * contact entry that describes its sender (matchContact: never another
- * customer's), and the sender's identity. Every string that may reach the
- * database is sanitised here, so the TS paths (cards, media, Flow) get clean
- * values too.
+ * customer's), and the sender's identity, sanitised for Postgres. The RPC
+ * sanitises every parameter again (ingest.ts); the media and Flow paths
+ * clean their caption, filename and answers where they hand them over.
  */
 export function planMessage(entry: unknown, value: MetaJson, storeOnly: OtherNumber | null, now = Date.now()): MessagePlan {
     const message = isRecord(entry) ? entry : null;
