@@ -504,11 +504,9 @@ line to `production.txt`.
   (`<` only in production, `>` only in the replay), each with a reason:
   permanent ones, or *pending* lines of a migration not yet applied to
   production (see above). Entries that no longer differ fail as stale. It
-  currently holds one pending block, `0072_wa_inbound_ingest` (expand, PR-C2,
-  applied before that build is deployed); apart from it the replay matches
-  production exactly (re-checked 2026-10-18 after applying 0067, against a
-  fresh read-only production query: 701 lines, md5
-  `5a7feadb1272324db7f97d63aad90653`).
+  currently holds no pending block: the replay matches production exactly
+  (re-checked 2026-10-30 after applying 0072, against a fresh read-only
+  production query: 750 lines, md5 `25ceb46d87114b88472d3b264248d4a2`).
 - Not fingerprinted: sequence privileges, column-level privileges, MAINTAIN,
   foreign-table privileges and default privileges (`pg_default_acl`); the
   `relpriv` lines cover only `arwdDxt` on tables and views. Whenever
