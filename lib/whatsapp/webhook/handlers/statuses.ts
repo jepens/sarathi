@@ -3,7 +3,8 @@ import type { WhatsAppContext } from '@/lib/whatsapp/credentials';
 import { whatsappLogger } from '@/lib/utils/logger';
 import type { MetaJson } from '@/lib/whatsapp/webhook/types';
 
-// Delivery status callbacks (sent, delivered, read, failed), written back to the rows of our sent messages.
+// Delivery status callbacks (sent, delivered, read, failed), written back to
+// the rows of our sent messages.
 
 export async function handleStatuses(supabase: SupabaseClient, waCtx: WhatsAppContext, statuses: MetaJson): Promise<void> {
     // This is a STATUS callback (sent/delivered/read/failed)

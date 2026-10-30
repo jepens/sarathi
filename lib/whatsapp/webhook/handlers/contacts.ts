@@ -5,7 +5,8 @@ import { looksLikePhone } from '@/lib/whatsapp/webhook/contact';
 import type { InboundMessageContext } from '@/lib/whatsapp/webhook/handlers/messages';
 import { storeOtherNumberMessage } from '@/lib/whatsapp/webhook/handlers/store-only';
 
-// A contact card from the customer: the shared phone kept as verified_phone, or only stored for another number.
+// A contact card from the customer: the shared phone kept as verified_phone, or
+// only stored for another number.
 
 export async function handleContactsMessage(ctx: InboundMessageContext): Promise<void> {
     const { supabase, waCtx, message, messageType, contactKey, bsuid, waId, inboundWamid, storeOnly } = ctx;

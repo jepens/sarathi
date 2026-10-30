@@ -11,7 +11,8 @@ import {
 import { recordOpsEvent } from '@/lib/ops/events';
 import type { MetaJson } from '@/lib/whatsapp/webhook/types';
 
-// Which number of the WABA an event is for: this app's own (handled), or another one (dropped or only stored).
+// Which number of the WABA an event is for: this app's own (handled), or
+// another one (dropped or only stored).
 
 export type ChangeRoute = { route: 'main' } | { route: 'dropped' } | { route: 'store_only'; other: OtherNumber };
 

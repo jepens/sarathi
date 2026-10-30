@@ -4,7 +4,8 @@ import { flowSubmissionSummary, otherMessageSummary } from '@/lib/whatsapp/flow-
 import type { InboundMessageContext } from '@/lib/whatsapp/webhook/handlers/messages';
 import { storeOtherNumberMessage } from '@/lib/whatsapp/webhook/handlers/store-only';
 
-// An interactive message: a WhatsApp Flow submission (e.g. Brief Acara), or a button or list choice.
+// An interactive message: a WhatsApp Flow submission (e.g. Brief Acara), or a
+// button or list choice.
 
 export async function handleInteractiveMessage(ctx: InboundMessageContext): Promise<void> {
     const { supabase, waCtx, message, messageType, contactKey, bsuid, waId, inboundWamid, storeOnly } = ctx;

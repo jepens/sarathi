@@ -15,7 +15,8 @@ import {
 import { consumeOrgQuota, firstInboundRefusalNote, inboundQuotaNotice } from '@/lib/quota/org-quota';
 import type { InboundMessageContext } from '@/lib/whatsapp/webhook/handlers/messages';
 
-// A text message: rate limit, AI switch and org quota, then the AI queue; the chat history is stored in the background.
+// A text message: rate limit, AI switch and org quota, then the AI queue; the
+// chat history is stored in the background.
 
 export async function handleTextMessage(ctx: InboundMessageContext): Promise<void> {
     const { supabase, waCtx, message, messageType, contactKey, bsuid, waId, inboundWamid, inboundContextId, storeOnly } = ctx;

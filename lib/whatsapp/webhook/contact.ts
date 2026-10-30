@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-// Who sent an inbound message: the chat's contact key, and whether an id is a real phone (BSUID migration).
+// Who sent an inbound message: the chat's contact key, and whether an id is a
+// real phone (BSUID migration).
 
 // Resolve the canonical contact key for the whatsapp_chats PK.
 //

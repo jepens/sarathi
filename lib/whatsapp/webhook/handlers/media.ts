@@ -7,7 +7,8 @@ import { firstOtherNumberNote, otherNumberMetadata, otherNumberNotice, type Othe
 import { CHAT_MEDIA_BUCKET, CHAT_MEDIA_MAX_BYTES, safePhoneSegment, storageContentType } from '@/lib/storage/chat-media';
 import type { InboundMessageContext } from '@/lib/whatsapp/webhook/handlers/messages';
 
-// A photo, document, voice note, video or sticker from the customer: stored for the admin, without the AI.
+// A photo, document, voice note, video or sticker from the customer: stored for
+// the admin, without the AI.
 
 export type InboundMediaKind = 'image' | 'document' | 'audio' | 'video';
 

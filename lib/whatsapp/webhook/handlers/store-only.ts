@@ -12,7 +12,8 @@ import {
     type OtherNumber,
 } from '@/lib/whatsapp/other-number';
 
-// A message other than text sent to another number of the WABA (process mode): stored for the operators, never acted on.
+// A message other than text sent to another number of the WABA (process mode):
+// stored for the operators, never acted on.
 
 // A Flow submission, a contact card or any other non-text message sent to
 // another number of the WABA (store-only): kept for the operators as a

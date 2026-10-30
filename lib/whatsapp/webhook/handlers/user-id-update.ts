@@ -1,7 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { whatsappLogger } from '@/lib/utils/logger';
 
-// A customer's new phone number: their stored BSUID moves to the new one, so the contact stays linked.
+// A customer's new phone number: their stored BSUID moves to the new one, so
+// the contact stays linked.
 
 // Phase B — user_id_update. Meta fires this when a customer changes their
 // phone number: the BSUID regenerates and we get the old + new IDs. We move

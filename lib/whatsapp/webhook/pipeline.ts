@@ -11,7 +11,8 @@ import { handleUserIdUpdate } from '@/lib/whatsapp/webhook/handlers/user-id-upda
 import { handleStatuses } from '@/lib/whatsapp/webhook/handlers/statuses';
 import { handleInboundMessage } from '@/lib/whatsapp/webhook/handlers/messages';
 
-// The webhook's POST, outside route.ts (Next.js limits what a route file exports): the gate, then the event's handler.
+// The webhook's POST, outside route.ts (Next.js limits what a route file
+// exports): the gate, then the event's handler.
 
 export async function processWebhook(request: Request): Promise<NextResponse> {
     // Set once the signature has passed: only then is a failure a Meta delivery

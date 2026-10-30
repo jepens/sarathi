@@ -1,4 +1,5 @@
-// The webhook body as Meta signed it, read up to Meta's size limit (anyone can POST to the URL).
+// The webhook body as Meta signed it, read up to Meta's size limit (anyone
+// can POST to the URL).
 
 // Meta's largest webhook payload (developers.facebook.com, set-up-webhooks).
 export const MAX_WEBHOOK_BYTES = 3 * 1024 * 1024;
