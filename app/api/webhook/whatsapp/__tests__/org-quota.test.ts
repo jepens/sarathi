@@ -87,7 +87,7 @@ vi.mock('@/lib/quota/org-quota', async (importOriginal) => ({
 }));
 vi.mock('@/lib/whatsapp/recipient', () => ({ resolveSendTarget: vi.fn() }));
 vi.mock('@/lib/whatsapp/history', () => ({ logSystemMessage: h.logSystem }));
-vi.mock('@/lib/whatsapp/flow-response', () => ({ handleFlowReply: vi.fn() }));
+vi.mock('@/lib/whatsapp/flow-response', () => ({ handleFlowReply: vi.fn(async () => ({ status: 'handled' })) }));
 vi.mock('@/lib/settings/app-settings', () => ({ checkVerifyToken: vi.fn() }));
 vi.mock('@/lib/utils/logger', async (importOriginal) => ({
     // Keep redactPII (the ops event writer uses it).

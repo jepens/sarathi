@@ -48,7 +48,7 @@ vi.mock('@/lib/settings/app-settings', () => ({ checkVerifyToken: vi.fn(), getWh
 vi.mock('@/lib/whatsapp/client', () => ({ sendWhatsAppMessage: vi.fn(), downloadWhatsAppMedia: vi.fn() }));
 vi.mock('@/lib/notifications/web-push', () => ({ sendPushToOrg: vi.fn() }));
 vi.mock('@/lib/ai/rag', () => ({ generateRAGResponse: vi.fn() }));
-vi.mock('@/lib/whatsapp/flow-response', () => ({ handleFlowReply: vi.fn() }));
+vi.mock('@/lib/whatsapp/flow-response', () => ({ handleFlowReply: vi.fn(async () => ({ status: 'handled' })) }));
 vi.mock('@/lib/utils/logger', async (importOriginal) => {
     const record = (...args: unknown[]) => {
         if (h.throwOnLog !== null && String(args[0]).startsWith(h.throwOnLog)) throw new TypeError('log line could not be written');
@@ -156,6 +156,7 @@ beforeEach(() => {
             content: '📋 Brief Acara (via form WhatsApp)',
             wa_message_id: p.inboundWamid,
         });
+        return { status: 'handled' };
     });
     vi.stubEnv('WHATSAPP_APP_SECRET', SECRET);
     vi.stubEnv('WHATSAPP_PHONE_NUMBER_ID', PNID);
@@ -267,7 +268,7 @@ describe('part-1 pin matrix (synthesis section 7, as amended by D23 and C2_SPEC 
         const body = delivery([change({ contacts: [contactOf(A), contactOf(B)], messages: [text(A, 'wamid.p06-a'), text(B, 'wamid.p06-b')] })]);
         expect(await deliver(body)).toBe(503);
         expect(h.orgReads).toBe(1);
-        expect(h.db.events()).toEqual([{ kind: 'webhook_error', org: null, detail: 'database 57014 (2 dari 2 item)', count: 1 }]);
+        expect(h.db.events()).toEqual([{ kind: 'webhook_error', org: null, detail: 'database 57014 — org default tidak terbaca, periksa Supabase (2 dari 2 item)', count: 1 }]);
         expect(h.db.ingests()).toEqual([]);
         expect(h.db.chats).toEqual([]);
         // Readable again: the resend is stored under the org.
@@ -737,7 +738,7 @@ describe('part-1 pin matrix (synthesis section 7, as amended by D23 and C2_SPEC 
         const batch = h.logs.map((l) => String(l[0])).filter((l) => l.startsWith('Webhook batch:'));
         expect(batch).toHaveLength(1);
         expect(batch[0]).toMatch(
-            /^Webhook batch: items=4 new=1 duplicate=0 rate_limited=0 acked=0 legacy=0 degraded=2 skipped=1 retryable=0 deferred=0 statuses applied=0 stale=0 unknown=0 ms=\d+$/,
+            /^Webhook batch: items=4 new=1 duplicate=0 rate_limited=0 acked=0 legacy=0 degraded=2 skipped=1 retryable=0 deferred=0 statuses applied=0 stale=0 unknown=0 ms=\d+ http=200$/,
         );
     });
 

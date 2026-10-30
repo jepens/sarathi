@@ -983,7 +983,8 @@ export function ChatWindow({ phoneNumber, onBack }: ChatWindowProps) {
                                     >
                                         {/* Reply affordance (hover). Only for messages that carry a wamid —
                                             the WhatsApp reply-context needs one — and while the 24h window is open. */}
-                                        {msg.wa_message_id && !windowExpired && (
+                                        {/* Not on a syn. key: Meta refuses a reply context it did not issue. */}
+                                        {msg.wa_message_id && !msg.wa_message_id.startsWith('syn.') && !windowExpired && (
                                             <button
                                                 type="button"
                                                 onClick={() => startReply(msg)}

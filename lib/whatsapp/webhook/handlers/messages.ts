@@ -3,7 +3,7 @@ import { recordOpsEvent } from '@/lib/ops/events';
 import { isStoredOtherMessageType } from '@/lib/whatsapp/flow-summary';
 import type { OtherNumber } from '@/lib/whatsapp/other-number';
 import { matchContact, senderIdentity, syntheticKey, type SenderIdentity } from '@/lib/whatsapp/webhook/contact';
-import { classify, describeItemError } from '@/lib/whatsapp/webhook/errors';
+import { classify, countsTowardPoison, describeItemError } from '@/lib/whatsapp/webhook/errors';
 import { POISON_LIMIT } from '@/lib/whatsapp/webhook/limits';
 import { clearPoison, isPoisoned, notePoison, type ItemResult } from '@/lib/whatsapp/webhook/outcome';
 import { isRecord, metaWord, parseMetaTimestamp, sanitizeForPg } from '@/lib/whatsapp/webhook/payload';
@@ -180,6 +180,14 @@ export async function handleMessageItem(run: BatchRun, plan: MessagePlan, stored
         outcome.done('duplicate');
         return;
     }
+    if (plan.identity.bsuid !== null && run.heldBsuids.has(plan.identity.bsuid)) {
+        // The customer's BSUID move (user_id_update, pass 1) failed or was
+        // deferred in this delivery: stored now, the message would open a
+        // second chat under the new BSUID. Meta's resend moves it first.
+        whatsappLogger.warn(`Inbound ${type} message held back: the move of its BSUID is pending`);
+        outcome.deferred();
+        return;
+    }
     if (outcome.shouldDefer()) {
         outcome.deferred();
         return;
@@ -222,6 +230,13 @@ export async function handleMessageItem(run: BatchRun, plan: MessagePlan, stored
         }
         if (classify(error) === 'permanent') {
             await storePlaceholder(run, ctx, error);
+            return;
+        }
+        // An outage or a missing function fails every item alike: not the
+        // message's fault, so it never turns it into a placeholder.
+        if (!countsTowardPoison(error)) {
+            whatsappLogger.error(`Inbound ${type} message not stored (database unavailable or not migrated) — retryable`, error);
+            outcome.failed(error);
             return;
         }
         const failures = notePoison(plan.key);

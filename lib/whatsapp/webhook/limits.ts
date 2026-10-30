@@ -22,8 +22,11 @@ export const POISON_LIMIT = 5;
 /** Consecutive retryable failures after which the rest of a batch is deferred. */
 export const STOP_AFTER_RETRYABLE = 3;
 
-/** Message keys per pre-dedup query. */
-export const PREDEDUP_CHUNK = 100;
+/**
+ * Message keys per pre-dedup query: a GET whose URL lists them, which stays
+ * well under the 8 KB a gateway usually accepts (a wamid is ~60-90 chars).
+ */
+export const PREDEDUP_CHUNK = 50;
 
 /** Delay before a status that found no message row is applied once more. */
 export const STATUS_REAPPLY_MS = 15000;

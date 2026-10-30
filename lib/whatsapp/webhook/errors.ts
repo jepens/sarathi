@@ -73,3 +73,54 @@ export class RpcError extends Error {
 export function describeItemError(error: unknown): string {
     return error instanceof MalformedPayloadError ? error.reason : describeErrorForOps(error);
 }
+
+// Errors that hit every item alike say nothing about the item: the database
+// or PostgREST unreachable or overloaded, a function or a grant missing (the
+// code deployed ahead of migration 0072: PGRST202, 42883, 42501), a read-only
+// database. Counted toward an item's poison bound they would turn an outage
+// or a deploy-order slip into placeholders and skipped statuses once it is
+// fixed. A thrown bug, a malformed answer and any other SQLSTATE still count.
+const SYSTEMIC_CODES = new Set(['25006', '42501', '42883']);
+
+/** Whether a retryable failure counts toward the item's poison bound (outcome.ts). */
+export function countsTowardPoison(error: unknown): boolean {
+    if (error === null || typeof error !== 'object') return true;
+    const e = error as { name?: unknown; code?: unknown };
+    if (e.name === 'AbortError' || e.name === 'TimeoutError' || e.name === 'PlatformSettingReadError') return false;
+    const code = typeof e.code === 'string' ? e.code : '';
+    if (code === '' && error instanceof RpcError) {
+        // No answer at all, or an HTTP error without a body.
+        return !(error.status === 0 || error.status === 408 || error.status === 429 || error.status >= 500);
+    }
+    return !(
+        SYSTEMIC_CODES.has(code) ||
+        /^PGRST[023]\d\d$/.test(code) ||
+        /^(08|53)[0-9A-Z]{3}$/.test(code) ||
+        /^57P0\d$/.test(code)
+    );
+}
+
+/**
+ * What the team should check first, by error code, for the webhook_error
+ * alert (Indonesian, like the alert); null when no hint fits.
+ */
+export function opsHint(error: unknown): string | null {
+    if (error === null || typeof error !== 'object') return null;
+    const e = error as { name?: unknown; code?: unknown };
+    if (e.name === 'PlatformSettingReadError') return 'org default tidak terbaca, periksa Supabase';
+    const code = typeof e.code === 'string' ? e.code : '';
+    if (code === 'PGRST202' || code === '42883') return 'fungsi database tidak ditemukan, migrasi 0072 belum diterapkan?';
+    if (code === '42501') return 'grant fungsi database hilang';
+    if (code === '25006') return 'database hanya-baca, disk penuh?';
+    if (/^53[0-9A-Z]{3}$/.test(code)) return 'sumber daya database habis';
+    if (code === '55P03') return 'menunggu kunci database terlalu lama';
+    if (code === '40001' || code === '40P01') return 'bentrok transaksi, aman bila jarang';
+    if (code === '57014') return 'query database dibatalkan karena terlalu lama';
+    if (/^PGRST00\d$/.test(code) || /^08[0-9A-Z]{3}$/.test(code) || /^57P0\d$/.test(code)) {
+        return 'Supabase tidak terjangkau atau sedang gangguan';
+    }
+    if (code === '' && error instanceof RpcError && (error.status === 0 || error.status >= 500)) {
+        return 'Supabase tidak terjangkau atau sedang gangguan';
+    }
+    return null;
+}

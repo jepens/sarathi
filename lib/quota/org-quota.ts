@@ -65,7 +65,7 @@ function checkFailedDetail(metric: QuotaMetric, reason: string): string {
 
 /** What wa_ingest_inbound reported about the minute quota of one message. */
 export interface InboundQuotaReport {
-    /** The limit in force (quota_limit), when the message was refused. */
+    /** The limit in force (quota_limit) whenever the quota was asked, also when the message went through; else null. */
     limit: number | null;
     /** A refusal right after a call that was let through: the one to alert. */
     firstRefusal: boolean;

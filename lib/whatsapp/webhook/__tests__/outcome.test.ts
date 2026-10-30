@@ -114,7 +114,7 @@ describe('respond', () => {
         outcome.deferred(); // the budget also ran out: still one alert, the error
         const res = await respond(ops.client, outcome);
         expect(res.status).toBe(503);
-        expect(ops.events).toEqual([{ p_kind: 'webhook_error', p_org: ORG, p_detail: 'database 40001 (3 dari 5 item)', p_count: 1 }]);
+        expect(ops.events).toEqual([{ p_kind: 'webhook_error', p_org: ORG, p_detail: 'database 40001 — bentrok transaksi, aman bila jarang (3 dari 5 item)', p_count: 1 }]);
     });
 
     it('an org that could not be read: 503, webhook_error without an org', async () => {
@@ -124,7 +124,33 @@ describe('respond', () => {
         outcome.failed(Object.assign(new Error('platform setting default_org_id could not be read (57014)'), { name: 'PlatformSettingReadError', code: '57014' }));
         const res = await respond(ops.client, outcome);
         expect(res.status).toBe(503);
-        expect(ops.events).toEqual([{ p_kind: 'webhook_error', p_org: null, p_detail: 'database 57014 (1 dari 1 item)', p_count: 1 }]);
+        expect(ops.events).toEqual([{ p_kind: 'webhook_error', p_org: null, p_detail: 'database 57014 — org default tidak terbaca, periksa Supabase (1 dari 1 item)', p_count: 1 }]);
+    });
+
+    it('nothing at all got an answer from the database within the budget: 503 and webhook_error (a slow database is an outage)', async () => {
+        const ops = opsClient();
+        const outcome = new BatchOutcome();
+        outcome.orgId = ORG;
+        outcome.items = 3;
+        outcome.done('acked');
+        outcome.deferred(2);
+        expect(outcome.progressed()).toBe(false);
+        const res = await respond(ops.client, outcome);
+        expect(res.status).toBe(503);
+        expect(ops.events).toEqual([
+            {
+                p_kind: 'webhook_error',
+                p_org: ORG,
+                p_detail: 'database lambat atau tidak menjawab: 2 dari 3 item ditunda tanpa satu pun selesai dalam 8 detik; webhook menjawab 503, Meta mengirim ulang',
+                p_count: 1,
+            },
+        ]);
+    });
+
+    it('the result line carries the answer Meta got', () => {
+        const outcome = new BatchOutcome();
+        expect(outcome.logLine(503)).toMatch(/ ms=\d+ http=503$/);
+        expect(outcome.logLine()).toMatch(/ ms=\d+$/);
     });
 
     it('items deferred by the budget, nothing failed: 503 and webhook_deferred', async () => {

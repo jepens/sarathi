@@ -57,9 +57,11 @@ function nonEmpty(value: unknown): string | null {
 /**
  * The value.contacts[] entry that describes this message's sender: the one
  * whose wa_id is the message's `from` or whose user_id is its `from_user_id`;
- * else the only contact of the change; else none. Never the first of several:
- * a change can carry messages of several customers, and another customer's
- * BSUID or phone must not be written to this chat.
+ * else the only contact of the change, unless it contradicts the message (a
+ * different phone or a different BSUID: another customer's entry); else
+ * none. Never the first of several: a change can carry messages of several
+ * customers, and another customer's BSUID or phone must not be written to
+ * this chat.
  */
 export function matchContact(contacts: unknown, message: unknown): Record<string, unknown> | null {
     const list = (Array.isArray(contacts) ? contacts : []).filter(isRecord);
@@ -68,7 +70,11 @@ export function matchContact(contacts: unknown, message: unknown): Record<string
     const fromUserId = nonEmpty(m.from_user_id);
     const match = list.find((c) => (from !== null && c.wa_id === from) || (fromUserId !== null && c.user_id === fromUserId));
     if (match) return match;
-    return list.length === 1 ? list[0] : null;
+    if (list.length !== 1) return null;
+    const only = list[0];
+    const otherPhone = looksLikePhone(from) && looksLikePhone(only.wa_id) && only.wa_id !== from;
+    const otherBsuid = fromUserId !== null && nonEmpty(only.user_id) !== null && only.user_id !== fromUserId;
+    return otherPhone || otherBsuid ? null : only;
 }
 
 export interface SenderIdentity {

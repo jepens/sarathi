@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { classify, describeItemError, MalformedPayloadError, RpcError } from '@/lib/whatsapp/webhook/errors';
+import {
+    classify,
+    countsTowardPoison,
+    describeItemError,
+    MalformedPayloadError,
+    opsHint,
+    RpcError,
+} from '@/lib/whatsapp/webhook/errors';
 
 // Retryable or permanent (Fase 2 task 2.2a part 2): a retryable item answers
 // 503 and Meta sends the batch again; a permanent one is stored as a
@@ -111,5 +118,48 @@ describe('describeItemError', () => {
         expect(describeItemError(new RpcError('wa_ingest_inbound', { code: '40001' }, 500))).toBe('database 40001');
         expect(describeItemError(new RpcError('wa_ingest_inbound', { code: '' }, 0))).toBe('RpcNetworkError');
         expect(describeItemError(new TypeError('x'))).toBe('TypeError');
+    });
+});
+
+describe('countsTowardPoison', () => {
+    it('an outage, a missing function or grant and a read-only database never count: they hit every item alike', () => {
+        for (const code of ['PGRST000', 'PGRST003', 'PGRST202', 'PGRST301', '08006', '53300', '57P01', '25006', '42501', '42883']) {
+            expect(countsTowardPoison(new RpcError('wa_ingest_inbound', pg(code), 503)), code).toBe(false);
+        }
+        for (const status of [0, 408, 429, 500, 502, 503]) {
+            expect(countsTowardPoison(new RpcError('wa_ingest_inbound', { code: '' }, status)), String(status)).toBe(false);
+        }
+        expect(countsTowardPoison(Object.assign(new Error('x'), { name: 'AbortError' }))).toBe(false);
+        expect(countsTowardPoison(Object.assign(new Error('x'), { name: 'PlatformSettingReadError', code: '57014' }))).toBe(false);
+    });
+
+    it('a thrown bug, a malformed answer and any other database code still count', () => {
+        expect(countsTowardPoison(new TypeError('x is not a function'))).toBe(true);
+        expect(countsTowardPoison('aneh')).toBe(true);
+        for (const code of ['40001', '40P01', '55P03', '57014', '23503', 'XX000', 'P0002']) {
+            expect(countsTowardPoison(new RpcError('wa_ingest_inbound', pg(code), 500)), code).toBe(true);
+        }
+        expect(countsTowardPoison(new RpcError('wa_ingest_inbound', { code: '' }, 400))).toBe(true);
+    });
+});
+
+describe('opsHint', () => {
+    it('names what to check first for the codes the team will meet', () => {
+        expect(opsHint(new RpcError('x', pg('PGRST202'), 404))).toBe('fungsi database tidak ditemukan, migrasi 0072 belum diterapkan?');
+        expect(opsHint(new RpcError('x', pg('42883'), 404))).toBe('fungsi database tidak ditemukan, migrasi 0072 belum diterapkan?');
+        expect(opsHint(new RpcError('x', pg('42501'), 403))).toBe('grant fungsi database hilang');
+        expect(opsHint(new RpcError('x', pg('08006'), 503))).toBe('Supabase tidak terjangkau atau sedang gangguan');
+        expect(opsHint(new RpcError('x', { code: '' }, 0))).toBe('Supabase tidak terjangkau atau sedang gangguan');
+        expect(opsHint(new RpcError('x', pg('40001'), 500))).toBe('bentrok transaksi, aman bila jarang');
+        expect(opsHint(new RpcError('x', pg('55P03'), 500))).toBe('menunggu kunci database terlalu lama');
+        expect(opsHint(Object.assign(new Error('x'), { name: 'PlatformSettingReadError', code: '57014' }))).toBe(
+            'org default tidak terbaca, periksa Supabase',
+        );
+    });
+
+    it('stays silent where no hint fits', () => {
+        expect(opsHint(new TypeError('x'))).toBeNull();
+        expect(opsHint(new RpcError('x', pg('XX000'), 500))).toBeNull();
+        expect(opsHint(null)).toBeNull();
     });
 });

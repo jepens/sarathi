@@ -3,6 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { whatsappLogger } from '@/lib/utils/logger';
 import { describeErrorForOps, recordOpsEvent } from '@/lib/ops/events';
 import { BUDGET_MS, POISON_LIMIT, STOP_AFTER_RETRYABLE } from '@/lib/whatsapp/webhook/limits';
+import { opsHint } from '@/lib/whatsapp/webhook/errors';
 
 // One delivery's result: what happened to each item (a message, a status, a
 // user_id_update entry), the time budget and the stop rule, and the answer to
@@ -114,20 +115,31 @@ export class BatchOutcome {
         this.counts.deferred += items;
     }
 
+    /**
+     * Whether the database answered for any item of the batch (stored, found
+     * stored, counted, handed over or applied).
+     */
+    progressed(): boolean {
+        const c = this.counts;
+        const s = this.statuses;
+        return c.new + c.duplicate + c.rateLimited + c.legacy + c.degraded + s.applied + s.stale + s.unknown > 0;
+    }
+
     /** The first retryable error of the batch, if any. */
     firstError(): { error: unknown } | null {
         return this.first;
     }
 
     /** Counts only (KEA-21): never an id, a phone number or message text. */
-    logLine(): string {
+    logLine(httpStatus?: number): string {
         const c = this.counts;
         const s = this.statuses;
         return (
             `Webhook batch: items=${this.items} new=${c.new} duplicate=${c.duplicate} rate_limited=${c.rateLimited} ` +
             `acked=${c.acked} legacy=${c.legacy} degraded=${c.degraded} skipped=${c.skipped} retryable=${c.retryable} ` +
             `deferred=${c.deferred}${this.stopped ? ` (${this.stopped})` : ''} ` +
-            `statuses applied=${s.applied} stale=${s.stale} unknown=${s.unknown} ms=${this.clock() - this.startedAt}`
+            `statuses applied=${s.applied} stale=${s.stale} unknown=${s.unknown} ms=${this.clock() - this.startedAt}` +
+            (httpStatus === undefined ? '' : ` http=${httpStatus}`)
         );
     }
 }
@@ -176,17 +188,27 @@ export function poisonCount(key: string): number {
 /**
  * The answer to Meta, after every item was tried or deferred:
  * - an item failed retryably (including an org that could not be read): 503,
- *   and one webhook_error for the batch with the first error;
+ *   and one webhook_error for the batch with the first error and a hint;
  * - items deferred by the time budget, nothing failed: 503 and
- *   webhook_deferred (emailed once a day: it is expected under load);
+ *   webhook_deferred (emailed once a day: it is expected under load), or
+ *   webhook_error when no item at all got an answer from the database (a
+ *   slow or silent database is an outage, not load);
  * - otherwise 200 (a permanent failure was alerted when it happened).
  */
 export async function respond(client: SupabaseClient, outcome: BatchOutcome): Promise<NextResponse> {
     const first = outcome.firstError();
     if (first) {
+        const hint = opsHint(first.error);
         await recordOpsEvent(client, 'webhook_error', {
             orgId: outcome.orgId,
-            detail: `${describeErrorForOps(first.error)} (${outcome.counts.retryable} dari ${outcome.items} item)`,
+            detail: `${describeErrorForOps(first.error)}${hint ? ` — ${hint}` : ''} (${outcome.counts.retryable} dari ${outcome.items} item)`,
+        });
+        return new NextResponse('Service Unavailable', { status: 503 });
+    }
+    if (outcome.counts.deferred > 0 && !outcome.progressed()) {
+        await recordOpsEvent(client, 'webhook_error', {
+            orgId: outcome.orgId,
+            detail: `database lambat atau tidak menjawab: ${outcome.counts.deferred} dari ${outcome.items} item ditunda tanpa satu pun selesai dalam ${BUDGET_MS / 1000} detik; webhook menjawab 503, Meta mengirim ulang`,
         });
         return new NextResponse('Service Unavailable', { status: 503 });
     }
@@ -200,7 +222,7 @@ export async function respond(client: SupabaseClient, outcome: BatchOutcome): Pr
     return new NextResponse('EVENT_RECEIVED', { status: 200 });
 }
 
-/** The result log line of a batch. */
-export function logBatch(outcome: BatchOutcome): void {
-    whatsappLogger.info(outcome.logLine());
+/** The result log line of a batch, with the answer Meta got. */
+export function logBatch(outcome: BatchOutcome, httpStatus?: number): void {
+    whatsappLogger.info(outcome.logLine(httpStatus));
 }

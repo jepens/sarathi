@@ -27,9 +27,16 @@ describe('matchContact', () => {
         expect(matchContact([A, B], { from_user_id: 'ID.0000000002' })).toBe(B);
     });
 
-    it('takes the only contact of a change', () => {
-        expect(matchContact([A], { from: '620000000009' })).toBe(A);
-        expect(matchContact([null, A, 'x'], { from: '620000000009' })).toBe(A);
+    it('takes the only contact of a change when it does not contradict the message', () => {
+        // A sender Meta names by an identifier only: its contact entry completes it.
+        expect(matchContact([A], { from: 'pengguna.palsu' })).toBe(A);
+        expect(matchContact([null, A, 'x'], {})).toBe(A);
+    });
+
+    it("never lends the only contact when it is another customer's (another phone or BSUID)", () => {
+        expect(matchContact([A], { from: '620000000009' })).toBeNull();
+        expect(matchContact([null, A, 'x'], { from: '620000000009' })).toBeNull();
+        expect(matchContact([A], { from_user_id: 'ID.0000000009' })).toBeNull();
     });
 
     it('never lends the first of several contacts that do not match', () => {

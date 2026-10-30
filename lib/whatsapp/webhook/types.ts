@@ -22,6 +22,11 @@ export interface BatchRun {
     org(): Promise<WhatsAppContext>;
     /** A message was queued or joined a waiting burst: drain the queue after the walk. */
     requestDrain(): void;
+    /**
+     * New BSUIDs whose user_id_update failed or was deferred in this delivery:
+     * a message carrying one waits for Meta's resend (handlers/messages.ts).
+     */
+    heldBsuids: Set<string>;
 }
 
 /** One inbound message, ready for the handler of its type. */

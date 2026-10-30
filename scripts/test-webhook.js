@@ -17,6 +17,15 @@
  * --repeat=2 mengirim byte bertanda tangan yang sama dua kali, seperti Meta
  * yang mengirim ulang: hasil yang benar = satu pesan tersimpan dan satu
  * balasan (kiriman kedua dikenali sebagai duplikat).
+ *
+ * Replay di produksi setelah deploy (runbook PR-C2) butuh:
+ * - WEBHOOK_URL ke URL produksi, ditambah --allow-remote;
+ * - WHATSAPP_APP_SECRET dan WHATSAPP_PHONE_NUMBER_ID milik produksi di env
+ *   (secret yang salah = 403 dan email webhook_signature_invalid ke tim; ID
+ *   nomor yang salah = event dianggap nomor lain WABA dan dibuang);
+ * - jendela 24 jam TEST_PHONE yang masih terbuka: kirim dulu satu pesan
+ *   sungguhan dari HP itu. Meta tidak melihat pesan simulasi ini, jadi tanpa
+ *   pesan asli dalam 24 jam terakhir balasan AI gagal dengan 131047.
  */
 
 const crypto = require('crypto');

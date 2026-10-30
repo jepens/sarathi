@@ -1,8 +1,8 @@
 import { handleFlowReply } from '@/lib/whatsapp/flow-response';
 import { flowSubmissionSummary } from '@/lib/whatsapp/flow-summary';
 import { resolveContactKey } from '@/lib/whatsapp/webhook/contact';
-import { MalformedPayloadError } from '@/lib/whatsapp/webhook/errors';
-import { isRecord } from '@/lib/whatsapp/webhook/payload';
+import { MalformedPayloadError, RpcError } from '@/lib/whatsapp/webhook/errors';
+import { isRecord, sanitizeForPg } from '@/lib/whatsapp/webhook/payload';
 import type { ItemResult } from '@/lib/whatsapp/webhook/outcome';
 import type { MessageContext } from '@/lib/whatsapp/webhook/types';
 import { handleOtherMessage } from '@/lib/whatsapp/webhook/handlers/other-types';
@@ -30,12 +30,12 @@ export async function handleInteractiveMessage(ctx: MessageContext): Promise<Ite
     // A customer submitted a Flow (e.g. "Brief Acara", from the template
     // button or an in-window flow message). Full handling (history + CRM
     // upsert + Nindra context via system message + deterministic
-    // confirmation) lives in lib/whatsapp/flow-response.ts, unchanged in this
-    // build (its own insert is still its redelivery gate); the batch's
-    // pre-dedup now keeps a resend from reaching it at all.
+    // confirmation) lives in lib/whatsapp/flow-response.ts. Its own insert is
+    // still its redelivery gate; the batch's pre-dedup keeps a resend of a
+    // stored submission from reaching it at all.
     const contactKey = await resolveContactKey(supabase, waCtx.orgId, identity.from, identity.bsuid);
     if (!contactKey) return 'skipped'; // unreachable: the prelude requires a phone or a BSUID
-    await handleFlowReply({
+    const result = await handleFlowReply({
         supabase,
         orgId: waCtx.orgId,
         phoneNumberId: waCtx.phoneNumberId,
@@ -44,7 +44,10 @@ export async function handleInteractiveMessage(ctx: MessageContext): Promise<Ite
         bsuid: identity.bsuid,
         waId: identity.waId,
         inboundWamid: ctx.key,
-        nfmReply: interactive.nfm_reply,
+        nfmReply: sanitizeForPg(interactive.nfm_reply),
     });
-    return 'legacy';
+    // The insert failed (not as a duplicate): nothing else was done. Retryable,
+    // so Meta's resend does the whole submission exactly once.
+    if (result.status === 'gate_failed') throw new RpcError('flow submission insert', result.error, result.httpStatus);
+    return result.status === 'duplicate' ? 'duplicate' : 'legacy';
 }

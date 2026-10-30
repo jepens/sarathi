@@ -170,10 +170,22 @@ function confirmationMessage(b: BriefAcara): string {
 }
 
 /**
- * Handle one nfm_reply submission end-to-end. Never throws — the webhook must
- * always return 200 to Meta regardless of what fails here.
+ * What handleFlowReply did, for the webhook's answer to Meta: 'gate_failed'
+ * when its own insert of the submission (the redelivery gate) failed other
+ * than as a duplicate; nothing else was done then, and the webhook answers
+ * 503 so Meta's resend does the whole submission once (PR-C2).
  */
-export async function handleFlowReply(params: HandleFlowReplyParams): Promise<void> {
+export type FlowReplyOutcome =
+    | { status: 'handled' }
+    | { status: 'duplicate' }
+    | { status: 'gate_failed'; error: unknown; httpStatus: number };
+
+/**
+ * Handle one nfm_reply submission end-to-end. Never throws: every failure
+ * after the gate is logged (the lead and the confirmation matter more than a
+ * clean history), a failed gate is reported in the result.
+ */
+export async function handleFlowReply(params: HandleFlowReplyParams): Promise<FlowReplyOutcome> {
     const {
         supabase, orgId, phoneNumberId, accessToken,
         contactKey, bsuid, waId, inboundWamid, nfmReply,
@@ -183,7 +195,7 @@ export async function handleFlowReply(params: HandleFlowReplyParams): Promise<vo
         const data = parseFlowResponse(nfmReply.response_json);
         if (!data) {
             whatsappLogger.warn(`nfm_reply from ${contactKey} had no parsable response_json — skipping`);
-            return;
+            return { status: 'handled' };
         }
 
         const brief = extractBrief(data);
@@ -213,7 +225,7 @@ export async function handleFlowReply(params: HandleFlowReplyParams): Promise<vo
         // -- 1b. History insert = idempotency gate. Meta redelivers webhooks;
         //        the unique index on wa_message_id turns a duplicate into 23505,
         //        and we stop BEFORE lead writes / confirmation send.
-        const { error: msgError } = await supabase
+        const { error: msgError, status: msgStatus } = await supabase
             .from('whatsapp_messages')
             .insert({
                 org_id: orgId,
@@ -225,11 +237,14 @@ export async function handleFlowReply(params: HandleFlowReplyParams): Promise<vo
         if (msgError) {
             if (msgError.code === '23505') {
                 whatsappLogger.info(`Duplicate flow reply ${inboundWamid} — already processed, skipping`);
-                return;
+                return { status: 'duplicate' };
             }
-            // Non-duplicate failure: log and continue — losing the history row
-            // is bad, but losing the lead + confirmation is worse.
-            whatsappLogger.error('flow-response: history insert failed', msgError);
+            // Any other failure: stop before the lead, the stage, the note and
+            // the confirmation. The webhook answers 503 and Meta's resend does
+            // the whole submission once (part 1 answered 200 whatever happened,
+            // so it went on without the row and a resend could not repeat it).
+            whatsappLogger.error('flow-response: history insert failed — retryable', msgError);
+            return { status: 'gate_failed', error: msgError, httpStatus: msgStatus };
         }
 
         // -- 2a. CRM upsert through the same guarded path the AI uses (name
@@ -335,4 +350,5 @@ export async function handleFlowReply(params: HandleFlowReplyParams): Promise<vo
     } catch (error) {
         whatsappLogger.error('flow-response: unexpected error handling nfm_reply', error);
     }
+    return { status: 'handled' };
 }

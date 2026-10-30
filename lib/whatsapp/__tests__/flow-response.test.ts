@@ -7,7 +7,12 @@ import { makeFakeSupabase, type FakeSupabase } from './fakeSupabase';
 // a stage that could not be read is not taken for unset, so it is left alone.
 // Everything around it is stubbed. Fake ids and phones only.
 
-const h = vi.hoisted(() => ({ fake: null as unknown as FakeSupabase, stageError: null as unknown, stage: null as string | null }));
+const h = vi.hoisted(() => ({
+    fake: null as unknown as FakeSupabase,
+    stageError: null as unknown,
+    stage: null as string | null,
+    insertError: null as unknown,
+}));
 
 vi.mock('@/lib/whatsapp/client', () => ({ sendWhatsAppMessage: vi.fn(async () => ({ waMessageId: 'wamid.fake-out', raw: {} })) }));
 vi.mock('@/lib/whatsapp/recipient', () => ({ resolveSendTarget: vi.fn(async () => '620000000000') }));
@@ -17,7 +22,8 @@ vi.mock('@/lib/ai/tools', () => ({ saveLeadInfo: vi.fn(async () => 'ok'), update
 vi.mock('@/lib/settings/business-profile', () => ({ getBusinessProfile: vi.fn(async () => null) }));
 
 import { handleFlowReply } from '@/lib/whatsapp/flow-response';
-import { updateLeadStage } from '@/lib/ai/tools';
+import { saveLeadInfo, updateLeadStage } from '@/lib/ai/tools';
+import { logSystemMessage } from '@/lib/whatsapp/history';
 import { whatsappLogger } from '@/lib/utils/logger';
 import { sendWhatsAppMessage } from '@/lib/whatsapp/client';
 
@@ -42,8 +48,12 @@ beforeEach(() => {
     vi.clearAllMocks();
     h.stageError = null;
     h.stage = null;
+    h.insertError = null;
     h.fake = makeFakeSupabase({
         resolve: (c) => {
+            if (c.table === 'whatsapp_messages' && c.op === 'insert' && h.insertError) {
+                return { data: null, error: h.insertError, status: 500 };
+            }
             if (c.table === 'whatsapp_chats' && c.op === 'select') {
                 return h.stageError ? { data: null, error: h.stageError } : { data: { lead_stage: h.stage }, error: null };
             }
@@ -72,6 +82,30 @@ describe('handleFlowReply: the lead stage', () => {
         await submit();
         expect(updateLeadStage).not.toHaveBeenCalled();
         expect(whatsappLogger.error).toHaveBeenCalledWith('flow-response: lead stage could not be read — stage left unchanged', h.stageError);
+        expect(sendWhatsAppMessage).toHaveBeenCalledTimes(1);
+    });
+});
+
+describe('handleFlowReply: its insert of the submission is the redelivery gate', () => {
+    it('a failed insert (not a duplicate) stops before the lead, the stage, the note and the confirmation, and is reported', async () => {
+        h.insertError = { code: '57014', message: 'canceling statement due to statement timeout' };
+        expect(await submit()).toEqual({ status: 'gate_failed', error: h.insertError, httpStatus: 500 });
+        expect(saveLeadInfo).not.toHaveBeenCalled();
+        expect(updateLeadStage).not.toHaveBeenCalled();
+        expect(logSystemMessage).not.toHaveBeenCalled();
+        expect(sendWhatsAppMessage).not.toHaveBeenCalled();
+    });
+
+    it('a duplicate (23505) is reported as such, with nothing done again', async () => {
+        h.insertError = { code: '23505', message: 'duplicate key value violates unique constraint' };
+        expect(await submit()).toEqual({ status: 'duplicate' });
+        expect(saveLeadInfo).not.toHaveBeenCalled();
+        expect(sendWhatsAppMessage).not.toHaveBeenCalled();
+    });
+
+    it('a stored submission is followed up and reported as handled', async () => {
+        expect(await submit()).toEqual({ status: 'handled' });
+        expect(saveLeadInfo).toHaveBeenCalledTimes(1);
         expect(sendWhatsAppMessage).toHaveBeenCalledTimes(1);
     });
 });

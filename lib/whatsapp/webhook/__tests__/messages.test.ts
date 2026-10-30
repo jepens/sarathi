@@ -18,7 +18,7 @@ vi.mock('@/lib/notifications/web-push', () => ({ sendPushToOrg: vi.fn(async () =
 vi.mock('@/lib/whatsapp/client', () => ({ sendWhatsAppMessage: vi.fn(), downloadWhatsAppMedia: vi.fn() }));
 vi.mock('@/lib/whatsapp/recipient', () => ({ resolveSendTarget: vi.fn() }));
 vi.mock('@/lib/whatsapp/history', () => ({ logSystemMessage: vi.fn(async () => ({ status: 'stored' })) }));
-vi.mock('@/lib/whatsapp/flow-response', () => ({ handleFlowReply: vi.fn() }));
+vi.mock('@/lib/whatsapp/flow-response', () => ({ handleFlowReply: vi.fn(async () => ({ status: 'handled' })) }));
 vi.mock('@/lib/utils/logger', async (importOriginal) => ({
     ...(await importOriginal<typeof import('@/lib/utils/logger')>()),
     whatsappLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
@@ -98,6 +98,7 @@ beforeEach(() => {
         outcome,
         org: async () => ({ orgId: ORG, phoneNumberId: PNID, accessToken: 'token-palsu', appSecret: 'rahasia-palsu' }),
         requestDrain: () => {},
+        heldBsuids: new Set<string>(),
     };
 });
 

@@ -50,7 +50,7 @@ vi.mock('@/lib/settings/app-settings', () => ({ checkVerifyToken: vi.fn(), getWh
 vi.mock('@/lib/whatsapp/client', () => ({ sendWhatsAppMessage: vi.fn(), downloadWhatsAppMedia: vi.fn() }));
 vi.mock('@/lib/notifications/web-push', () => ({ sendPushToOrg: vi.fn() }));
 vi.mock('@/lib/ai/rag', () => ({ generateRAGResponse: vi.fn() }));
-vi.mock('@/lib/whatsapp/flow-response', () => ({ handleFlowReply: vi.fn() }));
+vi.mock('@/lib/whatsapp/flow-response', () => ({ handleFlowReply: vi.fn(async () => ({ status: 'handled' })) }));
 vi.mock('@/lib/utils/logger', async (importOriginal) => {
     const record = (...args: unknown[]) => void h.logs.push(args);
     return {
@@ -152,6 +152,7 @@ beforeEach(() => {
             content: '📋 Brief Acara (via form WhatsApp)',
             wa_message_id: p.inboundWamid,
         });
+        return { status: 'handled' };
     });
     vi.stubEnv('WHATSAPP_APP_SECRET', SECRET);
     vi.stubEnv('WHATSAPP_PHONE_NUMBER_ID', PNID);
@@ -175,7 +176,7 @@ describe('contract harness (synthesis section 8, items 10-20)', () => {
         h.db.fail({ target: 'rpc:wa_ingest_inbound', error: { code: '40001' } });
 
         expect(await deliver(body)).toBe(503);
-        expect(h.db.events()).toEqual([{ kind: 'webhook_error', org: ORG, detail: 'database 40001 (1 dari 1 item)', count: 1 }]);
+        expect(h.db.events()).toEqual([{ kind: 'webhook_error', org: ORG, detail: 'database 40001 — bentrok transaksi, aman bila jarang (1 dari 1 item)', count: 1 }]);
         await settle();
         // The call rolled back as a whole: no chat, no row, no job, nothing after it.
         expect(h.db.chats).toEqual([]);
@@ -297,7 +298,7 @@ describe('contract harness (synthesis section 8, items 10-20)', () => {
         ]);
         h.db.fail({ target: 'rpc:wa_ingest_inbound', match: (a) => a.p_wamid === 'wamid.p2', error: { code: '40001' } });
         expect(await deliver(body)).toBe(503);
-        expect(details('webhook_error')).toEqual(['database 40001 (1 dari 3 item)']);
+        expect(details('webhook_error')).toEqual(['database 40001 — bentrok transaksi, aman bila jarang (1 dari 3 item)']);
         await settle();
         expect(h.db.userRows().map((m) => m.wa_message_id)).toEqual(['wamid.p1', 'wamid.p3']);
         expect(pushes()).toHaveLength(2);
@@ -324,7 +325,7 @@ describe('contract harness (synthesis section 8, items 10-20)', () => {
         expect(await deliver(body)).toBe(503);
         expect(h.db.ingests().map((a) => a.p_wamid)).toEqual(ids.slice(0, 3));
         // One alert, the real failure (not webhook_deferred), counting the failed items.
-        expect(h.db.events().map((e) => [e.kind, e.detail])).toEqual([['webhook_error', 'database 57014 (3 dari 5 item)']]);
+        expect(h.db.events().map((e) => [e.kind, e.detail])).toEqual([['webhook_error', 'database 57014 — query database dibatalkan karena terlalu lama (3 dari 5 item)']]);
         expect(h.logs.map((l) => String(l[0])).find((l) => l.startsWith('Webhook batch:'))).toContain('retryable=3 deferred=2 (stop_rule)');
     });
 
@@ -384,7 +385,7 @@ describe('contract harness (synthesis section 8, items 10-20)', () => {
         const answers: number[] = [];
         for (let i = 0; i < 6; i++) answers.push(await deliver(body));
         expect(answers).toEqual([503, 503, 503, 503, 503, 200]);
-        expect(details('webhook_error').at(-1)).toBe('database 40001 (1 dari 1 item)');
+        expect(details('webhook_error').at(-1)).toBe('database 40001 — bentrok transaksi, aman bila jarang (1 dari 1 item)');
         expect(h.db.userRows().map((m) => m.metadata)).toEqual([{ unprocessable: 'text' }]);
     });
 
@@ -548,7 +549,7 @@ describe('contract harness (synthesis section 8, items 10-20)', () => {
         const body = delivery([change({ contacts: [contactOf(A)], messages: [card] })]);
         h.db.fail({ target: 'whatsapp_chats.upsert', error: { code: '40001' } });
         expect(await deliver(body)).toBe(503);
-        expect(details('webhook_error')).toEqual(['database 40001 (1 dari 1 item)']);
+        expect(details('webhook_error')).toEqual(['database 40001 — bentrok transaksi, aman bila jarang (1 dari 1 item)']);
         expect(h.db.notes()).toEqual([]);
         expect(await deliver(body)).toBe(200);
         expect(noteTexts()).toEqual(['Customer shared contact info — phone tersimpan: 6280000000098']);
@@ -769,7 +770,7 @@ describe('the rest of the batch walk (C2_SPEC sections 6 and 7)', () => {
         expect(await deliver(body)).toBe(503);
         expect(h.orgReads).toBe(1);
         expect(h.db.ingests()).toEqual([]);
-        expect(h.db.events()).toEqual([{ kind: 'webhook_error', org: null, detail: 'database 57014 (3 dari 3 item)', count: 1 }]);
+        expect(h.db.events()).toEqual([{ kind: 'webhook_error', org: null, detail: 'database 57014 — org default tidak terbaca, periksa Supabase (3 dari 3 item)', count: 1 }]);
     });
 
     it('user_id_update: a database error answers 503; a 23505 is only logged (200, no alert)', async () => {
@@ -777,7 +778,7 @@ describe('the rest of the batch walk (C2_SPEC sections 6 and 7)', () => {
         const body = delivery([{ field: 'user_id_update', value: { user_id_update: [{ user_id: { previous: 'ID.lama', current: 'ID.baru' } }] } }]);
         h.db.fail({ target: 'whatsapp_chats.update', error: { code: '08006' } });
         expect(await deliver(body)).toBe(503);
-        expect(details('webhook_error')).toEqual(['database 08006 (1 dari 1 item)']);
+        expect(details('webhook_error')).toEqual(['database 08006 — Supabase tidak terjangkau atau sedang gangguan (1 dari 1 item)']);
         expect(h.db.chat(A)!.bsuid).toBe('ID.lama');
         // Another chat of the org already holds the new id: cannot succeed on a retry.
         h.db.seedChat({ phone_number: B, bsuid: 'ID.baru' });
@@ -786,7 +787,7 @@ describe('the rest of the batch walk (C2_SPEC sections 6 and 7)', () => {
         expect(h.db.events()).toHaveLength(1);
     });
 
-    it('a call cut off by the time budget is deferred (503 + webhook_deferred), not counted as a failure of the message', async () => {
+    it('a call cut off by the time budget is deferred, not counted as a failure of the message; with no item done at all it is alerted as a slow database (webhook_error)', async () => {
         // The pre-dedup query takes 7.99 s of the 8 s budget; the ingest then
         // hangs until its signal (the 10 ms left) aborts it.
         h.db.clockStep = (target) => (target === 'whatsapp_messages.select' ? 7_990 : 0);
@@ -795,7 +796,7 @@ describe('the rest of the batch walk (C2_SPEC sections 6 and 7)', () => {
         expect(await deliver(body)).toBe(503);
         expect(h.db.ingests()).toHaveLength(1);
         expect(h.db.events().map((e) => [e.kind, e.detail])).toEqual([
-            ['webhook_deferred', '1 dari 1 item ditunda: batas waktu 8 detik habis; webhook menjawab 503, Meta mengirim ulang'],
+            ['webhook_error', 'database lambat atau tidak menjawab: 1 dari 1 item ditunda tanpa satu pun selesai dalam 8 detik; webhook menjawab 503, Meta mengirim ulang'],
         ]);
         expect(poisonCount('wamid.terpotong')).toBe(0);
         expect(h.db.userRows()).toEqual([]);
@@ -808,7 +809,7 @@ describe('the rest of the batch walk (C2_SPEC sections 6 and 7)', () => {
         const answers: number[] = [];
         for (let i = 0; i < 5; i++) answers.push(await deliver(body));
         expect(answers).toEqual([503, 503, 503, 503, 200]);
-        expect(details('webhook_error')).toEqual(Array(4).fill('database 57014 (1 dari 1 item)'));
+        expect(details('webhook_error')).toEqual(Array(4).fill('database 57014 — query database dibatalkan karena terlalu lama (1 dari 1 item)'));
         expect(details('webhook_payload_invalid')).toEqual(['1 status: database 57014; dilewati']);
         h.db.failures = [];
         h.db.fail({ target: 'rpc:wa_apply_statuses', error: { code: '22P02' } });
@@ -840,7 +841,7 @@ describe('the rest of the batch walk (C2_SPEC sections 6 and 7)', () => {
         expect(h.db.chat(A)!.bsuid).toBe('ID.lama');
     });
 
-    it("the pre-dedup asks for 100 keys per query and finds only this org's rows: a wamid stored in another org does not skip the message", async () => {
+    it("the pre-dedup asks for 50 keys per query and finds only this org's rows: a wamid stored in another org does not skip the message", async () => {
         h.db.quotaLimit = { inbound_minute: 1_000 };
         h.db.insertMessage({ org_id: OTHER_ORG, phone_number: A, role: 'user', content: 'di org lain', wa_message_id: 'wamid.k-0' });
         const phones = Array.from({ length: 101 }, (_, i) => `62000000${String(2000 + i)}`);
@@ -852,7 +853,8 @@ describe('the rest of the batch walk (C2_SPEC sections 6 and 7)', () => {
                 (filters.find((f) => f.kind === 'in')!.value as string[]).length,
             ]),
         ).toEqual([
-            [ORG, 100],
+            [ORG, 50],
+            [ORG, 50],
             [ORG, 1],
         ]);
         expect(h.db.userRows()).toHaveLength(101);
@@ -879,5 +881,116 @@ describe('the rest of the batch walk (C2_SPEC sections 6 and 7)', () => {
         expect(handleFlowReply).toHaveBeenCalledTimes(1);
         expect(downloadWhatsAppMedia).toHaveBeenCalledTimes(1);
         expect(h.db.uploads).toHaveLength(1);
+    });
+});
+
+describe('fixes after the independent review of PR-C2 (2026-10-30)', () => {
+    it('a function missing before 0072 (PGRST202) never counts toward the poison bound: after it is fixed one more failure still answers 503, then the real text is stored', async () => {
+        const body = delivery([change({ contacts: [contactOf(A)], messages: [textMsg(A, 'wamid.migrasi', 'halo')] })]);
+        h.db.fail({ target: 'rpc:wa_ingest_inbound', error: { code: 'PGRST202' }, status: 404, times: 6 });
+        h.db.fail({ target: 'rpc:wa_ingest_inbound', error: { code: '57014' } });
+        const answers: number[] = [];
+        for (let i = 0; i < 8; i++) answers.push(await deliver(body));
+        await settle();
+        expect(answers).toEqual([503, 503, 503, 503, 503, 503, 503, 200]);
+        expect(details('webhook_error')[0]).toBe(
+            'database PGRST202 — fungsi database tidak ditemukan, migrasi 0072 belum diterapkan? (1 dari 1 item)',
+        );
+        expect(h.db.userRows().map((m) => [m.wa_message_id, m.content, m.metadata])).toEqual([['wamid.migrasi', 'halo', {}]]);
+        expect(h.db.events('webhook_payload_invalid')).toEqual([]);
+    });
+
+    it('statuses under such an outage stay 503 (Meta keeps them) instead of being skipped at the poison bound', async () => {
+        const row = h.db.seedAssistant('wamid.keluar-pgrst', A, 'sent');
+        const body = delivery([change({ statuses: [{ id: 'wamid.keluar-pgrst', status: 'read', timestamp: metaTs(), recipient_id: A }] })]);
+        h.db.fail({ target: 'rpc:wa_apply_statuses', error: { code: 'PGRST202' }, status: 404, times: 6 });
+        const answers: number[] = [];
+        for (let i = 0; i < 7; i++) answers.push(await deliver(body));
+        expect(answers).toEqual([503, 503, 503, 503, 503, 503, 200]);
+        expect(h.db.events('webhook_payload_invalid')).toEqual([]);
+        expect(row.status).toBe('read');
+    });
+
+    it('a Flow whose own insert fails (not as a duplicate) answers 503 with nothing else done; the resend does it once, with clean answers', async () => {
+        const flow = {
+            from: A,
+            id: 'wamid.flow-gate',
+            timestamp: metaTs(),
+            type: 'interactive',
+            interactive: { type: 'nfm_reply', nfm_reply: { name: 'flow', body: 'Sent', response_json: '{"flow_token":"t","nama":"Budi\u0000 Palsu"}' } },
+        };
+        const body = delivery([change({ contacts: [contactOf(A)], messages: [flow] })]);
+        vi.mocked(handleFlowReply).mockImplementationOnce(async () => ({ status: 'gate_failed', error: { code: '57014' }, httpStatus: 500 }));
+        expect(await deliver(body)).toBe(503);
+        expect(details('webhook_error')).toEqual(['database 57014 — query database dibatalkan karena terlalu lama (1 dari 1 item)']);
+        expect(h.db.userRows()).toEqual([]);
+        expect(await deliver(body)).toBe(200);
+        expect(handleFlowReply).toHaveBeenCalledTimes(2);
+        expect(h.db.userRows().map((m) => m.wa_message_id)).toEqual(['wamid.flow-gate']);
+        const answers = vi.mocked(handleFlowReply).mock.calls[1][0].nfmReply;
+        expect(JSON.stringify(answers)).not.toContain('\\u0000');
+        expect(answers.response_json).toContain('Budi Palsu');
+    });
+
+    it('a message whose BSUID move failed in the same delivery waits for the resend instead of opening a second chat', async () => {
+        h.db.seedChat({ phone_number: D, bsuid: 'ID.lama-d' });
+        const move = { user_id_update: [{ user_id: { previous: 'ID.lama-d', current: 'ID.baru-d' }, timestamp: metaTs(5_000) }] };
+        const hidden = { from_user_id: 'ID.baru-d', id: 'wamid.tanpa-nomor', timestamp: metaTs(), type: 'text', text: { body: 'halo lagi' } };
+        const body = delivery(
+            [{ field: 'user_id_update', value: move }],
+            [change({ contacts: [{ profile: { name: 'Pelanggan Palsu' }, user_id: 'ID.baru-d' }], messages: [hidden] })],
+        );
+        h.db.fail({ target: 'whatsapp_chats.update', error: { code: '57014' } });
+        expect(await deliver(body)).toBe(503);
+        expect(h.db.userRows()).toEqual([]);
+        expect(h.db.chat('ID.baru-d')).toBeUndefined();
+        expect(await deliver(body)).toBe(200);
+        expect(h.db.chat(D)!.bsuid).toBe('ID.baru-d');
+        expect(h.db.userRows().map((m) => [m.wa_message_id, m.phone_number])).toEqual([['wamid.tanpa-nomor', D]]);
+    });
+
+    it("the only contact of a change is not lent to a message from another customer", async () => {
+        const body = delivery([
+            change({ contacts: [contactOf(A, 'ID.a')], messages: [textMsg(A, 'wamid.dari-a', 'dari A'), textMsg(B, 'wamid.dari-b', 'dari B')] }),
+        ]);
+        expect(await deliver(body)).toBe(200);
+        const b = h.db.ingests().find((a) => a.p_wamid === 'wamid.dari-b')!;
+        expect([b.p_from, b.p_bsuid, b.p_verified_phone]).toEqual([B, null, B]);
+        expect(h.db.userRows().map((m) => [m.wa_message_id, m.phone_number])).toEqual([
+            ['wamid.dari-a', A],
+            ['wamid.dari-b', B],
+        ]);
+    });
+
+    it('a type Sarathi does not show is stored for the operators, marked unprocessable so the AI history leaves it out; a location stays readable', async () => {
+        const order = { from: A, id: 'wamid.order-1', timestamp: metaTs(), type: 'order', order: { catalog_id: 'katalog-palsu', product_items: [] } };
+        const location = {
+            from: A,
+            id: 'wamid.lokasi-1',
+            timestamp: metaTs(),
+            type: 'location',
+            location: { latitude: -6.2, longitude: 106.8, name: 'Gedung Palsu' },
+        };
+        const body = delivery([change({ contacts: [contactOf(A)], messages: [order, location] })]);
+        expect(await deliver(body)).toBe(200);
+        expect(h.db.userRows().map((m) => [m.wa_message_id, m.metadata])).toEqual([
+            ['wamid.order-1', { unprocessable: 'order' }],
+            ['wamid.lokasi-1', {}],
+        ]);
+        expect(h.db.events('webhook_payload_invalid')).toEqual([]);
+    });
+
+    it('a media caption reaches the database clean (no U+0000, no lone surrogate)', async () => {
+        const image = {
+            from: A,
+            id: 'wamid.foto-kotor',
+            timestamp: metaTs(),
+            type: 'image',
+            image: { id: 'media-palsu-9', mime_type: 'image/jpeg', caption: 'foto\u0000 acara \ud800' },
+        };
+        const body = delivery([change({ contacts: [contactOf(A)], messages: [image] })]);
+        expect(await deliver(body)).toBe(200);
+        await settle();
+        expect(h.db.userRows().map((m) => m.content)).toEqual(['foto acara \ufffd']);
     });
 });

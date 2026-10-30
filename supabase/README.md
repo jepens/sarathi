@@ -147,6 +147,20 @@ stops the `supabase_*_sarathi` containers; never use `--all`.
   `message_queue`, `whatsapp_chats`) that it creates and drops inside its own
   transaction.
 
+The webhook end to end (PR-C2), `lib/whatsapp/webhook/__tests__/local-db.test.ts`,
+is a vitest file CI skips: the real route, pipeline and `processQueue` against
+this stack through PostgREST, only Meta, Web Push and the AI mocked. After
+`npx supabase db reset`, start the API (`npx supabase stop` first when only
+`db start` runs; it keeps the data):
+`npx supabase start -x gotrue,realtime,storage-api,imgproxy,mailpit,postgres-meta,studio,edge-runtime,logflare,vector,supavisor`,
+then `LOCAL_SUPABASE_URL=http://127.0.0.1:56321 LOCAL_SUPABASE_SERVICE_KEY=<key>
+LOCAL_SUPABASE_DB_CONTAINER=supabase_db_sarathi npx vitest run
+lib/whatsapp/webhook/__tests__/local-db.test.ts`, `<key>` being the CLI's
+default local service_role key (`npx supabase status -o env` shows it while
+auth runs). Without the container name the scenarios that alter the database
+for a moment (psql) are skipped. Localhost only: the run creates and deletes
+its own org, the default org until it ends.
+
 ## Realtime org bus (0064 expand, client, 0068 contract)
 
 Live dashboard updates use ONE private Broadcast topic per org,

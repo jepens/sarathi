@@ -7,7 +7,7 @@ import { firstOtherNumberNote, otherNumberMetadata, otherNumberNotice, type Othe
 import { CHAT_MEDIA_BUCKET, CHAT_MEDIA_MAX_BYTES, safePhoneSegment, storageContentType } from '@/lib/storage/chat-media';
 import { resolveContactKey } from '@/lib/whatsapp/webhook/contact';
 import { MalformedPayloadError } from '@/lib/whatsapp/webhook/errors';
-import { isRecord } from '@/lib/whatsapp/webhook/payload';
+import { isRecord, sanitizeForPg } from '@/lib/whatsapp/webhook/payload';
 import { runInBackground } from '@/lib/whatsapp/webhook/background';
 import type { ItemResult } from '@/lib/whatsapp/webhook/outcome';
 import type { MessageContext } from '@/lib/whatsapp/webhook/types';
@@ -214,9 +214,10 @@ export async function handleMediaMessage(ctx: MessageContext): Promise<ItemResul
     // Without an id there is nothing to download: stored as a placeholder.
     if (!mediaId) throw new MalformedPayloadError('berkas tanpa id media');
     const kind: InboundMediaKind = mediaType === 'sticker' ? 'image' : mediaType;
-    const caption: string | null = typeof mediaObj.caption === 'string' ? mediaObj.caption : null;
+    // Clean for Postgres (U+0000, lone surrogates), like every RPC parameter.
+    const caption: string | null = typeof mediaObj.caption === 'string' ? sanitizeForPg(mediaObj.caption) : null;
     const filename: string | null =
-        mediaType === 'document' && typeof mediaObj.filename === 'string' ? mediaObj.filename : null;
+        mediaType === 'document' && typeof mediaObj.filename === 'string' ? sanitizeForPg(mediaObj.filename) : null;
     const isVoice = mediaType === 'audio' && mediaObj.voice === true;
 
     const contactKey = await resolveContactKey(supabase, waCtx.orgId, identity.from, identity.bsuid);

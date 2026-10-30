@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { whatsappLogger } from '@/lib/utils/logger';
 import { recordOpsEvent } from '@/lib/ops/events';
-import { classify, describeItemError } from '@/lib/whatsapp/webhook/errors';
+import { classify, countsTowardPoison, describeItemError } from '@/lib/whatsapp/webhook/errors';
 import { applyStatuses, type StatusRow } from '@/lib/whatsapp/webhook/ingest';
 import { BUDGET_MS, STATUS_REAPPLY_MAX_AGE_MS, STATUS_REAPPLY_MS } from '@/lib/whatsapp/webhook/limits';
 import { clearPoison, isPoisoned, notePoison } from '@/lib/whatsapp/webhook/outcome';
@@ -124,7 +124,7 @@ export async function handleChangeStatuses(run: BatchRun, list: unknown[]): Prom
         // POISON_LIMIT times in this process: skipped, with an alert. A
         // status is not worth a 503 for days.
         const permanent = classify(error) === 'permanent';
-        if (permanent || keys.map(notePoison).every(isPoisoned)) {
+        if (permanent || (countsTowardPoison(error) && keys.map(notePoison).every(isPoisoned))) {
             keys.forEach(clearPoison);
             await recordOpsEvent(run.supabase, 'webhook_payload_invalid', {
                 orgId,

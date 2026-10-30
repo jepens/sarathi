@@ -143,8 +143,8 @@ describe('maybeSendOpsAlerts', () => {
             new Map(),
             NOW,
         );
-        expect(text).toContain('Pesan WhatsApp tidak bisa diproses: disimpan sebagai pengganti tanpa isi, atau dilewati: 1 kejadian');
-        expect(text).toContain('Webhook WhatsApp menunda sebagian event karena batas waktu (503, Meta mengirim ulang): 2 kejadian');
+        expect(text).toContain('Event WhatsApp tidak bisa diproses: pesan disimpan sebagai pengganti tanpa isi, atau status/pembaruan dilewati: 1 kejadian');
+        expect(text).toContain('Webhook WhatsApp menunda event karena batas waktu 8 detik (503, Meta mengirim ulang; bila sering: database lambat): 2 kejadian');
         // A failing webhook answers 503 now (500 only for a bug): Meta sends again.
         expect(text).toContain('Webhook WhatsApp gagal diproses (503/500, Meta mengirim ulang): 3 kejadian');
     });

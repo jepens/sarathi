@@ -54,7 +54,9 @@
 -- Expand: the code on main (PR-C1) never calls these objects; applied after
 -- the owner's review (D1) and before the PR-C2 deploy. Rollback = revert the
 -- build: the older code ignores the new column, table and functions, so 0072
--- stays and no data SQL is needed. Dropping any of them would be a contract
+-- stays and no data SQL is needed (the older AI history does read the rows
+-- PR-C2 marks metadata.unprocessable as customer lines: count them before a
+-- revert; few are expected). Dropping any of them would be a contract
 -- migration of its own, never a rollback step.
 --
 -- No explicit begin/commit: the migration runner wraps the file in a transaction.

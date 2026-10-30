@@ -1,7 +1,7 @@
 import { createHash } from 'crypto';
 import { whatsappLogger } from '@/lib/utils/logger';
 import { recordOpsEvent } from '@/lib/ops/events';
-import { classify, describeItemError, RpcError } from '@/lib/whatsapp/webhook/errors';
+import { classify, countsTowardPoison, describeItemError, RpcError } from '@/lib/whatsapp/webhook/errors';
 import { clearPoison, isPoisoned, notePoison } from '@/lib/whatsapp/webhook/outcome';
 import { isRecord, sanitizeForPg } from '@/lib/whatsapp/webhook/payload';
 import type { BatchRun, MetaJson } from '@/lib/whatsapp/webhook/types';
@@ -88,15 +88,17 @@ export async function handleUserIdUpdates(run: BatchRun, values: MetaJson[]): Pr
             outcome.done('acked');
             continue;
         }
+        const { oldId, newId } = parsed;
         if (outcome.shouldDefer()) {
+            run.heldBsuids.add(newId);
             outcome.deferred();
             continue;
         }
-        const { oldId, newId } = parsed;
         let orgId: string;
         try {
             orgId = (await run.org()).orgId;
         } catch (error) {
+            run.heldBsuids.add(newId);
             outcome.failed(error);
             continue;
         }
@@ -116,6 +118,7 @@ export async function handleUserIdUpdates(run: BatchRun, values: MetaJson[]): Pr
             outcome.done('acked');
         } catch (error) {
             if (signal.aborted) {
+                run.heldBsuids.add(newId);
                 outcome.deferred();
                 continue;
             }
@@ -126,7 +129,7 @@ export async function handleUserIdUpdates(run: BatchRun, values: MetaJson[]): Pr
                 continue;
             }
             const permanent = classify(error) === 'permanent';
-            if (permanent || isPoisoned(notePoison(poisonKey))) {
+            if (permanent || (countsTowardPoison(error) && isPoisoned(notePoison(poisonKey)))) {
                 clearPoison(poisonKey);
                 await recordOpsEvent(run.supabase, 'webhook_payload_invalid', {
                     orgId,
@@ -136,6 +139,7 @@ export async function handleUserIdUpdates(run: BatchRun, values: MetaJson[]): Pr
                 continue;
             }
             whatsappLogger.error('user_id_update: failed to move the bsuid — retryable', error);
+            run.heldBsuids.add(newId);
             outcome.failed(error);
         }
     }

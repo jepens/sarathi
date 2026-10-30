@@ -201,6 +201,7 @@ async function walkBatch(supabase: SupabaseClient, webhookApp: WebhookApp, body:
         requestDrain: () => {
             outcome.drain = true;
         },
+        heldBsuids: new Set<string>(),
     };
 
     const routed = changes.filter(isRouted);
@@ -256,6 +257,7 @@ async function walkBatch(supabase: SupabaseClient, webhookApp: WebhookApp, body:
     for (const change of routed) await handleChangeStatuses(run, statusesOf(change.value));
 
     if (outcome.drain) drainQueue(supabase);
-    logBatch(outcome);
-    return respond(supabase, outcome);
+    const response = await respond(supabase, outcome);
+    logBatch(outcome, response.status);
+    return response;
 }
