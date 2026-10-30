@@ -75,6 +75,8 @@ import {
 } from '@/lib/whatsapp/webhook/after-ingest';
 import { resetOpsEventThrottle } from '@/lib/ops/events';
 import { resetOtherNumberState } from '@/lib/whatsapp/other-number';
+import { getDefaultOrgIdStrict } from '@/lib/settings/org-context';
+import { createHash } from 'crypto';
 
 const A = '620000000001';
 const B = '620000000002';
@@ -992,5 +994,120 @@ describe('fixes after the independent review of PR-C2 (2026-10-30)', () => {
         expect(await deliver(body)).toBe(200);
         await settle();
         expect(h.db.userRows().map((m) => m.content)).toEqual(['foto acara \ufffd']);
+    });
+});
+
+describe('pins the independent TS review asked for (TSR-4)', () => {
+    it('(a) a main-number text keeps the message it replies to', async () => {
+        const reply = textMsg(A, 'wamid.balas-1', 'iya', { context: { from: PNID, id: 'wamid.keluar-asal' } });
+        expect(await deliver(delivery([change({ contacts: [contactOf(A)], messages: [reply] })]))).toBe(200);
+        expect(h.db.ingests().map((a) => a.p_reply_to_wamid)).toEqual(['wamid.keluar-asal']);
+    });
+
+    it("(b, c) a main-number card writes the BSUID only on the sender's chat of this org; a BSUID held elsewhere (23505) still answers 200 with the note", async () => {
+        const card = {
+            from: A,
+            id: 'wamid.kartu-bsuid',
+            timestamp: metaTs(),
+            type: 'contacts',
+            contacts: [{ name: { formatted_name: 'Teman Palsu' }, phones: [{ phone: '+62 800-0000-9999', wa_id: '620000009999' }] }],
+        };
+        h.db.fail({ target: 'whatsapp_chats.update', error: { code: '23505' } });
+        expect(await deliver(delivery([change({ contacts: [contactOf(A, 'ID.kartu-a')], messages: [card] })]))).toBe(200);
+        const update = h.db.calls.find((c) => c.target === 'whatsapp_chats.update')!;
+        expect(update.filters!.map((f) => [f.kind, f.column, f.value])).toEqual([
+            ['eq', 'org_id', ORG],
+            ['eq', 'phone_number', A],
+        ]);
+        expect(noteTexts()).toEqual(['Customer shared contact info — phone tersimpan: 620000009999']);
+        expect(h.db.events()).toEqual([]);
+    });
+
+    it('(d) a statuses call cut off by the time budget is deferred, without a poison count', async () => {
+        h.db.seedAssistant('wamid.keluar-lambat', A, 'sent');
+        h.db.clockStep = (target) => (target === 'whatsapp_messages.select' ? 7_990 : 0);
+        h.db.hang = (target) => target === 'rpc:wa_apply_statuses';
+        const body = delivery([
+            change({
+                contacts: [contactOf(A)],
+                messages: [textMsg(A, 'wamid.sebelum-status', 'halo')],
+                statuses: [{ id: 'wamid.keluar-lambat', status: 'read', timestamp: metaTs(), recipient_id: A }],
+            }),
+        ]);
+        expect(await deliver(body)).toBe(503);
+        expect(h.db.events().map((e) => e.kind)).toEqual(['webhook_deferred']);
+        expect(poisonCount('st.wamid.keluar-lambat.read')).toBe(0);
+    });
+
+    it('(d) a user_id_update cut off by the time budget is deferred, without a poison count; with nothing done it is alerted as a slow database', async () => {
+        h.db.seedChat({ phone_number: A, bsuid: 'ID.lama-lambat' });
+        vi.mocked(getDefaultOrgIdStrict).mockImplementationOnce(async () => {
+            vi.setSystemTime(Date.now() + 7_990);
+            return ORG;
+        });
+        h.db.hang = (target) => target === 'whatsapp_chats.update';
+        const move = { user_id_update: [{ user_id: { previous: 'ID.lama-lambat', current: 'ID.baru-lambat' } }] };
+        expect(await deliver(delivery([{ field: 'user_id_update', value: move }]))).toBe(503);
+        expect(h.db.chat(A)!.bsuid).toBe('ID.lama-lambat');
+        expect(details('webhook_error')).toEqual([
+            'database lambat atau tidak menjawab: 1 dari 1 item ditunda tanpa satu pun selesai dalam 8 detik; webhook menjawab 503, Meta mengirim ulang',
+        ]);
+        const key = `uid.${createHash('sha256').update('ID.lama-lambat|ID.baru-lambat').digest('hex').slice(0, 32)}`;
+        expect(poisonCount(key)).toBe(0);
+    });
+
+    it('(e) D23-2 at its edges: a text exactly 20 h old gets no AI, and a note at exactly 24 h names the template', async () => {
+        const at20 = textMsg(A, 'wamid.tepat-20', 'halo', { timestamp: metaTs(20 * HOUR) });
+        const at24 = textMsg(B, 'wamid.tepat-24', 'halo', { timestamp: metaTs(24 * HOUR) });
+        expect(await deliver(delivery([change({ contacts: [contactOf(A), contactOf(B)], messages: [at20, at24] })]))).toBe(200);
+        await settle();
+        expect(h.db.ingests().map((a) => [a.p_wamid, a.p_ai_eligible])).toEqual([
+            ['wamid.tepat-24', false],
+            ['wamid.tepat-20', false],
+        ]);
+        expect(lateMessageNotice(24 * HOUR)).toContain('kirim template');
+        expect(lateMessageNotice(24 * HOUR - 1)).not.toContain('kirim template');
+        expect(noteTexts()).toEqual(expect.arrayContaining([lateMessageNotice(24 * HOUR), lateMessageNotice(20 * HOUR)]));
+    });
+
+    it('(f) a message without a timestamp sorts as now: after one Meta sent a minute earlier', async () => {
+        const noTs = { from: A, id: 'wamid.tanpa-waktu', type: 'text', text: { body: 'tanpa waktu' } };
+        const older = textMsg(B, 'wamid.semenit-lalu', 'lebih dulu', { timestamp: metaTs(60_000) });
+        expect(await deliver(delivery([change({ contacts: [contactOf(A), contactOf(B)], messages: [noTs, older] })]))).toBe(200);
+        expect(h.db.ingests().map((a) => a.p_wamid)).toEqual(['wamid.semenit-lalu', 'wamid.tanpa-waktu']);
+    });
+
+    it('(g) a Flow submission without its object is stored as a placeholder, with an alert', async () => {
+        const flow = { from: A, id: 'wamid.flow-kosong', timestamp: metaTs(), type: 'interactive', interactive: { type: 'nfm_reply', nfm_reply: 'x' } };
+        expect(await deliver(delivery([change({ contacts: [contactOf(A)], messages: [flow] })]))).toBe(200);
+        expect(handleFlowReply).not.toHaveBeenCalled();
+        expect(h.db.userRows().map((m) => [m.wa_message_id, m.metadata])).toEqual([['wamid.flow-kosong', { unprocessable: 'interactive' }]]);
+        expect(details('webhook_payload_invalid')).toEqual(['pesan "interactive": kiriman form tanpa isi; disimpan sebagai pengganti']);
+    });
+
+    it('(h) a late text to another number of the WABA gets no late note (it never gets AI anyway)', async () => {
+        vi.stubEnv('WHATSAPP_OTHER_NUMBER_EVENTS', 'process');
+        const late = textMsg(A, 'wamid.lain-telat', 'halo', { timestamp: metaTs(21 * HOUR) });
+        expect(await deliver(delivery([change({ contacts: [contactOf(A)], messages: [late] }, OTHER_PNID)]))).toBe(200);
+        await settle();
+        expect(h.db.userRows().map((m) => m.wa_message_id)).toEqual(['wamid.lain-telat']);
+        expect(noteTexts().some((t) => t.startsWith('Pesan pelanggan di atas baru diterima'))).toBe(false);
+    });
+
+    it('(i) a status change is skipped only when every status in it reached the poison bound', async () => {
+        const s1 = { id: 'wamid.keluar-s1', status: 'read', timestamp: metaTs(), recipient_id: A };
+        const s2 = { id: 'wamid.keluar-s2', status: 'read', timestamp: metaTs(), recipient_id: A };
+        h.db.fail({ target: 'rpc:wa_apply_statuses', error: { code: '57014' }, times: 5 });
+        for (let i = 0; i < 4; i++) expect(await deliver(delivery([change({ statuses: [s1] })]))).toBe(503);
+        expect(await deliver(delivery([change({ statuses: [s1, s2] })]))).toBe(503);
+        expect(h.db.events('webhook_payload_invalid')).toEqual([]);
+    });
+
+    it('(j) a contact card without a phone, from a sender without one, is acknowledged without an alert or a note', async () => {
+        const card = { from_user_id: 'ID.tanpa-hp', id: 'wamid.kartu-kosong', timestamp: metaTs(), type: 'contacts', contacts: [{ name: { formatted_name: 'Teman Palsu' } }] };
+        const body = delivery([change({ contacts: [{ profile: { name: 'Pelanggan Palsu' }, user_id: 'ID.tanpa-hp' }], messages: [card] })]);
+        expect(await deliver(body)).toBe(200);
+        expect(h.db.events()).toEqual([]);
+        expect(noteTexts()).toEqual([]);
     });
 });

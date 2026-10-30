@@ -688,31 +688,34 @@ export class WaModel {
         if (a.p_ai_eligible === true && a.p_queue_text === null) return pgError('22004');
         if (!isObject(a.p_metadata)) return pgError('22023');
         if (![null, 'main', 'other'].includes(a.p_rate_scope as string | null)) return pgError('22023');
-        if (a.p_rate_scope !== null && typeof a.p_rate_max === 'number' && a.p_rate_max < 1) return pgError('22023');
+        // As 0072 (C2_SPEC section 12): an empty key, or a scope without a
+        // usable limit, is refused instead of silently misbehaving.
+        if (a.p_wamid === '') return pgError('22023');
+        if (a.p_rate_scope !== null && (typeof a.p_rate_max !== 'number' || a.p_rate_max < 1)) return pgError('22023');
         if (a.p_ai_eligible === true && (typeof a.p_inbound_limit !== 'number' || a.p_inbound_limit < 1)) return pgError('22023');
         if (![null, 'media', 'flow'].includes(a.p_work_kind as string | null)) return pgError('22023');
         if (![null, 'image', 'document', 'audio', 'video'].includes(a.p_media_type as string | null)) return pgError('22023');
 
         const org = String(a.p_org);
         const wamid = String(a.p_wamid);
-        const bsuid = (a.p_bsuid as string | null) ?? null;
+        const bsuid = (a.p_bsuid as string | null) || null; // nullif(p_bsuid, '')
         const now = Date.now();
         const result = (outcome: string, over: Row = {}): Result =>
             ok([{
                 outcome,
                 contact_key: null,
                 message_id: null,
-                chat_created: null,
-                summary_applied: null,
+                chat_created: false,
+                summary_applied: false,
                 contact_name: null,
                 ai_enabled: null,
                 queue_outcome: null,
                 quota_limit: null,
                 quota_first_refusal: null,
                 quota_error: null,
-                rate_first: null,
+                rate_first: false,
                 rate_error: null,
-                bsuid_conflict: null,
+                bsuid_conflict: false,
                 work_id: null,
                 work_state: null,
                 ...over,
@@ -811,10 +814,9 @@ export class WaModel {
                     } else {
                         const d = this.consumeQuota(org, 'inbound_minute', Number(a.p_inbound_limit));
                         allowed = d.allowed;
-                        if (!allowed) {
-                            quotaLimit = d.quota;
-                            quotaFirstRefusal = d.first_refusal;
-                        }
+                        // Whenever the quota was asked, as 0072 reports it.
+                        quotaLimit = d.quota;
+                        quotaFirstRefusal = d.first_refusal;
                     }
                 }
                 if (allowed || joins) {
@@ -837,7 +839,7 @@ export class WaModel {
             quota_limit: quotaLimit,
             quota_first_refusal: quotaFirstRefusal,
             quota_error: quotaError,
-            rate_first: null,
+            rate_first: false,
             rate_error: rateError,
             bsuid_conflict: bsuidConflict,
         });
@@ -917,7 +919,13 @@ export class WaModel {
         return ok([{ applied, stale, unknown: unknownIds.length, unknown_ids: unknownIds, bsuid_filled: filled, bsuid_conflicts: 0 }]);
     }
 
-    /** claim_queue_jobs: pending jobs of the conversations whose newest job is older than the debounce. */
+    /**
+     * claim_queue_jobs: every pending job of up to p_limit conversations whose
+     * newest job is older than the debounce, oldest conversation first. The
+     * SQL compares with '<'; here '<=', because the fake clock stands still
+     * between the enqueue and the drain, while a later transaction's now()
+     * in Postgres is always later than the job's created_at.
+     */
     private claimJobs(a: Row): Result {
         const now = Date.now();
         const debounceMs = Number(a.p_debounce_seconds ?? 0) * 1000;
@@ -927,9 +935,9 @@ export class WaModel {
             const k = `${j.org_id}::${j.phone_number}`;
             newest.set(k, Math.max(newest.get(k) ?? 0, Date.parse(j.created_at)));
         }
-        const claimed = pending
-            .filter((j) => (newest.get(`${j.org_id}::${j.phone_number}`) ?? 0) <= now - debounceMs)
-            .slice(0, Number(a.p_limit ?? 10));
+        const settled = pending.filter((j) => (newest.get(`${j.org_id}::${j.phone_number}`) ?? 0) <= now - debounceMs);
+        const conversations = [...new Set(settled.map((j) => `${j.org_id}::${j.phone_number}`))].slice(0, Number(a.p_limit ?? 10));
+        const claimed = settled.filter((j) => conversations.includes(`${j.org_id}::${j.phone_number}`));
         for (const j of claimed) {
             j.status = 'processing';
             j.updated_at = iso(now);
