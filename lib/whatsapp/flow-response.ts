@@ -188,15 +188,22 @@ export type FlowReplyOutcome =
     | { status: 'gate_failed'; error: unknown; httpStatus: number };
 
 /**
- * Handle one nfm_reply submission end-to-end. Never throws: every failure
- * after the gate is logged (the lead and the confirmation matter more than a
- * clean history), a failed gate is reported in the result.
+ * Handle one nfm_reply submission end-to-end. Throws only an unexpected error
+ * raised before its gate insert stored the submission: a bug of this code,
+ * which the webhook answers with 503 so that Meta resends the submission
+ * until it is fixed (owner decision D24). Every failure after the gate is
+ * logged (the lead and the confirmation matter more than a clean history), a
+ * failed gate is reported in the result.
  */
 export async function handleFlowReply(params: HandleFlowReplyParams): Promise<FlowReplyOutcome> {
     const {
         supabase, orgId, phoneNumberId, accessToken,
         contactKey, bsuid, waId, inboundWamid, nfmReply,
     } = params;
+    // Set once the gate insert stored the submission. From then on an error
+    // must not make the webhook answer 503: Meta's resend would be a
+    // duplicate, and the rest of the follow-ups would never run.
+    let gated = false;
 
     try {
         // Sanitised after parsing: the answers travel inside response_json as
@@ -257,6 +264,7 @@ export async function handleFlowReply(params: HandleFlowReplyParams): Promise<Fl
             whatsappLogger.error('flow-response: history insert failed — retryable', msgError);
             return { status: 'gate_failed', error: msgError, httpStatus: msgStatus };
         }
+        gated = true;
 
         // -- 2a. CRM upsert through the same guarded path the AI uses (name
         //        lock, junk filter, company-email guard all apply).
@@ -359,6 +367,10 @@ export async function handleFlowReply(params: HandleFlowReplyParams): Promise<Fl
 
         whatsappLogger.info(`Flow "Brief Acara" processed for ${contactKey} (${lines.length} field(s))`);
     } catch (error) {
+        // Before the gate the submission itself is not stored (at most the
+        // chat summary is): a bug there goes to the webhook, which answers 503
+        // (D24).
+        if (!gated) throw error;
         whatsappLogger.error('flow-response: unexpected error handling nfm_reply', error);
     }
     return { status: 'handled' };

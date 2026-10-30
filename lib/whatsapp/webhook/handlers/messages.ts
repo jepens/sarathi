@@ -19,10 +19,12 @@ import { ingestRow } from '@/lib/whatsapp/webhook/handlers/row';
 // per-item guard: an error of one message never stops the rest of the batch.
 // A message is never dropped silently: when its own payload cannot be stored,
 // or a database error specific to it persists, it is stored as a placeholder
-// that says so (a thrown bug never gets there: Meta resends until it is
-// fixed, D24). The one exception is a contact card that carries no phone
-// from a sender without one: there is nothing to note, so it is only
-// acknowledged (handlers/contacts.ts).
+// that says so (a bug of this code never gets there: Meta resends until it is
+// fixed, D24). Two exceptions remain: a contact card that carries no phone
+// from a sender without one is only acknowledged (there is nothing to note,
+// handlers/contacts.ts), and until PR-C3 a media download runs in the
+// background after the item was acknowledged, so a failure there is only
+// logged (handlers/media.ts).
 
 /** One messages[] entry, read once before the batch is walked. */
 export interface MessagePlan {

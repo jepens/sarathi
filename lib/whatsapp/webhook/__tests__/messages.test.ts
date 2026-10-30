@@ -4,10 +4,11 @@ import { makeFakeSupabase, type FakeSupabase } from '@/lib/whatsapp/__tests__/fa
 // One message of a delivery and its guard (Fase 2 task 2.2a part 2): the
 // prelude (key, Meta time, the sender's own contact), then the handler of its
 // type. A message is never dropped silently: a payload that cannot be stored
-// as it is, or an error that persists POISON_LIMIT times, becomes a
-// placeholder row with an alert; only a message without any sender, or one
-// whose placeholder fails permanently too, is skipped (with an alert). A
-// retryable failure keeps the item retryable (503). Fake ids and phones only.
+// as it is, or a database answer specific to it that persists POISON_LIMIT
+// times, becomes a placeholder row with an alert; only a message without any
+// sender, or one whose placeholder fails permanently too, is skipped (with an
+// alert). A retryable failure keeps the item retryable (503); a thrown bug
+// never counts (D24). Fake ids and phones only.
 
 const h = vi.hoisted(() => ({
     /** The next wa_ingest_inbound answers: a row's fields, an error, or a throw. */

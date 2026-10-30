@@ -108,6 +108,25 @@ describe('handleFlowReply: its insert of the submission is the redelivery gate',
         expect(saveLeadInfo).toHaveBeenCalledTimes(1);
         expect(sendWhatsAppMessage).toHaveBeenCalledTimes(1);
     });
+
+    it('a bug before the gate is thrown to the webhook (503, D24), with no submission row, lead or confirmation', async () => {
+        h.fake = makeFakeSupabase({
+            resolve: (c) => {
+                if (c.table === 'whatsapp_chats' && c.op === 'upsert') throw new TypeError('x is not a function');
+                return { data: null, error: null };
+            },
+        });
+        await expect(submit()).rejects.toThrow(TypeError);
+        expect(h.fake.calls.filter((c) => c.table === 'whatsapp_messages')).toEqual([]);
+        expect(saveLeadInfo).not.toHaveBeenCalled();
+        expect(sendWhatsAppMessage).not.toHaveBeenCalled();
+    });
+
+    it('an error after the gate is only logged: the stored submission is handled (a 503 would make the resend a duplicate)', async () => {
+        vi.mocked(saveLeadInfo).mockRejectedValueOnce(new TypeError('x is not a function'));
+        expect(await submit()).toEqual({ status: 'handled' });
+        expect(whatsappLogger.error).toHaveBeenCalledWith('flow-response: unexpected error handling nfm_reply', expect.any(TypeError));
+    });
 });
 
 describe('handleFlowReply: the answers', () => {

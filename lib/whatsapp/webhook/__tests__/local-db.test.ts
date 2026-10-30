@@ -17,10 +17,10 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 // unreadable) also need LOCAL_SUPABASE_DB_CONTAINER, the stack's Postgres
 // container, for psql; without it they are skipped. Local stacks only: the
 // run refuses a URL that is not local, a container of another stack and a
-// queue holding another org's pending jobs; it creates and deletes its own
-// org and makes it the default org (platform_settings) until it ends. How to
-// run it, and what an interrupted run leaves behind: supabase/README.md. Fake
-// phones, wamids and texts only.
+// queue holding another org's pending or processing jobs; it creates and
+// deletes its own org and makes it the default org (platform_settings) until
+// it ends. How to run it, and what an interrupted run leaves behind:
+// supabase/README.md. Fake phones, wamids and texts only.
 
 const API_URL = process.env.LOCAL_SUPABASE_URL ?? '';
 const SERVICE_KEY = process.env.LOCAL_SUPABASE_SERVICE_KEY ?? '';
@@ -104,7 +104,7 @@ const PHONE = {
 } as const;
 
 // The run's alerts that carry no org (deleted with the run's org).
-const ORGLESS_DETAILS = ['perubahan "messages" tanpa isi terbaca; dilewati', 'database 42501 — org default tidak terbaca, periksa Supabase (1 dari 1 item)'];
+const ORGLESS_DETAILS = ['perubahan "messages" tanpa isi terbaca; dilewati', 'database 42501 — org default tidak terbaca: izin database (grant) hilang (1 dari 1 item)'];
 
 type Json = Record<string, unknown>;
 
@@ -1420,7 +1420,7 @@ describe.skipIf(!ENABLED)('webhook against a local Supabase stack (PR-C2 end to 
             expect(await deliver(bytes)).toBe(503);
             const after = await events('webhook_error', null);
             expect(after.count).toBe(orgless.count + 1);
-            expect(after.details).toContain('database 42501 — org default tidak terbaca, periksa Supabase (1 dari 1 item)');
+            expect(after.details).toContain('database 42501 — org default tidak terbaca: izin database (grant) hilang (1 dari 1 item)');
             expect(await chatOf(T1)).toBeNull();
             expect(await mainRate(T1)).toBeNull();
         } finally {

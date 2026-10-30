@@ -220,7 +220,13 @@ export async function respond(client: SupabaseClient, outcome: BatchOutcome): Pr
     const alert = alertFor(outcome);
     const status = alert ? 503 : 200;
     logBatch(outcome, status);
-    if (alert) await recordOpsEvent(client, alert.kind, { orgId: outcome.orgId, detail: alert.detail });
+    if (alert) {
+        // The detail (PII-free) goes to the log as well: when the cause also
+        // breaks the alert write (a wrong URL even answers it like a
+        // success), the log is the only place left that names it.
+        whatsappLogger.warn(`Webhook alert ${alert.kind}: ${alert.detail}`);
+        await recordOpsEvent(client, alert.kind, { orgId: outcome.orgId, detail: alert.detail });
+    }
     return status === 503
         ? new NextResponse('Service Unavailable', { status: 503 })
         : new NextResponse('EVENT_RECEIVED', { status: 200 });

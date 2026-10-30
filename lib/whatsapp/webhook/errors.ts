@@ -24,10 +24,14 @@ export class MalformedPayloadError extends Error {
     }
 }
 
-// SQLSTATEs that say the input itself is wrong: class 22 (data exception,
-// including the RPC's own 22004/22023), a NOT NULL or CHECK violation, a
-// RAISE in a function. PGRST1xx: PostgREST could not read the request.
+// SQLSTATEs that say the input itself is wrong: class 22 (data exception), a
+// NOT NULL or CHECK violation, a RAISE in a function. PGRST1xx: PostgREST could
+// not read the request.
 const PERMANENT_CODES = new Set(['23502', '23514', 'P0001']);
+// Except the parameter checks of the webhook's RPCs (22004/22023 raised by
+// wa_ingest_inbound and wa_apply_statuses): only a bug of this code can trip
+// them, so they follow D24 like a thrown bug: retryable, never counted.
+const CALLER_BUG_CODES = new Set(['22004', '22023']);
 
 export function classify(error: unknown): ErrorClass {
     if (error instanceof MalformedPayloadError) return 'permanent';
@@ -37,6 +41,7 @@ export function classify(error: unknown): ErrorClass {
     // setting is there: whatever the code, the next delivery can succeed.
     if (e.name === 'PlatformSettingReadError') return 'retryable';
     const code = typeof e.code === 'string' ? e.code : '';
+    if (CALLER_BUG_CODES.has(code)) return 'retryable';
     if (/^22[0-9A-Z]{3}$/.test(code) || PERMANENT_CODES.has(code) || /^PGRST1\d\d$/.test(code)) return 'permanent';
     // Everything else: a network failure or an abort (postgrest-js answers
     // code ''), HTTP 408/429/5xx, PostgREST's connection, schema-cache (e.g.
@@ -85,15 +90,19 @@ export function describeItemError(error: unknown): string {
 // deploy-order slip into placeholders and skipped statuses once it is fixed.
 // A wrong API key or URL never gets as far as an item: the delivery's org
 // read on the same client fails first (PlatformSettingReadError, never
-// counted), so an HTTP 401/403/404 without a code on one item's own call is
+// counted; getPlatformSettingStrict also refuses an answer that is not
+// PostgREST's 200, such as the empty 204 of a server that does not know the
+// path), so an HTTP 401/403/404 without a code on one item's own call is
 // about that request, and counts like any other answer specific to the item
 // (e.g. 23503, a contact deleted meanwhile).
 const SYSTEMIC_CODES = new Set(['25006', '40001', '40P01', '55P03', '57014']);
 const SYSTEMIC_HTTP = new Set([0, 408, 429]);
 
-function isSystemicCode(code: string): boolean {
+/** Database codes that never count: the systemic ones, and the RPCs' parameter checks (a bug, D24). */
+function neverCounts(code: string): boolean {
     return (
         SYSTEMIC_CODES.has(code) ||
+        CALLER_BUG_CODES.has(code) ||
         /^PGRST[023X]\d\d$/.test(code) ||
         /^(08|42|53|58|XX)[0-9A-Z]{3}$/.test(code) ||
         /^57P0\d$/.test(code)
@@ -112,13 +121,13 @@ export function countsTowardPoison(error: unknown): boolean {
     if (error instanceof RpcError) {
         // Without a code: no answer at all, or an HTTP error without a body.
         if (error.code === '') return !(SYSTEMIC_HTTP.has(error.status) || error.status >= 500);
-        return !isSystemicCode(error.code);
+        return !neverCounts(error.code);
     }
     // A database answer handed over without the RpcError wrapper: a plain
     // object (never a thrown Error) carrying its code.
     if (error === null || typeof error !== 'object' || error instanceof Error) return false;
     const code = (error as { code?: unknown }).code;
-    return typeof code === 'string' && code !== '' && !isSystemicCode(code);
+    return typeof code === 'string' && code !== '' && !neverCounts(code);
 }
 
 /**
@@ -135,11 +144,20 @@ export function opsHint(error: unknown): string | null {
         if (/^PGRST3\d\d$/.test(code) || (code === '' && (status === 401 || status === 403))) {
             return 'org default tidak terbaca: kunci API Supabase ditolak, periksa SUPABASE_SERVICE_ROLE_KEY (rotasi kunci?)';
         }
-        if (code === '' && status === 404) {
+        // platform_settings is the service role's only. Refused with 42501 as
+        // the anonymous role (HTTP 401), the key is an anon or publishable
+        // one; as the service role (403), its grant is missing.
+        if (code === '42501' && status === 401) {
+            return 'org default tidak terbaca: kunci bukan service role (anon/publishable?), periksa SUPABASE_SERVICE_ROLE_KEY';
+        }
+        if (code === '42501') return 'org default tidak terbaca: izin database (grant) hilang';
+        // An empty 404 (postgrest-js reports it as 204): not a PostgREST at that address.
+        if (code === '' && (status === 404 || status === 204)) {
             return 'org default tidak terbaca: alamat Supabase tidak ditemukan, periksa NEXT_PUBLIC_SUPABASE_URL';
         }
         return 'org default tidak terbaca, periksa Supabase';
     }
+    if (CALLER_BUG_CODES.has(code)) return 'parameter fungsi database ditolak: bug kode, periksa deploy terakhir';
     if (code === 'PGRST202' || code === '42883') return 'fungsi database tidak ditemukan, migrasi belum diterapkan?';
     if (code === 'PGRST203') return 'dua versi fungsi database, periksa migrasi terakhir';
     if (code === 'PGRST204' || code === 'PGRST205' || code === '42703' || code === '42P01') {

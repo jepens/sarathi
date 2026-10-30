@@ -20,9 +20,7 @@ const pg = (code: string) => ({ code, message: 'm', details: '', hint: '' });
 
 describe('classify', () => {
     it.each([
-        // class 22, including the RPC's own validation errors
-        ['22004', 'null value not allowed (the RPC validation)'],
-        ['22023', 'invalid parameter value (the RPC validation)'],
+        // class 22, except the RPCs' own parameter checks (below)
         ['22P02', 'invalid text representation'],
         ['22P05', 'unsupported Unicode escape sequence (U+0000 in jsonb)'],
         ['22021', 'character not in repertoire'],
@@ -66,6 +64,8 @@ describe('classify', () => {
         ['42883', 'undefined function'],
         ['42P01', 'undefined table (an unknown code)'],
         ['ZZ999', 'a code nobody knows'],
+        ['22004', "null value not allowed: the RPC's own parameter check, which only a bug trips (D24)"],
+        ['22023', "invalid parameter value: the RPC's own parameter check, which only a bug trips (D24)"],
     ])('"%s" (%s) is retryable', (code) => {
         expect(classify(pg(code))).toBe('retryable');
         expect(classify(new RpcError('wa_ingest_inbound', pg(code), 503))).toBe('retryable');
@@ -130,6 +130,8 @@ describe('countsTowardPoison', () => {
             '40001', '40P01', '55P03', '57014',
             '42501', '42883', '42P01', '42703', '42P10',
             '58030', 'XX000', 'XX001', 'PGRSTX00',
+            // the RPCs' own parameter checks: a bug of this code (D24)
+            '22004', '22023',
         ]) {
             expect(countsTowardPoison(new RpcError('wa_ingest_inbound', pg(code), 503)), code).toBe(false);
             expect(countsTowardPoison(pg(code)), `${code} unwrapped`).toBe(false);
@@ -201,6 +203,9 @@ describe('opsHint', () => {
         expect(opsHint(new RpcError('x', pg('XX000'), 500))).toBe('galat internal database, periksa Supabase');
         expect(opsHint(new RpcError('x', pg('58030'), 500))).toBe('galat internal database, periksa Supabase');
         expect(opsHint(new RpcError('x', pg('PGRSTX00'), 500))).toBe('galat internal database, periksa Supabase');
+        for (const code of ['22004', '22023']) {
+            expect(opsHint(new RpcError('x', pg(code), 400)), code).toBe('parameter fungsi database ditolak: bug kode, periksa deploy terakhir');
+        }
     });
 
     it("the default org's read error, the delivery's first call, names a refused key or a wrong URL", () => {
@@ -211,6 +216,15 @@ describe('opsHint', () => {
         expect(opsHint(readError(undefined, 403))).toBe(key);
         expect(opsHint(readError('PGRST301', 401))).toBe(key);
         expect(opsHint(readError(undefined, 404))).toBe('org default tidak terbaca: alamat Supabase tidak ditemukan, periksa NEXT_PUBLIC_SUPABASE_URL');
+        // An empty 404 comes back from postgrest-js as a 204 without an error.
+        expect(opsHint(readError(undefined, 204))).toBe('org default tidak terbaca: alamat Supabase tidak ditemukan, periksa NEXT_PUBLIC_SUPABASE_URL');
+        // An anon or publishable key in SUPABASE_SERVICE_ROLE_KEY: platform_settings is the service role's only.
+        // PostgREST answers 42501 with 401 for the anonymous role only.
+        expect(opsHint(readError('42501', 401))).toBe(
+            'org default tidak terbaca: kunci bukan service role (anon/publishable?), periksa SUPABASE_SERVICE_ROLE_KEY',
+        );
+        // As the service role (403): its grant on platform_settings is missing.
+        expect(opsHint(readError('42501', 403))).toBe('org default tidak terbaca: izin database (grant) hilang');
         expect(opsHint(readError('57014', 500))).toBe('org default tidak terbaca, periksa Supabase');
         expect(opsHint(readError(undefined, 0))).toBe('org default tidak terbaca, periksa Supabase');
         expect(opsHint(Object.assign(new Error('x'), { name: 'PlatformSettingReadError', code: '57014' }))).toBe(

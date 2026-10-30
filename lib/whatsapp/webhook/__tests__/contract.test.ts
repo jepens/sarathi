@@ -844,7 +844,7 @@ describe('the rest of the batch walk (C2_SPEC sections 6 and 7)', () => {
     it('a status change that keeps failing answers 503 four times, then is skipped with an alert; a permanent error skips it at once (C2_SPEC 6.9)', async () => {
         h.db.seedAssistant('wamid.keluar-racun', A, 'sent');
         const body = delivery([change({ statuses: [{ id: 'wamid.keluar-racun', status: 'read', timestamp: metaTs(), recipient_id: A }] })]);
-        // P0002 (a STRICT select found no row): a bug of the item's call, which counts.
+        // P0002 (a STRICT select found no row): a database answer specific to the item's call, which counts.
         h.db.fail({ target: 'rpc:wa_apply_statuses', error: { code: 'P0002' }, times: Infinity });
         const answers: number[] = [];
         for (let i = 0; i < 5; i++) answers.push(await deliver(body));
@@ -1346,6 +1346,8 @@ describe('pins the review of the final-review fixes asked for (2026-10-31)', () 
         const pending = POST(signedPost(delivery([change({ contacts: [contactOf(A)], messages: [textMsg(A, 'wamid.urutan', 'halo')] })])));
         for (let i = 0; i < 500 && batchLines().length === 0; i++) await macrotask();
         expect(batchLines()).toEqual([expect.stringMatching(/ retryable=1 .* http=503$/)]);
+        // The alert's detail is in the log before its write returns.
+        expect(h.logs.map((l) => String(l[0]))).toContain('Webhook alert webhook_error: database 40001 — bentrok transaksi, aman bila jarang (1 dari 1 item)');
         expect(h.db.events()).toEqual([]);
         h.db.release();
         expect((await pending).status).toBe(503);
@@ -1392,6 +1394,39 @@ describe('pins the review of the final-review fixes asked for (2026-10-31)', () 
         expect(h.db.userRows().map((m) => m.wa_message_id)).toEqual(['wamid.flow-dua-kali']);
         expect(details('webhook_payload_invalid')).toEqual(['pesan "interactive": kiriman form tidak terbaca; disimpan sebagai pengganti']);
         expect(batchLines()[1]).toContain(' duplicate=1 ');
+    });
+
+    it('a bug in the Flow handling before its gate answers 503 and is never counted (D24); the resend stores the submission', async () => {
+        vi.mocked(handleFlowReply).mockImplementationOnce(async () => {
+            throw new TypeError('x is not a function');
+        });
+        const flow = {
+            from: A,
+            id: 'wamid.flow-bug',
+            timestamp: metaTs(),
+            type: 'interactive',
+            interactive: { type: 'nfm_reply', nfm_reply: { name: 'flow', body: 'Sent', response_json: '{"nama_pic":"Budi Palsu"}' } },
+        };
+        const body = delivery([change({ contacts: [contactOf(A)], messages: [flow] })]);
+        expect(await deliver(body)).toBe(503);
+        expect(details('webhook_error')).toEqual(['TypeError (1 dari 1 item)']);
+        expect(h.db.userRows()).toEqual([]);
+        expect(poisonCount('wamid.flow-bug')).toBe(0);
+        expect(await deliver(body)).toBe(200);
+        expect(h.db.userRows().map((m) => [m.wa_message_id, m.metadata])).toEqual([['wamid.flow-bug', {}]]);
+    });
+
+    it('the RPC refusing its own parameters (22023: only a bug of this code trips it) answers 503 without a placeholder (D24); once fixed the text is stored with its content', async () => {
+        const body = delivery([change({ contacts: [contactOf(A)], messages: [textMsg(A, 'wamid.parameter', 'tolong dibalas')] })]);
+        h.db.fail({ target: 'rpc:wa_ingest_inbound', error: { code: '22023' }, status: 400, times: POISON_LIMIT + 1 });
+        const answers: number[] = [];
+        for (let i = 0; i < POISON_LIMIT + 2; i++) answers.push(await deliver(body));
+        expect(answers).toEqual([...Array(POISON_LIMIT + 1).fill(503), 200]);
+        expect(details('webhook_error')[0]).toBe(
+            'database 22023 — parameter fungsi database ditolak: bug kode, periksa deploy terakhir (1 dari 1 item)',
+        );
+        expect(h.db.events('webhook_payload_invalid')).toEqual([]);
+        expect(h.db.userRows().map((m) => [m.content, m.metadata])).toEqual([['tolong dibalas', {}]]);
     });
 
     it("an HTTP 403 without a code on one message's own call is about that request (the org read passed with the same key): it counts, with a hint that does not blame the key", async () => {

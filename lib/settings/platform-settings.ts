@@ -65,13 +65,16 @@ export async function getPlatformSettingStrict(
         .select('value')
         .eq('key', key)
         .maybeSingle();
-    if (error) {
+    // A read PostgREST answered is a 200, with the row or without it. Anything
+    // else without an error (postgrest-js turns an empty 404, a server that
+    // does not know the path, into a 204) is not PostgREST: a wrong URL.
+    if (error || (typeof status === 'number' && status !== 200)) {
         // Keep the database code and the HTTP status for the alert detail and
         // its hint (describeErrorForOps, opsHint): the webhook's first read,
         // where a wrong API key or URL shows.
-        const err = new Error(`platform setting ${key} could not be read (${error.code ?? 'no code'})`);
+        const err = new Error(`platform setting ${key} could not be read (${error?.code ?? `HTTP ${status}`})`);
         err.name = 'PlatformSettingReadError';
-        throw Object.assign(err, { code: error.code, status });
+        throw Object.assign(err, { code: error?.code, status });
     }
     return nonEmpty(data?.value);
 }

@@ -16,7 +16,10 @@ export const AI_MAX_AGE_HOURS = 20;
 /** Time a delivery may take before the rest of its items is deferred (503). */
 export const BUDGET_MS = 8000;
 
-/** Failures of one item in this process before it is stored as a placeholder. */
+/**
+ * Counted failures of one item in this process (countsTowardPoison: a database
+ * answer specific to the item) before it is stored as a placeholder.
+ */
 export const POISON_LIMIT = 5;
 
 /** Consecutive retryable failures after which the rest of a batch is deferred. */

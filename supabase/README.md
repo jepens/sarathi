@@ -164,9 +164,10 @@ container is not the database of the stack the URL points at, or when the
 queue holds another org's pending or processing jobs (its drains would answer
 them). A `LOCAL_DB_KEEP=1` run leaves its org, its rows and pending jobs (the
 default org is restored). A run killed before its cleanup can also leave its
-org as the default org, `wa_ingest_inbound` renamed or without its grant, or
-`platform_settings` unreadable for service_role; only a later run with
-`LOCAL_SUPABASE_DB_CONTAINER` set restores those. In both cases run
+org as the default org (any later run sets it back, to the seed org), and
+`wa_ingest_inbound` renamed or without its grant, or `platform_settings`
+unreadable for service_role (only a later run with
+`LOCAL_SUPABASE_DB_CONTAINER` set restores those). In both cases run
 `npx supabase db reset` before `npx supabase test db` or the local app on the
 same stack (080, 110 and 130 expect a clean queue and the seed org).
 
