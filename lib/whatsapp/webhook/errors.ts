@@ -75,12 +75,18 @@ export function describeItemError(error: unknown): string {
 }
 
 // Errors that hit every item alike say nothing about the item: the database
-// or PostgREST unreachable or overloaded, a function or a grant missing (the
-// code deployed ahead of migration 0072: PGRST202, 42883, 42501), a read-only
-// database. Counted toward an item's poison bound they would turn an outage
+// or PostgREST unreachable, overloaded or slow (a statement or lock timeout,
+// a serialization failure or deadlock under load), the schema out of step
+// with the code (class 42: a function, table, column or grant missing, e.g.
+// the code deployed ahead of its migration), a read-only database, an
+// internal error (classes 58 and XX), a gateway that refuses every call (a
+// wrong API key or URL: HTTP 401/403/404 without a PostgREST code). Counted
+// toward an item's poison bound they would turn an outage, a slow database
 // or a deploy-order slip into placeholders and skipped statuses once it is
-// fixed. A thrown bug, a malformed answer and any other SQLSTATE still count.
-const SYSTEMIC_CODES = new Set(['25006', '42501', '42883']);
+// fixed. A thrown bug, a malformed answer and any other SQLSTATE (e.g. 23503,
+// a contact deleted meanwhile) still count.
+const SYSTEMIC_CODES = new Set(['25006', '40001', '40P01', '55P03', '57014']);
+const SYSTEMIC_HTTP = new Set([0, 401, 403, 404, 408, 429]);
 
 /** Whether a retryable failure counts toward the item's poison bound (outcome.ts). */
 export function countsTowardPoison(error: unknown): boolean {
@@ -89,13 +95,13 @@ export function countsTowardPoison(error: unknown): boolean {
     if (e.name === 'AbortError' || e.name === 'TimeoutError' || e.name === 'PlatformSettingReadError') return false;
     const code = typeof e.code === 'string' ? e.code : '';
     if (code === '' && error instanceof RpcError) {
-        // No answer at all, or an HTTP error without a body.
-        return !(error.status === 0 || error.status === 408 || error.status === 429 || error.status >= 500);
+        // No answer at all, a gateway refusing every call, or an HTTP error without a body.
+        return !(SYSTEMIC_HTTP.has(error.status) || error.status >= 500);
     }
     return !(
         SYSTEMIC_CODES.has(code) ||
         /^PGRST[023]\d\d$/.test(code) ||
-        /^(08|53)[0-9A-Z]{3}$/.test(code) ||
+        /^(08|42|53|58|XX)[0-9A-Z]{3}$/.test(code) ||
         /^57P0\d$/.test(code)
     );
 }
@@ -109,18 +115,30 @@ export function opsHint(error: unknown): string | null {
     const e = error as { name?: unknown; code?: unknown };
     if (e.name === 'PlatformSettingReadError') return 'org default tidak terbaca, periksa Supabase';
     const code = typeof e.code === 'string' ? e.code : '';
-    if (code === 'PGRST202' || code === '42883') return 'fungsi database tidak ditemukan, migrasi 0072 belum diterapkan?';
-    if (code === '42501') return 'grant fungsi database hilang';
+    if (code === 'PGRST202' || code === '42883') return 'fungsi database tidak ditemukan, migrasi belum diterapkan?';
+    if (code === 'PGRST203') return 'dua versi fungsi database, periksa migrasi terakhir';
+    if (code === 'PGRST204' || code === 'PGRST205' || code === '42703' || code === '42P01') {
+        return 'kolom atau tabel database tidak ditemukan, migrasi belum diterapkan?';
+    }
+    if (code === '42501') return 'izin database (grant) hilang';
+    if (/^42[0-9A-Z]{3}$/.test(code)) return 'skema database tidak cocok dengan kode, periksa migrasi terakhir';
+    if (/^PGRST3\d\d$/.test(code)) return 'kunci API Supabase ditolak, periksa SUPABASE_SERVICE_ROLE_KEY (rotasi kunci?)';
     if (code === '25006') return 'database hanya-baca, disk penuh?';
     if (/^53[0-9A-Z]{3}$/.test(code)) return 'sumber daya database habis';
     if (code === '55P03') return 'menunggu kunci database terlalu lama';
     if (code === '40001' || code === '40P01') return 'bentrok transaksi, aman bila jarang';
     if (code === '57014') return 'query database dibatalkan karena terlalu lama';
+    if (/^(58|XX)[0-9A-Z]{3}$/.test(code)) return 'galat internal database, periksa Supabase';
     if (/^PGRST00\d$/.test(code) || /^08[0-9A-Z]{3}$/.test(code) || /^57P0\d$/.test(code)) {
         return 'Supabase tidak terjangkau atau sedang gangguan';
     }
-    if (code === '' && error instanceof RpcError && (error.status === 0 || error.status >= 500)) {
-        return 'Supabase tidak terjangkau atau sedang gangguan';
+    if (code === '' && error instanceof RpcError) {
+        if (error.status === 401 || error.status === 403) {
+            return 'kunci API Supabase ditolak, periksa SUPABASE_SERVICE_ROLE_KEY (rotasi kunci?)';
+        }
+        if (error.status === 404) return 'alamat Supabase tidak ditemukan, periksa NEXT_PUBLIC_SUPABASE_URL';
+        if (error.status === 408 || error.status === 429) return 'Supabase sibuk (batas permintaan atau waktu tunggu habis)';
+        if (error.status === 0 || error.status >= 500) return 'Supabase tidak terjangkau atau sedang gangguan';
     }
     return null;
 }

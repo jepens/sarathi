@@ -147,6 +147,21 @@ describe('respond', () => {
         ]);
     });
 
+    it('a BSUID move the database answered (counted as acked or skipped) is progress: the rest deferred is webhook_deferred', async () => {
+        const ops = opsClient();
+        const outcome = new BatchOutcome();
+        outcome.orgId = ORG;
+        outcome.items = 2;
+        outcome.done('acked');
+        outcome.answered();
+        outcome.deferred();
+        expect(outcome.progressed()).toBe(true);
+        expect((await respond(ops.client, outcome)).status).toBe(503);
+        expect(ops.events.map((e) => e.p_kind)).toEqual(['webhook_deferred']);
+        // The log line keeps its counters: the move shows under acked.
+        expect(outcome.logLine()).toContain('acked=1 ');
+    });
+
     it('the result line carries the answer Meta got', () => {
         const outcome = new BatchOutcome();
         expect(outcome.logLine(503)).toMatch(/ ms=\d+ http=503$/);

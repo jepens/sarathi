@@ -84,8 +84,15 @@ export async function handleUserIdUpdates(run: BatchRun, values: MetaJson[]): Pr
     for (const { u } of entries) {
         const parsed = parseUserIdUpdate(u);
         if (!parsed) {
+            // Nothing a retry could read (e.g. Meta changed the shape during
+            // the BSUID rollout): skipped, with an alert so the parser is
+            // looked at.
             whatsappLogger.warn(`user_id_update: could not parse old/new id (fields: ${Object.keys(u).join(',') || '-'})`);
-            outcome.done('acked');
+            await recordOpsEvent(run.supabase, 'webhook_payload_invalid', {
+                orgId: outcome.orgId,
+                detail: 'user_id_update tanpa id lama/baru yang terbaca; dilewati',
+            });
+            outcome.done('skipped');
             continue;
         }
         const { oldId, newId } = parsed;
@@ -116,6 +123,7 @@ export async function handleUserIdUpdates(run: BatchRun, values: MetaJson[]): Pr
             whatsappLogger.info(`user_id_update: moved bsuid ${oldId}→${newId} for ${Array.isArray(data) ? data.length : 0} contact(s)`);
             clearPoison(poisonKey);
             outcome.done('acked');
+            outcome.answered();
         } catch (error) {
             if (signal.aborted) {
                 run.heldBsuids.add(newId);
@@ -126,6 +134,7 @@ export async function handleUserIdUpdates(run: BatchRun, values: MetaJson[]): Pr
                 whatsappLogger.warn('user_id_update: the new BSUID already belongs to another chat of the org — not moved');
                 clearPoison(poisonKey);
                 outcome.done('skipped');
+                outcome.answered();
                 continue;
             }
             const permanent = classify(error) === 'permanent';

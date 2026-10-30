@@ -11,7 +11,7 @@ import { serviceRoleClient } from '@/lib/whatsapp/webhook/service-client';
 import { routeChanges, type RoutedChange } from '@/lib/whatsapp/webhook/router';
 import { errorCodes, isRecord, listChanges, messagesOf, statusesOf } from '@/lib/whatsapp/webhook/payload';
 import { PREDEDUP_CHUNK } from '@/lib/whatsapp/webhook/limits';
-import { BatchOutcome, logBatch, respond } from '@/lib/whatsapp/webhook/outcome';
+import { BatchOutcome, respond } from '@/lib/whatsapp/webhook/outcome';
 import { runInBackground } from '@/lib/whatsapp/webhook/background';
 import type { BatchRun } from '@/lib/whatsapp/webhook/types';
 import { handleUserIdUpdates } from '@/lib/whatsapp/webhook/handlers/user-id-update';
@@ -257,7 +257,5 @@ async function walkBatch(supabase: SupabaseClient, webhookApp: WebhookApp, body:
     for (const change of routed) await handleChangeStatuses(run, statusesOf(change.value));
 
     if (outcome.drain) drainQueue(supabase);
-    const response = await respond(supabase, outcome);
-    logBatch(outcome, response.status);
-    return response;
+    return respond(supabase, outcome);
 }

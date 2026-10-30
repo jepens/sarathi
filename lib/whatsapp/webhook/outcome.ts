@@ -59,6 +59,8 @@ export class BatchOutcome {
     private first: { error: unknown } | null = null;
     private streak = 0;
     private stopped: 'budget' | 'stop_rule' | null = null;
+    /** Items the database answered that done() counts as acked or skipped (see answered()). */
+    private answeredOther = 0;
 
     constructor(startedAt = Date.now(), clock: () => number = () => Date.now()) {
         this.startedAt = startedAt;
@@ -95,6 +97,15 @@ export class BatchOutcome {
         this.streak = 0;
     }
 
+    /**
+     * The database answered for an item that done() counts as acked or
+     * skipped (a BSUID moved, or refused with 23505): progress for respond(),
+     * without a counter of its own in the log line.
+     */
+    answered(): void {
+        this.answeredOther += 1;
+    }
+
     /** A change's statuses went through wa_apply_statuses (their own counters). */
     appliedStatuses(applied: number, stale: number, unknown: number): void {
         this.statuses.applied += applied;
@@ -117,12 +128,14 @@ export class BatchOutcome {
 
     /**
      * Whether the database answered for any item of the batch (stored, found
-     * stored, counted, handed over or applied).
+     * stored, counted, handed over, applied, or a BSUID moved).
      */
     progressed(): boolean {
         const c = this.counts;
         const s = this.statuses;
-        return c.new + c.duplicate + c.rateLimited + c.legacy + c.degraded + s.applied + s.stale + s.unknown > 0;
+        return (
+            c.new + c.duplicate + c.rateLimited + c.legacy + c.degraded + s.applied + s.stale + s.unknown + this.answeredOther > 0
+        );
     }
 
     /** The first retryable error of the batch, if any. */
@@ -194,32 +207,44 @@ export function poisonCount(key: string): number {
  *   webhook_error when no item at all got an answer from the database (a
  *   slow or silent database is an outage, not load);
  * - otherwise 200 (a permanent failure was alerted when it happened).
+ *
+ * The batch's log line comes before the alert write: that write goes to the
+ * same database the alert may be about, so it could come late or not at all,
+ * and ms= is the walk's time, not the write's.
  */
 export async function respond(client: SupabaseClient, outcome: BatchOutcome): Promise<NextResponse> {
+    const alert = alertFor(outcome);
+    const status = alert ? 503 : 200;
+    logBatch(outcome, status);
+    if (alert) await recordOpsEvent(client, alert.kind, { orgId: outcome.orgId, detail: alert.detail });
+    return status === 503
+        ? new NextResponse('Service Unavailable', { status: 503 })
+        : new NextResponse('EVENT_RECEIVED', { status: 200 });
+}
+
+/** The alert of a batch answered 503 (respond()), or null for a 200. */
+function alertFor(outcome: BatchOutcome): { kind: 'webhook_error' | 'webhook_deferred'; detail: string } | null {
     const first = outcome.firstError();
     if (first) {
         const hint = opsHint(first.error);
-        await recordOpsEvent(client, 'webhook_error', {
-            orgId: outcome.orgId,
+        return {
+            kind: 'webhook_error',
             detail: `${describeErrorForOps(first.error)}${hint ? ` — ${hint}` : ''} (${outcome.counts.retryable} dari ${outcome.items} item)`,
-        });
-        return new NextResponse('Service Unavailable', { status: 503 });
+        };
     }
     if (outcome.counts.deferred > 0 && !outcome.progressed()) {
-        await recordOpsEvent(client, 'webhook_error', {
-            orgId: outcome.orgId,
+        return {
+            kind: 'webhook_error',
             detail: `database lambat atau tidak menjawab: ${outcome.counts.deferred} dari ${outcome.items} item ditunda tanpa satu pun selesai dalam ${BUDGET_MS / 1000} detik; webhook menjawab 503, Meta mengirim ulang`,
-        });
-        return new NextResponse('Service Unavailable', { status: 503 });
+        };
     }
     if (outcome.counts.deferred > 0) {
-        await recordOpsEvent(client, 'webhook_deferred', {
-            orgId: outcome.orgId,
+        return {
+            kind: 'webhook_deferred',
             detail: `${outcome.counts.deferred} dari ${outcome.items} item ditunda: batas waktu ${BUDGET_MS / 1000} detik habis; webhook menjawab 503, Meta mengirim ulang`,
-        });
-        return new NextResponse('Service Unavailable', { status: 503 });
+        };
     }
-    return new NextResponse('EVENT_RECEIVED', { status: 200 });
+    return null;
 }
 
 /** The result log line of a batch, with the answer Meta got. */

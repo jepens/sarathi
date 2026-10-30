@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { sendWhatsAppMessage } from '@/lib/whatsapp/client';
 import { resolveSendTarget } from '@/lib/whatsapp/recipient';
 import { logSystemMessage } from '@/lib/whatsapp/history';
+import { sanitizeForPg } from '@/lib/whatsapp/webhook/payload';
 import { whatsappLogger } from '@/lib/utils/logger';
 import { saveLeadInfo, updateLeadStage } from '@/lib/ai/tools';
 import { getBusinessProfile } from '@/lib/settings/business-profile';
@@ -170,14 +171,20 @@ function confirmationMessage(b: BriefAcara): string {
 }
 
 /**
- * What handleFlowReply did, for the webhook's answer to Meta: 'gate_failed'
- * when its own insert of the submission (the redelivery gate) failed other
- * than as a duplicate; nothing else was done then, and the webhook answers
- * 503 so Meta's resend does the whole submission once (PR-C2).
+ * What handleFlowReply did, for the webhook's answer to Meta:
+ * - 'gate_failed': its own insert of the submission (the redelivery gate)
+ *   failed other than as a duplicate. Only the chat summary upsert ran before
+ *   it (and runs again on the resend); no lead, stage, note or confirmation.
+ *   The webhook answers 503 so Meta's resend does the whole submission once
+ *   (PR-C2).
+ * - 'unreadable': response_json is missing or not a JSON object. Nothing was
+ *   written; the webhook stores a placeholder and alerts, so the submission
+ *   is never dropped silently.
  */
 export type FlowReplyOutcome =
     | { status: 'handled' }
     | { status: 'duplicate' }
+    | { status: 'unreadable' }
     | { status: 'gate_failed'; error: unknown; httpStatus: number };
 
 /**
@@ -192,10 +199,14 @@ export async function handleFlowReply(params: HandleFlowReplyParams): Promise<Fl
     } = params;
 
     try {
-        const data = parseFlowResponse(nfmReply.response_json);
+        // Sanitised after parsing: the answers travel inside response_json as
+        // JSON escapes (\u0000, a lone \udXXX surrogate), which only JSON.parse
+        // turns into the code units Postgres refuses (22P05).
+        const parsed = parseFlowResponse(nfmReply.response_json);
+        const data = parsed ? sanitizeForPg(parsed) : null;
         if (!data) {
-            whatsappLogger.warn(`nfm_reply from ${contactKey} had no parsable response_json — skipping`);
-            return { status: 'handled' };
+            whatsappLogger.warn('nfm_reply had no parsable response_json — reported as unreadable');
+            return { status: 'unreadable' };
         }
 
         const brief = extractBrief(data);

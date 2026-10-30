@@ -65,7 +65,12 @@ export async function handleContactsMessage(ctx: MessageContext): Promise<ItemRe
         touchChat: false,
         waMessageId: ctx.key,
     });
-    if (note.status === 'failed') throw note.error ?? new Error('contact-share note not stored');
+    if (note.status === 'failed') {
+        // A database answer (or none) takes the shape of every other call, so
+        // an outage never counts toward the poison bound; a throw stays as it is.
+        if (note.httpStatus !== undefined) throw new RpcError('contact-share note', note.error, note.httpStatus);
+        throw note.error ?? new Error('contact-share note not stored');
+    }
     if (note.status === 'duplicate') return 'duplicate';
     whatsappLogger.info(`Contact share captured for ${contactKey}: ${recovered}`);
     return 'new';

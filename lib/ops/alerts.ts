@@ -39,7 +39,7 @@ export const OPS_KIND_LABELS: Record<string, string> = {
     webhook_unrouted: 'Webhook untuk nomor lain di WABA (bukan nomor org ini)',
     webhook_unrouted_new: 'Nomor lain di WABA mengirim event untuk pertama kali dalam 7 hari (bila ini nomor utama, periksa WHATSAPP_PHONE_NUMBER_ID)',
     webhook_unconfigured: 'Konfigurasi webhook WhatsApp bermasalah',
-    webhook_payload_invalid: 'Event WhatsApp tidak bisa diproses: pesan disimpan sebagai pengganti tanpa isi, atau status/pembaruan dilewati',
+    webhook_payload_invalid: 'Event WhatsApp tidak bisa diproses: pesan disimpan sebagai pengganti tanpa isi atau dilewati; status/pembaruan dilewati',
     webhook_deferred: 'Webhook WhatsApp menunda event karena batas waktu 8 detik (503, Meta mengirim ulang; bila sering: database lambat)',
     queue_job_failed: 'Balasan AI gagal setelah semua percobaan',
     whatsapp_token_invalid: 'Token WhatsApp tidak valid atau kedaluwarsa (Meta 190)',

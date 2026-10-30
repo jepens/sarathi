@@ -159,7 +159,13 @@ lib/whatsapp/webhook/__tests__/local-db.test.ts`, `<key>` being the CLI's
 default local service_role key (`npx supabase status -o env` shows it while
 auth runs). Without the container name the scenarios that alter the database
 for a moment (psql) are skipped. Localhost only: the run creates and deletes
-its own org, the default org until it ends.
+its own org, the default org until it ends. It refuses to start when the
+container is not the database of the stack the URL points at, or when the
+queue holds another org's pending jobs (its drains would answer them). A run
+with `LOCAL_DB_KEEP=1`, or one killed before its cleanup, can leave pending
+jobs, its org as the default org, or `wa_ingest_inbound` renamed or without its
+grant until the next run: `npx supabase db reset` before `npx supabase test db`
+on the same stack (080, 110 and 130 expect a clean queue and the seed org).
 
 ## Realtime org bus (0064 expand, client, 0068 contract)
 

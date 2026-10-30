@@ -53,13 +53,14 @@ describe('logSystemMessage', () => {
         expect(h.fake.calls.map((c) => c.table)).toEqual(['whatsapp_chats', 'whatsapp_messages']);
     });
 
-    it('logs a note the database refused, and reports it as failed with the error', async () => {
+    it('logs a note the database refused, and reports it as failed with the error and the HTTP status', async () => {
         h.fake = makeFakeSupabase({
-            resolve: (c) => (c.table === 'whatsapp_messages' ? { data: null, error: { code: '23503' } } : { data: null, error: null }),
+            resolve: (c) => (c.table === 'whatsapp_messages' ? { data: null, error: { code: '23503' }, status: 409 } : { data: null, error: null }),
         });
-        expect(await logSystemMessage(ORG, PHONE, 'Catatan uji', { touchChat: false })).toEqual({
+        expect(await logSystemMessage(ORG, PHONE, 'Catatan uji', { touchChat: false })).toStrictEqual({
             status: 'failed',
             error: { code: '23503' },
+            httpStatus: 409,
         });
         expect(h.error).toHaveBeenCalledWith('System message could not be stored', { code: '23503' });
     });

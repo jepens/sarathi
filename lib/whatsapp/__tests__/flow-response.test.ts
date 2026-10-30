@@ -21,7 +21,7 @@ vi.mock('@/lib/utils/logger', () => ({ whatsappLogger: { info: vi.fn(), warn: vi
 vi.mock('@/lib/ai/tools', () => ({ saveLeadInfo: vi.fn(async () => 'ok'), updateLeadStage: vi.fn(async () => 'ok') }));
 vi.mock('@/lib/settings/business-profile', () => ({ getBusinessProfile: vi.fn(async () => null) }));
 
-import { handleFlowReply } from '@/lib/whatsapp/flow-response';
+import { handleFlowReply, type NfmReplyPayload } from '@/lib/whatsapp/flow-response';
 import { saveLeadInfo, updateLeadStage } from '@/lib/ai/tools';
 import { logSystemMessage } from '@/lib/whatsapp/history';
 import { whatsappLogger } from '@/lib/utils/logger';
@@ -30,7 +30,7 @@ import { sendWhatsAppMessage } from '@/lib/whatsapp/client';
 const ORG = 'aaaaaaaa-0000-4000-8000-00000000000a';
 const PHONE = '620000000000';
 
-function submit() {
+function submit(nfmReply: NfmReplyPayload = { response_json: JSON.stringify({ flow_token: 'token-palsu', jenis_acara: 'outing', nama_pic: 'Budi Palsu' }) }) {
     return handleFlowReply({
         supabase: h.fake.client,
         orgId: ORG,
@@ -40,7 +40,7 @@ function submit() {
         bsuid: null,
         waId: PHONE,
         inboundWamid: 'wamid.fake-flow-1',
-        nfmReply: { response_json: JSON.stringify({ flow_token: 'token-palsu', jenis_acara: 'outing', nama_pic: 'Budi Palsu' }) },
+        nfmReply,
     });
 }
 
@@ -107,5 +107,32 @@ describe('handleFlowReply: its insert of the submission is the redelivery gate',
         expect(await submit()).toEqual({ status: 'handled' });
         expect(saveLeadInfo).toHaveBeenCalledTimes(1);
         expect(sendWhatsAppMessage).toHaveBeenCalledTimes(1);
+    });
+});
+
+describe('handleFlowReply: the answers', () => {
+    it('answers Meta escapes inside response_json (\\u0000, a lone \\udXXX) are cleaned after parsing, for the history row, the lead and the confirmation', async () => {
+        // Escaped as a conforming serializer must (RFC 8259 §7): only
+        // JSON.parse turns them into the code units Postgres refuses.
+        const raw = '{"flow_token":"token-palsu","jenis_acara":"outing","nama_pic":"Budi\\u0000 Palsu\\ud83d"}';
+        expect(await submit({ response_json: raw })).toEqual({ status: 'handled' });
+        const gate = h.fake.calls.find((c) => c.table === 'whatsapp_messages' && c.op === 'insert');
+        expect(JSON.stringify(gate?.payload)).toContain('Budi Palsu�');
+        expect(JSON.stringify(gate?.payload)).not.toContain('\\u0000');
+        expect(vi.mocked(saveLeadInfo).mock.calls[0][2]).toMatchObject({ name: 'Budi Palsu�' });
+        expect(vi.mocked(sendWhatsAppMessage).mock.calls[0][1]).toContain('Terima kasih, Budi Palsu�!');
+    });
+
+    it.each([
+        ['missing', {}],
+        ['empty', { response_json: '' }],
+        ['cut off', { response_json: '{"nama_pic":"Bud' }],
+        ['an array', { response_json: '[1,2]' }],
+        ['a string', { response_json: '"teks"' }],
+    ])('response_json %s is reported unreadable, with nothing written or sent', async (_label, nfmReply) => {
+        expect(await submit(nfmReply)).toEqual({ status: 'unreadable' });
+        expect(h.fake.calls).toEqual([]);
+        expect(saveLeadInfo).not.toHaveBeenCalled();
+        expect(sendWhatsAppMessage).not.toHaveBeenCalled();
     });
 });

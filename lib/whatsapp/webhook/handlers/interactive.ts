@@ -46,8 +46,12 @@ export async function handleInteractiveMessage(ctx: MessageContext): Promise<Ite
         inboundWamid: ctx.key,
         nfmReply: sanitizeForPg(interactive.nfm_reply),
     });
-    // The insert failed (not as a duplicate): nothing else was done. Retryable,
-    // so Meta's resend does the whole submission exactly once.
+    // The insert failed (not as a duplicate): only the chat summary was
+    // written before it, no lead, stage, note or confirmation. Retryable, so
+    // Meta's resend does the whole submission exactly once.
     if (result.status === 'gate_failed') throw new RpcError('flow submission insert', result.error, result.httpStatus);
+    // Answers that cannot be read: a placeholder and an alert, like a
+    // submission without its object (never dropped silently).
+    if (result.status === 'unreadable') throw new MalformedPayloadError('kiriman form tidak terbaca');
     return result.status === 'duplicate' ? 'duplicate' : 'legacy';
 }

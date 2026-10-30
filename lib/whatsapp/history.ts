@@ -23,6 +23,8 @@ export interface SystemMessageResult {
     status: 'stored' | 'duplicate' | 'failed';
     /** The database or client error of a 'failed' note. */
     error?: unknown;
+    /** The HTTP status of the failed note insert; absent when the call threw. */
+    httpStatus?: number;
 }
 
 export async function logSystemMessage(
@@ -54,7 +56,7 @@ export async function logSystemMessage(
         if (chatError) whatsappLogger.error('System message: the chat row could not be written', chatError);
 
         // Insert message
-        const { error: noteError } = await supabase
+        const { error: noteError, status: noteStatus } = await supabase
             .from('whatsapp_messages')
             .insert({
                 org_id: orgId,
@@ -68,7 +70,7 @@ export async function logSystemMessage(
                 return { status: 'duplicate' };
             }
             whatsappLogger.error('System message could not be stored', noteError);
-            return { status: 'failed', error: noteError };
+            return { status: 'failed', error: noteError, httpStatus: noteStatus };
         }
         return { status: 'stored' };
 

@@ -18,11 +18,13 @@
  * yang mengirim ulang: hasil yang benar = satu pesan tersimpan dan satu
  * balasan (kiriman kedua dikenali sebagai duplikat).
  *
- * Replay di produksi setelah deploy (runbook PR-C2) butuh:
+ * Replay di produksi setelah deploy (runbook di deskripsi PR #61, PR-C2) butuh:
  * - WEBHOOK_URL ke URL produksi, ditambah --allow-remote;
  * - WHATSAPP_APP_SECRET dan WHATSAPP_PHONE_NUMBER_ID milik produksi di env
  *   (secret yang salah = 403 dan email webhook_signature_invalid ke tim; ID
- *   nomor yang salah = event dianggap nomor lain WABA dan dibuang);
+ *   nomor yang salah = event dianggap nomor lain WABA: dibuang, atau disimpan
+ *   tanpa AI bila WHATSAPP_OTHER_NUMBER_EVENTS=process, dan email
+ *   webhook_unrouted_new ke tim);
  * - jendela 24 jam TEST_PHONE yang masih terbuka: kirim dulu satu pesan
  *   sungguhan dari HP itu. Meta tidak melihat pesan simulasi ini, jadi tanpa
  *   pesan asli dalam 24 jam terakhir balasan AI gagal dengan 131047.

@@ -16,8 +16,10 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 // wa_ingest_inbound renamed or without its grant, platform_settings
 // unreadable) also need LOCAL_SUPABASE_DB_CONTAINER, the stack's Postgres
 // container, for psql; without it they are skipped. Local stacks only: the
-// run creates and deletes its own org and makes it the default org
-// (platform_settings) until it ends. How to run it: supabase/README.md. Fake
+// run refuses a URL that is not local, a container of another stack and a
+// queue holding another org's pending jobs; it creates and deletes its own
+// org and makes it the default org (platform_settings) until it ends. How to
+// run it, and what an interrupted run leaves behind: supabase/README.md. Fake
 // phones, wamids and texts only.
 
 const API_URL = process.env.LOCAL_SUPABASE_URL ?? '';
@@ -152,6 +154,8 @@ const MESSAGE_COLUMNS =
     'id, phone_number, role, content, wa_message_id, wa_timestamp, metadata, status, status_updated_at, error_code, error_title, error_detail, reply_to_wamid, created_at';
 
 let db: SupabaseClient;
+/** Set once the container is known to be this stack's: only then does any psql run, also in the cleanup. */
+let containerVerified = false;
 let ORG = '';
 let previousDefault: string | null = null;
 let runStartedAt = '';
@@ -379,6 +383,21 @@ async function waitForProbe(done: (probe: Probe) => boolean): Promise<Probe> {
 // psql in the stack's Postgres container (DDL PostgREST cannot run)
 // ---------------------------------------------------------------------------
 
+/**
+ * The Postgres container must belong to the stack LOCAL_SUPABASE_URL points at
+ * (the CLI names them supabase_db_<id> and supabase_kong_<id>; the API URL is
+ * Kong's published port), so psql's DDL never reaches another local database.
+ */
+function assertContainerMatchesUrl(): void {
+    const id = /^supabase_db_(.+)$/.exec(DB_CONTAINER)?.[1];
+    if (!id) throw new Error("LOCAL_SUPABASE_DB_CONTAINER must be the stack's supabase_db_<project_id> container");
+    const port = new URL(API_URL).port;
+    const mapped = execFileSync('docker', ['port', `supabase_kong_${id}`, '8000/tcp'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    if (port === '' || !mapped.split(/\r?\n/).some((line) => line.trim().endsWith(`:${port}`))) {
+        throw new Error(`LOCAL_SUPABASE_DB_CONTAINER (${DB_CONTAINER}) is not the database of the stack at LOCAL_SUPABASE_URL`);
+    }
+}
+
 function psql(sql: string): string {
     return execFileSync(
         'docker',
@@ -434,7 +453,11 @@ describe.skipIf(!ENABLED)('webhook against a local Supabase stack (PR-C2 end to 
             throw new Error('LOCAL_SUPABASE_URL must point at a local Supabase stack (127.0.0.1 or localhost)');
         }
         db = createClient(API_URL, SERVICE_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
-        if (DB_CONTAINER) restoreSchema();
+        if (DB_CONTAINER) {
+            assertContainerMatchesUrl();
+            containerVerified = true;
+            restoreSchema();
+        }
         const probe = await waitForProbe((p) => p.code === '22004' || p.code === 'PGRST202');
         if (probe.code !== '22004') throw new Error(`wa_ingest_inbound is not callable (${probe.status} ${probe.code}): apply 0072 (supabase db reset)`);
 
@@ -442,6 +465,13 @@ describe.skipIf(!ENABLED)('webhook against a local Supabase stack (PR-C2 end to 
         const previous = await read<{ value: string }>(db.from('platform_settings').select('value').eq('key', 'default_org_id'));
         const leftovers = await read<{ id: string }>(db.from('organizations').select('id').like('name', `${ORG_PREFIX}%`));
         for (const { id } of leftovers) await purgeOrg(id);
+        // drainNow() answers every settled job of the queue, whatever its org
+        // (claim_queue_jobs is not scoped): refuse a database that holds
+        // another org's pending jobs instead of answering them.
+        const pending = await read<{ id: string }>(db.from('message_queue').select('id').eq('status', 'pending').limit(1));
+        if (pending.length > 0) {
+            throw new Error('message_queue holds pending jobs of another org: run `npx supabase db reset` before this test');
+        }
         previousDefault = previous[0]?.value ?? null;
         // A run killed before its cleanup left its own org as the default.
         if (previousDefault !== null && leftovers.some((o) => o.id === previousDefault)) previousDefault = SEED_ORG_ID;
@@ -475,7 +505,8 @@ describe.skipIf(!ENABLED)('webhook against a local Supabase stack (PR-C2 end to 
                 problems.push(error);
             }
         };
-        if (DB_CONTAINER) await attempt(() => restoreSchema());
+        // Never after a refused start: the container may be another stack's.
+        if (containerVerified) await attempt(() => restoreSchema());
         if (db && ORG) {
             await attempt(() =>
                 write(
@@ -1284,7 +1315,9 @@ describe.skipIf(!ENABLED)('webhook against a local Supabase stack (PR-C2 end to 
             create function e2e_local.fail_always() returns trigger
             language plpgsql set search_path = '' as $$
             begin
-                raise exception 'e2e: gagal terus' using errcode = '40001';
+                -- An error of the item's own call (it counts toward the poison
+                -- bound; a slow or contended database, e.g. 40001, would not).
+                raise exception 'e2e: gagal terus' using errcode = '23503';
             end;
             $$;
             create trigger e2e_fail_always before insert on public.message_queue

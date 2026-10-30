@@ -149,13 +149,15 @@ beforeEach(() => {
     vi.mocked(sendPushToOrg).mockReset().mockResolvedValue(undefined);
     vi.mocked(generateRAGResponse).mockReset().mockResolvedValue({ message: AI_REPLY, sources: [] });
     vi.mocked(handleFlowReply).mockReset().mockImplementation(async (p) => {
-        await p.supabase.from('whatsapp_messages').insert({
+        // Like the real one: its own insert of the submission is its gate.
+        const { error, status } = await p.supabase.from('whatsapp_messages').insert({
             org_id: p.orgId,
             phone_number: p.contactKey,
             role: 'user',
             content: '📋 Brief Acara (via form WhatsApp)',
             wa_message_id: p.inboundWamid,
         });
+        if (error) return error.code === '23505' ? { status: 'duplicate' } : { status: 'gate_failed', error, httpStatus: status };
         return { status: 'handled' };
     });
     vi.stubEnv('WHATSAPP_APP_SECRET', SECRET);

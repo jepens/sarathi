@@ -8,8 +8,11 @@ import type { BatchOutcome } from '@/lib/whatsapp/webhook/outcome';
 
 // Meta's webhook JSON as JSON.parse returns it: not validated against a
 // schema. The readers (payload.ts) and the handlers never trust a field's
-// shape: a malformed item becomes a placeholder or is skipped with an alert
-// (handlers/messages.ts), never an exception out of the pipeline.
+// shape: a malformed message becomes a placeholder or is skipped with an
+// alert (handlers/messages.ts, including a Flow whose answers cannot be
+// read), a malformed status or user_id_update entry is skipped with an alert
+// (handlers/statuses.ts, handlers/user-id-update.ts); never an exception out
+// of the pipeline.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type MetaJson = any;
 
