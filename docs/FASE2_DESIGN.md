@@ -618,7 +618,7 @@ A 4xx answer, which would keep Meta retrying for up to 7 days, was rejected. It 
   - `getIntegrationCreds(id)` comes with the Vault resolver (2.2c): there are no number rows before 2.1b.
   - `graphFetch` and `appsecret_proof` come with 2.2c. The version per credential is in: `graphUrl(path, creds.graphVersion)`.
   - The template call is still `listApprovedTemplates(creds, limit?)`; the paginated `listTemplates` is 2.5a.
-  - Feature flags and org_settings recipients are 2.4/2.3. The sales notify and the digest still take their recipients from env, but send only from the org's own number. A booking by another org's AI therefore no longer notifies on WhatsApp; Zoom and email still need 2.4.
+  - Feature flags and org_settings recipients are 2.4/2.3. The sales notify and the digest still take their recipients from env, but send only from the org's own number. Once another org's number is routed, a booking by its AI therefore sends no WhatsApp notification from the default org's number; Zoom and email still need 2.4. (Today only the default org receives WhatsApp messages, and schedule_meeting exists only in WhatsApp conversations, not in the dashboard test chat.)
   - `getOrgWhatsAppStatus` comes with 2.1c. The settings page and the onboarding checklist use `envWhatsAppSendConfigured()`.
   - Order notifications have no feature flag yet (2.4). They now resolve a BSUID key to the verified phone (`resolveSendTarget`).
 
