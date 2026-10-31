@@ -367,13 +367,10 @@ Provides a centralized, user-friendly interface for managing all application cre
 - `components/ui/tabs.tsx`: Radix UI tabs component
 
 **Helper Functions** (`lib/settings/app-settings.ts`):
-- `getWhatsAppAccessToken()` - Throws error if not configured
-- `getWhatsAppPhoneNumberId()` - Throws error if not configured
-- `getWhatsAppAppSecret()` - Returns null if not configured (optional)
 - `getOpenAIApiKey()` - Throws error if not configured
 - `getShippingApiKey()` - Returns null (optional)
-- `isWhatsAppConfigured()` - Check all required WhatsApp fields
 - `isAIConfigured()` - Check OpenAI key
+- WhatsApp credentials (since Fase 2 task 2.2b): `getOrgWhatsAppCreds(orgId)` in `lib/whatsapp/credentials.ts`, the only reader of the WhatsApp env values
 
 **Server Actions** (`app/dashboard/settings/actions.ts`):
 - `updateWebhookSettings()` - Save WhatsApp credentials

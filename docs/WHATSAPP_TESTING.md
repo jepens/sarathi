@@ -94,12 +94,16 @@ Create `scripts/test-send-message.mjs`:
 
 ```javascript
 import { sendWhatsAppMessage } from '../lib/whatsapp/client.ts';
+import { getOrgWhatsAppCreds } from '../lib/whatsapp/credentials.ts';
 
+const orgId = process.env.TEST_ORG_ID; // the default org (the only one with a number)
 const testNumber = '6281234567890'; // Replace with your test number
 const testMessage = 'Halo! Ini adalah pesan test dari Sahabat UMKM.';
 
 try {
-    const result = await sendWhatsAppMessage(testNumber, testMessage);
+    // Every send takes the credentials of one org's number (Fase 2 task 2.2b).
+    const creds = await getOrgWhatsAppCreds(orgId);
+    const result = await sendWhatsAppMessage(creds, testNumber, testMessage);
     console.log('✅ Message sent successfully:', result);
 } catch (error) {
     console.error('❌ Failed to send message:', error);
