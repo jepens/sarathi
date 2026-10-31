@@ -1440,7 +1440,7 @@ describe.skipIf(!ENABLED)('webhook against a local Supabase stack (PR-C2 end to 
             const after = await events('webhook_unconfigured');
             expect(after.count).toBe(unconfigured.count + 1);
             expect(after.details).toContain(
-                'WHATSAPP_ACCESS_TOKEN tidak diset di server: pesan masuk tetap disimpan, tetapi balasan AI dan peringatan tidak terkirim',
+                'WHATSAPP_ACCESS_TOKEN tidak diset atau tidak valid di server: pesan masuk tetap disimpan, tetapi balasan AI dan peringatan tidak terkirim',
             );
         } finally {
             vi.stubEnv('WHATSAPP_ACCESS_TOKEN', TOKEN);

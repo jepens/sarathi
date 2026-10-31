@@ -433,7 +433,8 @@ describe("processQueue — the org's own WhatsApp number (Fase 2 task 2.2b)", ()
         expect(queueUpdates(fake.calls, 'pending')).toHaveLength(0);
         expect(logSystemMock).toHaveBeenCalledWith(ORG, PHONE, WHATSAPP_NOT_CONFIGURED_NOTICE, { touchChat: false });
         const alert = fake.rpcCalls.find((c) => c.name === 'record_ops_event');
-        expect(alert?.args).toMatchObject({ p_kind: 'queue_job_failed', p_org: ORG });
+        // Its own kind: no attempt was made, so not 'queue_job_failed'.
+        expect(alert?.args).toMatchObject({ p_kind: 'whatsapp_not_configured', p_org: ORG });
     });
 
     it('a chat in manual mode is closed without reading the credentials', async () => {

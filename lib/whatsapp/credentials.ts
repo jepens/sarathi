@@ -2,9 +2,9 @@ import { SupabaseClient } from '@supabase/supabase-js';
 import { getDefaultOrgIdStrict } from '@/lib/settings/org-context';
 import { createServiceOrServerClient } from '@/lib/supabase/service';
 import { GRAPH_API_VERSION } from '@/lib/whatsapp/graph';
-import { assertCanSend, WhatsAppNotConfiguredError, type WaCreds } from '@/lib/whatsapp/wa-creds';
+import { assertCanSend, canSend, WhatsAppNotConfiguredError, type WaCreds } from '@/lib/whatsapp/wa-creds';
 
-export { assertCanSend, WhatsAppNotConfiguredError, type WaCreds } from '@/lib/whatsapp/wa-creds';
+export { assertCanSend, canSend, WhatsAppNotConfiguredError, type WaCreds } from '@/lib/whatsapp/wa-creds';
 
 // WhatsApp credential resolution (Fase 2 task 2.2b). Every Cloud API call
 // takes a WaCreds, resolved for one org: getOrgWhatsAppCreds() for sends the
@@ -39,12 +39,12 @@ function envCreds(orgId: string): WaCreds {
 }
 
 /**
- * Whether the env number can send (a phone number id and a token are set).
+ * Whether the env number can send (a phone number id and a usable token).
  * Only the default org uses it: callers check that themselves (the settings
  * page and the onboarding checklist, which already know the default org).
  */
 export function envWhatsAppSendConfigured(): boolean {
-    return envValue('WHATSAPP_PHONE_NUMBER_ID') !== '' && envValue('WHATSAPP_ACCESS_TOKEN') !== '';
+    return canSend({ phoneNumberId: envValue('WHATSAPP_PHONE_NUMBER_ID'), accessToken: envValue('WHATSAPP_ACCESS_TOKEN') });
 }
 
 export interface WebhookApp {
@@ -59,7 +59,8 @@ export interface WebhookApp {
  * The Meta app the webhook URL serves today (Fase 2 task 2.2a, phase 0: one
  * app, from env): the secret its signatures are checked with, and the one
  * number it routes (a phone number id is digits only). Needs no database, so
- * the signature is checked before anything else happens.
+ * the signature is checked before anything else happens. For the webhook only
+ * (pinned like resolveWhatsAppContext).
  */
 export function envWebhookApp(): WebhookApp {
     const appSecret = envValue('WHATSAPP_APP_SECRET') || null;
@@ -74,6 +75,9 @@ export function envWebhookApp(): WebhookApp {
  * env number, so the default org, read strictly (a read error throws, never
  * the seed org). Unlike getOrgWhatsAppCreds it does not refuse a missing
  * token: storing a message needs none, and each send checks (assertCanSend).
+ * For the webhook only (lib/whatsapp/webhook/pipeline.ts, pinned by
+ * __tests__/env-shim.test.ts): every other path resolves its org's credentials
+ * with getOrgWhatsAppCreds.
  */
 export async function resolveWhatsAppContext(client: SupabaseClient): Promise<WaCreds> {
     return envCreds(await getDefaultOrgIdStrict(client));

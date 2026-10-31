@@ -1,8 +1,19 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+// The sender is mocked; the resolver too, with its real error class.
+vi.mock('@/lib/whatsapp/templates', () => ({ sendTemplateMessage: vi.fn() }));
+vi.mock('@/lib/whatsapp/credentials', async () => {
+    const { WhatsAppNotConfiguredError } = await import('@/lib/whatsapp/wa-creds');
+    return { getOrgWhatsAppCreds: vi.fn(), WhatsAppNotConfiguredError };
+});
+
 import {
     parseNotifyRecipients,
     buildMeetingWaVariables,
+    notifySalesWhatsApp,
 } from '@/lib/meetings/notify-whatsapp';
+import { sendTemplateMessage } from '@/lib/whatsapp/templates';
+import { getOrgWhatsAppCreds, WhatsAppNotConfiguredError } from '@/lib/whatsapp/credentials';
 
 describe('parseNotifyRecipients', () => {
     it('returns [] for empty/undefined', () => {
@@ -96,5 +107,71 @@ describe('buildMeetingWaVariables', () => {
         });
         expect(v[2]).toBe('Outbound team building Sentul');
         expect(v[2]).not.toMatch(/[\r\n\t]/);
+    });
+});
+
+// The booking org's own number (Fase 2 task 2.2b): an org without one sends
+// nothing, never from the default org's number. Fake numbers and ids only.
+describe('notifySalesWhatsApp', () => {
+    const ORG = 'aaaaaaaa-0000-4000-8000-00000000000a';
+    const CREDS = {
+        orgId: ORG,
+        integrationId: null,
+        phoneNumberId: '100000000000001',
+        wabaId: '200000000000001',
+        accessToken: 'token-palsu',
+        graphVersion: 'v25.0',
+    };
+    const INPUT = { customerName: 'Budi Palsu', start: new Date('2026-11-02T03:00:00Z'), joinUrl: null };
+
+    beforeEach(() => {
+        vi.clearAllMocks();
+        vi.mocked(getOrgWhatsAppCreds).mockResolvedValue(CREDS);
+        vi.mocked(sendTemplateMessage).mockResolvedValue({ waMessageId: 'wamid.palsu', raw: {} });
+        vi.stubEnv('MEETING_NOTIFY_WHATSAPP', '620000000001, 620000000002');
+    });
+    afterEach(() => {
+        vi.unstubAllEnvs();
+    });
+
+    it("sends the template to every recipient with the booking org's credentials", async () => {
+        const res = await notifySalesWhatsApp(ORG, INPUT);
+        expect(res).toMatchObject({ sent: true, recipients: ['620000000001', '620000000002'] });
+        expect(getOrgWhatsAppCreds).toHaveBeenCalledWith(ORG);
+        expect(vi.mocked(sendTemplateMessage).mock.calls.map((c) => [c[0], c[1].to])).toEqual([
+            [CREDS, '620000000001'],
+            [CREDS, '620000000002'],
+        ]);
+    });
+
+    it('an org without a number of its own sends nothing', async () => {
+        vi.mocked(getOrgWhatsAppCreds).mockRejectedValue(new WhatsAppNotConfiguredError());
+        await expect(notifySalesWhatsApp(ORG, INPUT)).resolves.toEqual({
+            sent: false,
+            skippedReason: 'WhatsApp not configured for this org',
+            recipients: ['620000000001', '620000000002'],
+        });
+        expect(sendTemplateMessage).not.toHaveBeenCalled();
+    });
+
+    it('credentials that cannot be read send nothing either (the booking still succeeds)', async () => {
+        vi.mocked(getOrgWhatsAppCreds).mockRejectedValue(new Error('platform setting default_org_id could not be read (HTTP 503)'));
+        const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+        try {
+            await expect(notifySalesWhatsApp(ORG, INPUT)).resolves.toMatchObject({
+                sent: false,
+                skippedReason: 'WhatsApp credentials could not be read',
+            });
+        } finally {
+            errorSpy.mockRestore();
+        }
+        expect(sendTemplateMessage).not.toHaveBeenCalled();
+    });
+
+    it('without recipients nothing is resolved or sent', async () => {
+        vi.stubEnv('MEETING_NOTIFY_WHATSAPP', '');
+        await expect(notifySalesWhatsApp(ORG, INPUT)).resolves.toMatchObject({ sent: false, recipients: [] });
+        expect(getOrgWhatsAppCreds).not.toHaveBeenCalled();
+        expect(sendTemplateMessage).not.toHaveBeenCalled();
     });
 });

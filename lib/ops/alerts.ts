@@ -42,6 +42,7 @@ export const OPS_KIND_LABELS: Record<string, string> = {
     webhook_payload_invalid: 'Event WhatsApp tidak bisa diproses: pesan disimpan sebagai pengganti tanpa isi atau dilewati; status/pembaruan dilewati',
     webhook_deferred: 'Webhook WhatsApp menunda event karena batas waktu 8 detik (503, Meta mengirim ulang; bila sering: database lambat)',
     queue_job_failed: 'Balasan AI gagal setelah semua percobaan',
+    whatsapp_not_configured: 'Balasan AI tidak dikirim: org belum punya nomor WhatsApp yang bisa mengirim (periksa WHATSAPP_ACCESS_TOKEN dan WHATSAPP_PHONE_NUMBER_ID)',
     whatsapp_token_invalid: 'Token WhatsApp tidak valid atau kedaluwarsa (Meta 190)',
     quota_inbound_exceeded: 'Kuota percakapan AI baru per menit tercapai: percakapan baru di menit itu tidak dibalas AI',
     quota_ai_daily_warning: 'Kuota balasan AI harian sudah terpakai 80%',

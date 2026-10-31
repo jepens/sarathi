@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { verifyWhatsAppSignature } from '@/lib/whatsapp/security';
-import { envWebhookApp, resolveWhatsAppContext, type WaCreds, type WebhookApp } from '@/lib/whatsapp/credentials';
+import { canSend, envWebhookApp, resolveWhatsAppContext, type WaCreds, type WebhookApp } from '@/lib/whatsapp/credentials';
 import { whatsappLogger } from '@/lib/utils/logger';
 import { webhookSummary } from '@/lib/whatsapp/webhook-summary';
 import { describeErrorForOps, recordOpsEvent } from '@/lib/ops/events';
@@ -223,10 +223,10 @@ async function walkBatch(supabase: SupabaseClient, webhookApp: WebhookApp, body:
     if (routed.some((c) => messagesOf(c.value).length + statusesOf(c.value).length > 0)) {
         try {
             const ctx = await run.org();
-            if (!ctx.accessToken) {
+            if (!canSend(ctx)) {
                 await recordOpsEvent(supabase, 'webhook_unconfigured', {
                     orgId: ctx.orgId,
-                    detail: 'WHATSAPP_ACCESS_TOKEN tidak diset di server: pesan masuk tetap disimpan, tetapi balasan AI dan peringatan tidak terkirim',
+                    detail: 'WHATSAPP_ACCESS_TOKEN tidak diset atau tidak valid di server: pesan masuk tetap disimpan, tetapi balasan AI dan peringatan tidak terkirim',
                 });
             }
         } catch {

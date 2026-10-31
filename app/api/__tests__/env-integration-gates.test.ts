@@ -164,6 +164,11 @@ interface Case {
     externals: ReturnType<typeof vi.fn>[];
     /** A WhatsApp route: gated by requireWhatsAppIntegration, sends with its creds. */
     whatsapp?: boolean;
+    /**
+     * Lets every external call but the last succeed on the allowed path, so
+     * the route reaches the call that puts the message on the wire.
+     */
+    prime?: () => void;
 }
 
 const cases: Case[] = [
@@ -178,6 +183,7 @@ const cases: Case[] = [
         run: () => sendMediaPOST(mediaReq()),
         externals: [h.uploadWhatsAppMedia, h.sendWhatsAppMedia],
         whatsapp: true,
+        prime: () => h.uploadWhatsAppMedia.mockResolvedValue('media-palsu'),
     },
     {
         name: 'POST /api/chat/send-template',
@@ -191,6 +197,7 @@ const cases: Case[] = [
             ),
         externals: [h.listApprovedTemplates, h.sendTemplateMessage],
         whatsapp: true,
+        prime: () => h.listApprovedTemplates.mockResolvedValue([{ name: 'hello', language: 'id', components: [] }]),
     },
     {
         name: 'GET /api/chat/templates',
@@ -220,7 +227,7 @@ const cases: Case[] = [
     },
 ];
 
-describe.each(cases)('$name', ({ run, externals, whatsapp }) => {
+describe.each(cases)('$name', ({ run, externals, whatsapp, prime }) => {
     const gate = whatsapp ? h.requireWhatsAppIntegration : h.requireEnvIntegration;
     const other = whatsapp ? h.requireEnvIntegration : h.requireWhatsAppIntegration;
 
@@ -242,6 +249,7 @@ describe.each(cases)('$name', ({ run, externals, whatsapp }) => {
 
     it('allowed → the gate runs before the first external call', async () => {
         gate.mockResolvedValue(whatsapp ? ALLOWED_WA : ALLOWED);
+        prime?.();
 
         // Some routes let the external rejection propagate — only the order matters.
         await run().catch(() => undefined);
@@ -251,7 +259,13 @@ describe.each(cases)('$name', ({ run, externals, whatsapp }) => {
         expect(gateOrder).toBeDefined();
         expect(firstExternal).toBeDefined();
         expect(gateOrder).toBeLessThan(firstExternal);
-        // A WhatsApp call sends with the caller's org's credentials, never others.
-        if (whatsapp) expect(externals[0].mock.calls[0][0]).toBe(CREDS);
+        // Every WhatsApp call, up to the send itself, uses the caller's org's
+        // credentials, never others.
+        if (whatsapp) {
+            for (const ext of externals) {
+                expect(ext).toHaveBeenCalledTimes(1);
+                expect(ext.mock.calls[0][0]).toBe(CREDS);
+            }
+        }
     });
 });

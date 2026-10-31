@@ -185,8 +185,9 @@ async function processConversation(jobs: QueueJob[], supabase: SupabaseClient): 
 
         // An org without a WhatsApp number of its own gets no reply from any
         // other number: its jobs fail at once, without retries (they cannot
-        // succeed), with a note for the operators and a team alert. A read
-        // error is thrown to the catch block and retried like any failure.
+        // succeed), with a note for the operators and a team alert of its own
+        // (no attempt was made). A read error is thrown to the catch block and
+        // retried like any failure.
         try {
             creds = await getOrgWhatsAppCreds(orgId, supabase);
         } catch (credsError) {
@@ -197,7 +198,7 @@ async function processConversation(jobs: QueueJob[], supabase: SupabaseClient): 
                 .in('id', ids);
             if (failError) whatsappLogger.error(`Failing the jobs of ${phoneNumber} (WhatsApp not configured) failed`, failError);
             whatsappLogger.error(`Conversation ${phoneNumber} not answered — the org has no WhatsApp number configured`);
-            await recordOpsEvent(supabase, 'queue_job_failed', {
+            await recordOpsEvent(supabase, 'whatsapp_not_configured', {
                 orgId,
                 detail: `${jobs.length} pesan tanpa balasan AI: WhatsApp belum dikonfigurasi untuk org ini`,
             });

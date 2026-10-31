@@ -44,7 +44,7 @@ vi.mock('@/lib/settings/org-context', () => ({
         return 'aaaaaaaa-0000-4000-8000-00000000000a';
     }),
 }));
-vi.mock('@/lib/settings/app-settings', () => ({ checkVerifyToken: vi.fn(), getWhatsAppAppSecret: vi.fn() }));
+vi.mock('@/lib/settings/app-settings', () => ({ checkVerifyToken: vi.fn() }));
 vi.mock('@/lib/whatsapp/client', () => ({ sendWhatsAppMessage: vi.fn(), downloadWhatsAppMedia: vi.fn() }));
 vi.mock('@/lib/notifications/web-push', () => ({ sendPushToOrg: vi.fn() }));
 vi.mock('@/lib/ai/rag', () => ({ generateRAGResponse: vi.fn() }));

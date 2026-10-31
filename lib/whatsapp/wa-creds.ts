@@ -28,9 +28,20 @@ export class WhatsAppNotConfiguredError extends Error {
     }
 }
 
-/** Throws WhatsAppNotConfiguredError unless the credentials can send. */
+// A usable token is visible ASCII without spaces. One with a line break or
+// another control character inside (a value pasted badly) would make fetch
+// throw an error that quotes the whole Authorization header, and that message
+// reaches responses, queue rows and logs: such a token is not usable.
+const USABLE_TOKEN = /^[\x21-\x7e]+$/;
+
+/** Whether the credentials can call the Cloud API: a number id and a usable token. */
+export function canSend(creds: Pick<WaCreds, 'phoneNumberId' | 'accessToken'>): boolean {
+    return creds.phoneNumberId !== '' && USABLE_TOKEN.test(creds.accessToken);
+}
+
+/** Throws WhatsAppNotConfiguredError unless the credentials can send (canSend). */
 export function assertCanSend(creds: WaCreds): void {
-    if (!creds.phoneNumberId || !creds.accessToken) {
-        throw new WhatsAppNotConfiguredError('WhatsApp is not configured for this org (no phone number id or access token)');
+    if (!canSend(creds)) {
+        throw new WhatsAppNotConfiguredError('WhatsApp is not configured for this org (no phone number id or no usable access token)');
     }
 }

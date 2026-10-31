@@ -31,6 +31,8 @@ const h = vi.hoisted(() => ({
     // Per-table stub rows (default: none). `single` answers maybeSingle/single,
     // `list` answers an awaited query.
     rows: {} as Record<string, { single?: unknown; list?: unknown[] }>,
+    // The service-role read of a platform setting fails (e.g. a timeout).
+    serviceReadFails: false,
 }));
 
 // Chainable query builder: unless a test seeds h.rows, every terminal resolves
@@ -88,7 +90,10 @@ vi.mock('@/lib/supabase/service', () => ({
                 return q;
             };
         }
-        q.maybeSingle = async () => ({ data: { value: DEFAULT_ORG } });
+        q.maybeSingle = async () =>
+            h.serviceReadFails
+                ? { data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' }, status: 500 }
+                : { data: { value: DEFAULT_ORG } };
         q.then = (resolve: (v: unknown) => unknown) => resolve({ data: null, error: null });
         return {
             from: (table: string) => {
@@ -268,6 +273,7 @@ beforeEach(() => {
     h.storage = 0;
     h.serviceCalls = [];
     h.rows = {};
+    h.serviceReadFails = false;
 });
 
 describe.each(routes)('$name', ({ request, call }) => {
@@ -446,6 +452,28 @@ describe("updateOrderStatus (customer WhatsApp from the org's own number)", () =
             accessToken: 'token-palsu',
         });
         expect(fakeClient.auth.getUser).toHaveBeenCalled();
+    });
+
+    it('a phone-hidden customer (BSUID key) is notified at the recovered phone, as AI replies are', async () => {
+        seedDefaultOrgOrder();
+        h.rows.orders = { ...h.rows.orders, single: { ...(h.rows.orders.single as Record<string, unknown>), customer_phone: 'ID.palsu' } };
+        h.rows.whatsapp_chats = { single: { verified_phone: '628222000333' } };
+        await expect(updateOrderStatus(ORDER_ID, 'cancelled')).resolves.toMatchObject({ success: true });
+        expect(h.sendCancellationNotification).toHaveBeenCalledTimes(1);
+        expect(h.sendCancellationNotification.mock.calls[0][1]).toMatchObject({ customer_phone: '628222000333' });
+    });
+
+    it('credentials that cannot be read: the status still changes (success), nothing is sent', async () => {
+        seedDefaultOrgOrder();
+        h.serviceReadFails = true;
+        const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+        try {
+            await expect(updateOrderStatus(ORDER_ID, 'cancelled')).resolves.toMatchObject({ success: true });
+        } finally {
+            errorSpy.mockRestore();
+        }
+        expect(h.sendCancellationNotification).not.toHaveBeenCalled();
+        expect(h.sendPaymentNotification).not.toHaveBeenCalled();
     });
 
     it('an org without a WhatsApp number of its own: the status changes, nothing is sent', async () => {

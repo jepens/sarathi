@@ -2,7 +2,7 @@ import { SupabaseClient } from '@supabase/supabase-js';
 import { getDefaultOrgId } from '@/lib/settings/org-context';
 import { computeFollowup } from '@/lib/followup/compute';
 import { sendTemplateMessage } from '@/lib/whatsapp/templates';
-import { getOrgWhatsAppCreds } from '@/lib/whatsapp/credentials';
+import { getOrgWhatsAppCreds, WhatsAppNotConfiguredError, type WaCreds } from '@/lib/whatsapp/credentials';
 import { whatsappLogger } from '@/lib/utils/logger';
 
 // Daily WhatsApp follow-up digest to the owner. Triggered by the existing
@@ -100,8 +100,20 @@ export async function maybeSendFollowupDigest(supabase: SupabaseClient): Promise
         // lead crosses the staleness threshold / a booking nears) can still send.
         if (data.counts.total === 0) return;
 
+        // From the org's own number (Fase 2 task 2.2b), read BEFORE the day is
+        // claimed: a read error throws to the log below without claiming, so
+        // the next minute's tick tries again. An org without a number claims
+        // the day and fails once (logged once a day, not every minute).
+        let creds: WaCreds | null = null;
+        try {
+            creds = await getOrgWhatsAppCreds(orgId, supabase);
+        } catch (credsError) {
+            if (!(credsError instanceof WhatsAppNotConfiguredError)) throw credsError;
+        }
+
         // Claim atomically; only the winning tick proceeds to send.
         if (!(await claimToday(supabase, orgId, today))) return;
+        if (!creds) throw new WhatsAppNotConfiguredError();
 
         const dateLabel = new Date().toLocaleDateString('id-ID', {
             day: 'numeric',
@@ -110,9 +122,6 @@ export async function maybeSendFollowupDigest(supabase: SupabaseClient): Promise
             timeZone: 'Asia/Jakarta',
         });
 
-        // From the org's own number (Fase 2 task 2.2b). Without one this
-        // throws like a refused send: logged below, the day stays claimed.
-        const creds = await getOrgWhatsAppCreds(orgId, supabase);
         await sendTemplateMessage(creds, {
             to,
             templateName,

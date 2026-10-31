@@ -20,6 +20,7 @@ vi.mock('@/lib/supabase/service', () => ({ createServiceOrServerClient: h.create
 
 import {
     assertCanSend,
+    canSend,
     envWebhookApp,
     envWhatsAppSendConfigured,
     getOrgWhatsAppCreds,
@@ -127,6 +128,23 @@ describe('env checks', () => {
         expect(envWebhookApp()).toEqual({ appSecret: 'secret-palsu', phoneNumberId: '100000000000001' });
         vi.stubEnv('WHATSAPP_APP_SECRET', '  ');
         expect(envWebhookApp().appSecret).toBeNull();
+    });
+
+    it('a token with a line break, a tab or a space inside is not usable (fetch would quote it in its error)', () => {
+        for (const token of ['token\npalsu', 'token\tpalsu', 'token palsu']) {
+            vi.stubEnv('WHATSAPP_ACCESS_TOKEN', token);
+            expect(envWhatsAppSendConfigured(), JSON.stringify(token)).toBe(false);
+        }
+        expect(canSend({ phoneNumberId: '100000000000001', accessToken: 'token\u0000palsu' })).toBe(false);
+        expect(canSend({ phoneNumberId: '100000000000001', accessToken: 'EAAGpalsu123-_.~' })).toBe(true);
+        expect(canSend({ phoneNumberId: '', accessToken: 'EAAGpalsu123' })).toBe(false);
+    });
+
+    it('getOrgWhatsAppCreds refuses an unusable token as not configured, without quoting it', async () => {
+        vi.stubEnv('WHATSAPP_ACCESS_TOKEN', 'token\npalsu');
+        const error = await getOrgWhatsAppCreds(DEFAULT_ORG, client).catch((e: unknown) => e);
+        expect(error).toBeInstanceOf(WhatsAppNotConfiguredError);
+        expect(String((error as Error).message)).not.toContain('palsu');
     });
 
     it('assertCanSend accepts complete credentials only', () => {

@@ -46,7 +46,7 @@ vi.mock('@/lib/settings/org-context', () => ({
         return 'aaaaaaaa-0000-4000-8000-00000000000a';
     }),
 }));
-vi.mock('@/lib/settings/app-settings', () => ({ checkVerifyToken: vi.fn(), getWhatsAppAppSecret: vi.fn() }));
+vi.mock('@/lib/settings/app-settings', () => ({ checkVerifyToken: vi.fn() }));
 vi.mock('@/lib/whatsapp/client', () => ({ sendWhatsAppMessage: vi.fn(), downloadWhatsAppMedia: vi.fn() }));
 vi.mock('@/lib/notifications/web-push', () => ({ sendPushToOrg: vi.fn() }));
 vi.mock('@/lib/ai/rag', () => ({ generateRAGResponse: vi.fn() }));
@@ -496,15 +496,18 @@ describe('contract harness (synthesis section 8, items 10-20)', () => {
         expect(replies()).toHaveLength(1);
     });
 
-    it('18b. an empty access token: one webhook_unconfigured for the batch, the messages are still stored', async () => {
-        vi.stubEnv('WHATSAPP_ACCESS_TOKEN', '');
+    it.each([
+        ['empty', ''],
+        ['with a line break inside (unusable: fetch would quote it in its error)', 'token\npalsu'],
+    ])('18b. an access token that is %s: one webhook_unconfigured for the batch, the messages are still stored', async (_label, token) => {
+        vi.stubEnv('WHATSAPP_ACCESS_TOKEN', token);
         const body = delivery([change({ contacts: [contactOf(A), contactOf(B)], messages: [textMsg(A, 'wamid.t1', 'satu'), textMsg(B, 'wamid.t2', 'dua')] })]);
         expect(await deliver(body)).toBe(200);
         expect(h.db.events()).toEqual([
             {
                 kind: 'webhook_unconfigured',
                 org: ORG,
-                detail: 'WHATSAPP_ACCESS_TOKEN tidak diset di server: pesan masuk tetap disimpan, tetapi balasan AI dan peringatan tidak terkirim',
+                detail: 'WHATSAPP_ACCESS_TOKEN tidak diset atau tidak valid di server: pesan masuk tetap disimpan, tetapi balasan AI dan peringatan tidak terkirim',
                 count: 1,
             },
         ]);
@@ -949,6 +952,8 @@ describe('the rest of the batch walk (C2_SPEC sections 6 and 7)', () => {
         await settle();
         expect(handleFlowReply).toHaveBeenCalledTimes(1);
         expect(downloadWhatsAppMedia).toHaveBeenCalledTimes(1);
+        // Downloaded with the credentials of the number the customer wrote to.
+        expect(vi.mocked(downloadWhatsAppMedia).mock.calls[0]).toEqual([SENT_FROM(), 'media-palsu-1']);
         expect(h.db.userRows().map((m) => m.wa_message_id)).toEqual(['wamid.flow-1', 'wamid.foto-1']);
         expect(await deliver(body)).toBe(200);
         await settle();

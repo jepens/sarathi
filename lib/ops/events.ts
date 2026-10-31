@@ -17,6 +17,7 @@ export type OpsEventKind =
     | 'webhook_payload_invalid'
     | 'webhook_deferred'
     | 'queue_job_failed'
+    | 'whatsapp_not_configured'
     | 'whatsapp_token_invalid'
     | 'quota_inbound_exceeded'
     | 'quota_ai_daily_warning'

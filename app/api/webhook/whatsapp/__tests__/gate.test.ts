@@ -40,7 +40,7 @@ const h = vi.hoisted(() => ({
 
 vi.mock('@supabase/supabase-js', () => ({ createClient: vi.fn(() => h.fake.client) }));
 vi.mock('@/lib/settings/org-context', () => ({ getDefaultOrgIdStrict: h.defaultOrg }));
-vi.mock('@/lib/settings/app-settings', () => ({ checkVerifyToken: vi.fn(), getWhatsAppAppSecret: vi.fn() }));
+vi.mock('@/lib/settings/app-settings', () => ({ checkVerifyToken: vi.fn() }));
 vi.mock('@/lib/whatsapp/client', () => ({ downloadWhatsAppMedia: vi.fn(), sendWhatsAppMessage: vi.fn() }));
 vi.mock('@/lib/notifications/web-push', () => ({ sendPushToOrg: vi.fn(async () => {}) }));
 vi.mock('@/lib/whatsapp/queue-db', () => ({

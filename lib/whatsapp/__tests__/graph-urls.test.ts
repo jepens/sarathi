@@ -130,15 +130,27 @@ describe('Graph API version', () => {
 });
 
 describe('the credentials of each call', () => {
-    it("another number's credentials go to that number, with its token and version", async () => {
+    it("another number's credentials go to that number, with its token and version, on every call", async () => {
         const other = { ...CREDS, phoneNumberId: 'pnid-lain', wabaId: 'waba-lain', accessToken: 'token-lain', graphVersion: 'v26.0' };
+        const V26 = 'https://graph.facebook.com/v26.0';
         await sendWhatsAppMessage(other, '628000000000', 'halo');
+        await uploadWhatsAppMedia(other, new Blob(['x']), 'a.jpg', 'image/jpeg');
+        await sendWhatsAppMedia(other, '628000000000', { kind: 'image', mediaId: 'media-palsu' });
+        await downloadWhatsAppMedia(other, 'media-palsu');
         await listApprovedTemplates(other);
+        await sendTemplateMessage(other, { to: '628000000000', templateName: 'tpl_palsu', language: 'id' });
         expect(urls).toEqual([
-            'https://graph.facebook.com/v26.0/pnid-lain/messages',
-            'https://graph.facebook.com/v26.0/waba-lain/message_templates?status=APPROVED&limit=100',
+            `${V26}/pnid-lain/messages`,
+            `${V26}/pnid-lain/media`,
+            `${V26}/pnid-lain/messages`,
+            `${V26}/media-palsu`,
+            LOOKASIDE,
+            `${V26}/waba-lain/message_templates?status=APPROVED&limit=100`,
+            `${V26}/waba-lain/message_templates?name=tpl_palsu&limit=25`,
+            `${V26}/pnid-lain/messages`,
         ]);
-        expect(auths).toEqual(['Bearer token-lain', 'Bearer token-lain']);
+        expect(auths.every((a) => a === 'Bearer token-lain')).toBe(true);
+        expect(auths).toHaveLength(8);
     });
 
     it('incomplete credentials never reach Meta', async () => {
