@@ -111,8 +111,11 @@ function readableAnswers(raw: unknown): boolean {
     }
 }
 const sends = () => vi.mocked(sendWhatsAppMessage).mock.calls;
-const replies = () => sends().filter((c) => c[1] === AI_REPLY);
-const warnings = () => sends().filter((c) => c[1] === RATE_LIMIT_WARNING);
+// Every send is (credentials, to, text): the credentials of the number the
+// customer wrote to (the env number of the default org, Fase 2 task 2.2b).
+const replies = () => sends().filter((c) => c[2] === AI_REPLY);
+const warnings = () => sends().filter((c) => c[2] === RATE_LIMIT_WARNING);
+const SENT_FROM = () => expect.objectContaining({ orgId: ORG, phoneNumberId: PNID, accessToken: 'token-palsu' });
 const pushes = () => vi.mocked(sendPushToOrg).mock.calls.map((c) => c[2]);
 const kinds = () => h.db.events().map((e) => e.kind);
 const noteTexts = () => h.db.notes().map((n) => n.content);
@@ -474,7 +477,7 @@ describe('part-1 pin matrix (synthesis section 7, as amended by D23 and C2_SPEC 
         expect(noteTexts()).toEqual([inboundQuotaNotice(1)]);
         expect(h.db.notes()[0].phone_number).toBe(B);
         expect(h.db.events().map((e) => [e.kind, e.detail])).toEqual([['quota_inbound_exceeded', 'batas 1 percakapan AI baru per menit tercapai']]);
-        expect(replies().map((r) => r[0])).toEqual([A]); // one reply for A's burst
+        expect(replies().map((r) => r[1])).toEqual([A]); // one reply for A's burst
         // A redelivery past the pre-dedup is a duplicate before it spends a rate slot.
         failPrededup();
         expect(await deliver(one(text(A, 'wamid.p13-a1')))).toBe(200);
@@ -493,7 +496,7 @@ describe('part-1 pin matrix (synthesis section 7, as amended by D23 and C2_SPEC 
         expect(await deliver(flood('p14a'))).toBe(200);
         await settle();
         expect(h.db.userRows()).toHaveLength(10);
-        expect(warnings()).toEqual([[A, RATE_LIMIT_WARNING, { phoneNumberId: PNID, accessToken: 'token-palsu' }]]);
+        expect(warnings()).toEqual([[SENT_FROM(), A, RATE_LIMIT_WARNING]]);
         expect(noteTexts()).toEqual([RATE_LIMIT_NOTE]);
         expect(h.db.chat(A)!.last_message).toBe('pesan wamid.p14a-9');
         // The next window, with Meta refusing the warning.
@@ -563,8 +566,7 @@ describe('part-1 pin matrix (synthesis section 7, as amended by D23 and C2_SPEC 
         expect(vi.mocked(handleFlowReply).mock.calls[0][0]).toEqual({
             supabase: h.db.client,
             orgId: ORG,
-            phoneNumberId: PNID,
-            accessToken: 'token-palsu',
+            creds: SENT_FROM(),
             contactKey: A,
             bsuid: 'ID.a',
             waId: A,
@@ -782,7 +784,7 @@ describe('part-1 pin matrix (synthesis section 7, as amended by D23 and C2_SPEC 
         await vi.advanceTimersByTimeAsync(1);
         await settle();
         expect(h.db.rpcCalls('claim_queue_jobs')).toHaveLength(2);
-        expect(replies().map((r) => r[0])).toEqual([A, B]);
+        expect(replies().map((r) => r[1])).toEqual([A, B]);
     });
 
     it('P25 Kept: per-process throttles: the other-number note once a day per chat, its limit note once a minute, the quota note once per chat and minute, the unrouted lookup once per number', async () => {

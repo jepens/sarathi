@@ -39,13 +39,15 @@ import {
 // cache does not dedupe inside Route Handlers or Server Actions (they are not a
 // render pass) — there, call requireOrgContext() once and pass the context on.
 //
-// Service-role paths without a user (the queue, digest) still use
-// getDefaultOrgId() until inbound routing by phone_number_id lands; the
-// WhatsApp webhook uses getDefaultOrgIdStrict().
+// The follow-up digest (a service-role path without a user) still uses
+// getDefaultOrgId(); the WhatsApp webhook and the WhatsApp credential resolver
+// (lib/whatsapp/credentials.ts) use getDefaultOrgIdStrict().
 //
 // The default org (Sailendra) also owns every env-configured integration
-// (WhatsApp, Portal, Zoom, Resend). Routes that use those credentials must gate
-// on requireEnvIntegration() so another tenant can never act as Sailendra.
+// (Portal, Zoom, Resend, and today the WhatsApp number). Routes that use those
+// credentials must gate on requireEnvIntegration() so another tenant can never
+// act as Sailendra; WhatsApp routes gate on requireWhatsAppIntegration()
+// (lib/whatsapp/integration.ts), which also resolves the org's credentials.
 
 /** The signed-in member's context. `supabase` is the cookie-bound (RLS) client. */
 export interface OrgContext {
@@ -202,8 +204,9 @@ export async function requireUserContext(): Promise<UserAccess> {
 /**
  * Gate for env-credential integrations: a member AND the member's org is the
  * default org. Call it BEFORE any external side effect. The session is checked
- * strictly (Auth-server round trip), so a signed-out / banned user cannot send
- * WhatsApp messages, call Portal / Zoom or email proposals with a still-valid JWT.
+ * strictly (Auth-server round trip), so a signed-out / banned user cannot call
+ * Portal / Zoom or email proposals with a still-valid JWT. (WhatsApp:
+ * requireWhatsAppIntegration, lib/whatsapp/integration.ts.)
  */
 export async function requireEnvIntegration(integration: EnvIntegration): Promise<OrgAccess> {
     const access = await requireOrgContext({ strict: true });

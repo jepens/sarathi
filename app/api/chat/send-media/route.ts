@@ -8,7 +8,8 @@ import {
     type WhatsAppApiError,
 } from '@/lib/whatsapp/client';
 import { whatsappLogger } from '@/lib/utils/logger';
-import { accessDeniedResponse, requireEnvIntegration } from '@/lib/settings/org-context';
+import { accessDeniedResponse } from '@/lib/settings/org-context';
+import { requireWhatsAppIntegration } from '@/lib/whatsapp/integration';
 import { CHAT_MEDIA_BUCKET, CHAT_MEDIA_MAX_BYTES, safePhoneSegment, storageContentType } from '@/lib/storage/chat-media';
 
 // Extension for the storage object path — keep the original where sane, else map
@@ -27,11 +28,11 @@ function safeExt(filename: string, mime: string): string {
 // customer. Multipart body: { phone_number, file, caption? }.
 export async function POST(request: Request) {
     try {
-        // Member of the default org only (env WhatsApp credentials) — before
+        // The caller's org and its own WhatsApp number's credentials — before
         // the body is read and the Meta upload/send below.
-        const access = await requireEnvIntegration('whatsapp');
+        const access = await requireWhatsAppIntegration();
         if (!access.ok) return accessDeniedResponse(access);
-        const { supabase, orgId } = access;
+        const { supabase, orgId, creds } = access;
 
         const form = await request.formData();
         const phone_number = form.get('phone_number');
@@ -75,8 +76,8 @@ export async function POST(request: Request) {
 
         // Meta FIRST: if it rejects (e.g. past the 24h window), we don't store a
         // phantom message the customer never received.
-        const mediaId = await uploadWhatsAppMedia(blob, filename, mime);
-        const sendResult = await sendWhatsAppMedia(phone_number, {
+        const mediaId = await uploadWhatsAppMedia(creds, blob, filename, mime);
+        const sendResult = await sendWhatsAppMedia(creds, phone_number, {
             kind,
             mediaId,
             caption: captionStr,

@@ -15,7 +15,10 @@ async function testRAG() {
         const query = "Apa saja produk yang dijual?";
         console.log(`Query: "${query}"`);
 
-        const response = await generateRAGResponse(query);
+        // The org whose Knowledge Base and products to search (no default).
+        const orgId = process.argv[2] || process.env.RAG_TEST_ORG_ID;
+        if (!orgId) throw new Error('Usage: test-rag-products <org-id> (or RAG_TEST_ORG_ID)');
+        const response = await generateRAGResponse(query, [], undefined, { orgId });
 
         console.log('\nResponse:');
         console.log(response.message);

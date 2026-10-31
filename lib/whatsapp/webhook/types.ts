@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type { WhatsAppContext } from '@/lib/whatsapp/credentials';
+import type { WaCreds } from '@/lib/whatsapp/credentials';
 import type { OtherNumber } from '@/lib/whatsapp/other-number';
 import type { SenderIdentity } from '@/lib/whatsapp/webhook/contact';
 import type { BatchOutcome } from '@/lib/whatsapp/webhook/outcome';
@@ -22,10 +22,12 @@ export interface BatchRun {
     supabase: SupabaseClient;
     outcome: BatchOutcome;
     /**
-     * The org and its credentials, read strictly once per delivery, the first
+     * The org and the credentials of the number the delivery arrived on
+     * (resolveWhatsAppContext), read strictly once per delivery, the first
      * time an item needs them; a read error rejects every later call too.
+     * The access token may be '' (unset): storing works, sends fail.
      */
-    org(): Promise<WhatsAppContext>;
+    org(): Promise<WaCreds>;
     /** A message was queued or joined a waiting burst: drain the queue after the walk. */
     requestDrain(): void;
     /**
@@ -38,7 +40,8 @@ export interface BatchRun {
 /** One inbound message, ready for the handler of its type. */
 export interface MessageContext {
     supabase: SupabaseClient;
-    waCtx: WhatsAppContext;
+    /** The org and the receiving number's credentials (BatchRun.org). */
+    waCtx: WaCreds;
     /** The messages[] entry. */
     message: Record<string, MetaJson>;
     /** messages[].type, '' when it is not a string. */

@@ -1,5 +1,4 @@
 import crypto from 'crypto';
-import { getWhatsAppAppSecret } from '@/lib/settings/app-settings';
 import { whatsappLogger } from '@/lib/utils/logger';
 
 /**
@@ -18,25 +17,22 @@ import { whatsappLogger } from '@/lib/utils/logger';
  *                  hashed as UTF-8. Never a re-stringified parsed object.
  * @param signature Value of the `X-Hub-Signature-256` header (with or without
  *                  the `sha256=` prefix).
+ * @param appSecret The secret of the Meta app the request claims to come from
+ *                  (today the env app's, lib/whatsapp/credentials.ts); null
+ *                  when none is configured, which rejects every request.
  */
 export async function verifyWhatsAppSignature(
     payload: Buffer | string,
     signature: string | null,
-    appSecretOverride?: string | null
+    appSecret: string | null
 ): Promise<boolean> {
     if (!signature) {
         whatsappLogger.warn('Webhook signature header missing');
         return false;
     }
 
-    // `undefined` → read the env app secret. An explicit `null` means the caller
-    // resolved no secret (today: WHATSAPP_APP_SECRET unset) → we can't verify,
-    // so reject. A string is the secret the caller resolved (today the env
-    // secret; per-app secrets come with Fase 2 task 2.2).
-    const appSecret =
-        appSecretOverride === undefined
-            ? await getWhatsAppAppSecret()
-            : appSecretOverride;
+    // No secret resolved (today: WHATSAPP_APP_SECRET unset): nothing can be
+    // verified, so reject. Per-app secrets come with Fase 2 task 2.2c.
     if (!appSecret) {
         whatsappLogger.warn(
             'WHATSAPP_APP_SECRET env var is not set — cannot verify webhook. ' +

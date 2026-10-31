@@ -11,6 +11,7 @@ import { BusinessProfileEditor } from "./components/BusinessProfileEditor";
 import { GENERIC_BUSINESS_PROFILE, getBusinessProfile } from "@/lib/settings/business-profile";
 import { isDefaultOrg, requireOrgContext } from "@/lib/settings/org-context";
 import { createServiceOrServerClient } from "@/lib/supabase/service";
+import { envWhatsAppSendConfigured } from "@/lib/whatsapp/credentials";
 import { WhatsAppCredentials } from "./components/WhatsAppCredentials";
 import { QuickRepliesEditor } from "./components/QuickRepliesEditor";
 import { LabelsEditor } from "./components/LabelsEditor";
@@ -47,11 +48,8 @@ export default async function SettingsPage() {
         ? await getBusinessProfile(access.supabase, access.orgId)
         : { ...GENERIC_BUSINESS_PROFILE };
     // WhatsApp credentials live in server env, not the DB — and only the
-    // default org uses them.
-    const waEnvConfigured =
-        isDefault &&
-        !!process.env.WHATSAPP_PHONE_NUMBER_ID &&
-        !!process.env.WHATSAPP_ACCESS_TOKEN;
+    // default org uses them (lib/whatsapp/credentials.ts reads them).
+    const waEnvConfigured = isDefault && envWhatsAppSendConfigured();
 
     return (
         <div className="space-y-4 sm:space-y-6">

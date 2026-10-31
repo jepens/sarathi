@@ -70,9 +70,11 @@ vi.mock('@/lib/whatsapp/credentials', () => ({
     envWebhookApp: () => ({ appSecret: 'app-secret', phoneNumberId: 'phone-number-id' }),
     resolveWhatsAppContext: vi.fn(async () => ({
         orgId: ORG,
+        integrationId: null,
         phoneNumberId: 'phone-number-id',
+        wabaId: null,
         accessToken: 'access-token',
-        appSecret: 'app-secret',
+        graphVersion: 'v25.0',
     })),
 }));
 vi.mock('@/lib/whatsapp/client', () => ({ downloadWhatsAppMedia: vi.fn(), sendWhatsAppMessage: vi.fn() }));
@@ -243,7 +245,7 @@ describe('webhook text message: the org inbound quota', () => {
         expect(h.consume).not.toHaveBeenCalled();
         expect(processQueue).not.toHaveBeenCalled();
         expect(sendWhatsAppMessage).toHaveBeenCalledTimes(1);
-        expect(vi.mocked(sendWhatsAppMessage).mock.calls[0][1]).toBe('Mohon tunggu sebentar sebelum mengirim pesan lagi.');
+        expect(vi.mocked(sendWhatsAppMessage).mock.calls[0][2]).toBe('Mohon tunggu sebentar sebelum mengirim pesan lagi.');
         // The note keeps the chat "Belum dibalas" (the dropped message got no answer).
         expect(h.logSystem).toHaveBeenCalledTimes(1);
         expect(h.logSystem).toHaveBeenCalledWith(expect.anything(), '620000000006', 'Rate limit exceeded. User warned.', { touchChat: false });

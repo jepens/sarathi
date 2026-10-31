@@ -1,17 +1,20 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Route-level guard for KEA-2: every route/action that uses the env-configured
-// WhatsApp / Portal / Zoom / Resend credentials must run requireEnvIntegration()
-// BEFORE its external call. If a refactor moves the gate below the Meta / Portal
-// / Zoom / Resend call, these tests fail:
+// Portal / Zoom / Resend credentials must run requireEnvIntegration() BEFORE its
+// external call, and every WhatsApp route requireWhatsAppIntegration() (Fase 2
+// task 2.2b), whose credentials it must send with. If a refactor moves the gate
+// below the Meta / Portal / Zoom / Resend call, these tests fail:
 //   - denied: the route answers with the gate's status and the external client
 //     is never called;
-//   - allowed: the gate is invoked before the external client (call order).
+//   - allowed: the gate is invoked before the external client (call order), and
+//     a WhatsApp call gets the gate's credentials (the caller's org's).
 // The external mocks reject on the allowed path so the routes stop right after
 // the call we care about (no DB writes to stub).
 
 const h = vi.hoisted(() => ({
     requireEnvIntegration: vi.fn(),
+    requireWhatsAppIntegration: vi.fn(),
     sendWhatsAppMessage: vi.fn(),
     uploadWhatsAppMedia: vi.fn(),
     sendWhatsAppMedia: vi.fn(),
@@ -44,6 +47,7 @@ vi.mock('@/lib/settings/org-context', async (importOriginal) => {
         requireEnvIntegration: h.requireEnvIntegration,
     };
 });
+vi.mock('@/lib/whatsapp/integration', () => ({ requireWhatsAppIntegration: h.requireWhatsAppIntegration }));
 vi.mock('@/lib/utils/logger', () => ({
     whatsappLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
@@ -91,6 +95,16 @@ const ALLOWED = {
     orgId: '5a11e024-0001-4000-8000-000000000001',
     role: 'owner' as const,
 };
+// The caller's org's WhatsApp credentials, as requireWhatsAppIntegration returns them.
+const CREDS = {
+    orgId: ALLOWED.orgId,
+    integrationId: null,
+    phoneNumberId: '100000000000009',
+    wabaId: '200000000000009',
+    accessToken: 'token-palsu-org',
+    graphVersion: 'v25.0',
+};
+const ALLOWED_WA = { ...ALLOWED, creds: CREDS };
 
 const fetchMock = vi.fn();
 
@@ -148,6 +162,8 @@ interface Case {
     name: string;
     run: () => Promise<Response | { ok: boolean; error?: string }>;
     externals: ReturnType<typeof vi.fn>[];
+    /** A WhatsApp route: gated by requireWhatsAppIntegration, sends with its creds. */
+    whatsapp?: boolean;
 }
 
 const cases: Case[] = [
@@ -155,11 +171,13 @@ const cases: Case[] = [
         name: 'POST /api/chat/send',
         run: () => sendPOST(jsonReq('http://localhost/api/chat/send', { phone_number: '628111', message: 'hi' })),
         externals: [h.sendWhatsAppMessage],
+        whatsapp: true,
     },
     {
         name: 'POST /api/chat/send-media',
         run: () => sendMediaPOST(mediaReq()),
         externals: [h.uploadWhatsAppMedia, h.sendWhatsAppMedia],
+        whatsapp: true,
     },
     {
         name: 'POST /api/chat/send-template',
@@ -172,11 +190,13 @@ const cases: Case[] = [
                 }),
             ),
         externals: [h.listApprovedTemplates, h.sendTemplateMessage],
+        whatsapp: true,
     },
     {
         name: 'GET /api/chat/templates',
         run: () => templatesGET(),
         externals: [h.listApprovedTemplates],
+        whatsapp: true,
     },
     {
         name: 'GET /api/portal/clients',
@@ -200,13 +220,17 @@ const cases: Case[] = [
     },
 ];
 
-describe.each(cases)('$name', ({ run, externals }) => {
-    it('denied by the env-integration gate → no external call', async () => {
-        h.requireEnvIntegration.mockResolvedValue(DENIED);
+describe.each(cases)('$name', ({ run, externals, whatsapp }) => {
+    const gate = whatsapp ? h.requireWhatsAppIntegration : h.requireEnvIntegration;
+    const other = whatsapp ? h.requireEnvIntegration : h.requireWhatsAppIntegration;
+
+    it('denied by the integration gate → no external call', async () => {
+        gate.mockResolvedValue(DENIED);
 
         const res = await run();
 
-        expect(h.requireEnvIntegration).toHaveBeenCalledTimes(1);
+        expect(gate).toHaveBeenCalledTimes(1);
+        expect(other).not.toHaveBeenCalled();
         for (const ext of externals) expect(ext).not.toHaveBeenCalled();
         if (res instanceof Response) {
             expect(res.status).toBe(403);
@@ -217,15 +241,17 @@ describe.each(cases)('$name', ({ run, externals }) => {
     });
 
     it('allowed → the gate runs before the first external call', async () => {
-        h.requireEnvIntegration.mockResolvedValue(ALLOWED);
+        gate.mockResolvedValue(whatsapp ? ALLOWED_WA : ALLOWED);
 
         // Some routes let the external rejection propagate — only the order matters.
         await run().catch(() => undefined);
 
-        const gateOrder = h.requireEnvIntegration.mock.invocationCallOrder[0];
+        const gateOrder = gate.mock.invocationCallOrder[0];
         const firstExternal = externals[0].mock.invocationCallOrder[0];
         expect(gateOrder).toBeDefined();
         expect(firstExternal).toBeDefined();
         expect(gateOrder).toBeLessThan(firstExternal);
+        // A WhatsApp call sends with the caller's org's credentials, never others.
+        if (whatsapp) expect(externals[0].mock.calls[0][0]).toBe(CREDS);
     });
 });

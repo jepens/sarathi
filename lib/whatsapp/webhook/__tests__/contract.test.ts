@@ -97,8 +97,11 @@ async function deliver(body: unknown): Promise<number> {
 /** Waits for the work after the answer: pushes, notes, the warning, the queue drain. */
 const settle = () => settleBackground();
 const sends = () => vi.mocked(sendWhatsAppMessage).mock.calls;
-const replies = () => sends().filter((c) => c[1] === AI_REPLY);
-const warnings = () => sends().filter((c) => c[1] === RATE_LIMIT_WARNING);
+// Every send is (credentials, to, text): the credentials of the number the
+// customer wrote to (the env number of the default org, Fase 2 task 2.2b).
+const replies = () => sends().filter((c) => c[2] === AI_REPLY);
+const warnings = () => sends().filter((c) => c[2] === RATE_LIMIT_WARNING);
+const SENT_FROM = () => expect.objectContaining({ orgId: ORG, phoneNumberId: PNID, accessToken: 'token-palsu' });
 const pushes = () => vi.mocked(sendPushToOrg).mock.calls.map((c) => c[2]);
 const details = (kind: string) => h.db.events(kind).map((e) => e.detail);
 const noteTexts = () => h.db.notes().map((n) => n.content);
@@ -207,7 +210,7 @@ describe('contract harness (synthesis section 8, items 10-20)', () => {
         expect(h.db.userRows().map((m) => m.wa_message_id)).toEqual(['wamid.c10']);
         expect(pushes()).toEqual([{ title: A, body: 'halo, masih buka?', phone: A, url: `/dashboard/chats?phone=${A}` }]);
         expect(h.db.rpcCalls('claim_queue_jobs')).toHaveLength(1); // the drain right after the batch
-        expect(replies()).toEqual([[A, AI_REPLY, { phoneNumberId: PNID, accessToken: 'token-palsu' }]]);
+        expect(replies()).toEqual([[SENT_FROM(), A, AI_REPLY]]);
         expect(h.db.queue.map((j) => j.status)).toEqual(['completed']);
         expect(h.db.events()).toHaveLength(1); // still only the first delivery's alert
 
@@ -449,7 +452,7 @@ describe('contract harness (synthesis section 8, items 10-20)', () => {
         expect(await deliver(delivery([change({ contacts: [contactOf(A)], messages })]))).toBe(200);
         await settle();
         expect(h.db.userRows()).toHaveLength(10);
-        expect(warnings()).toEqual([[A, RATE_LIMIT_WARNING, { phoneNumberId: PNID, accessToken: 'token-palsu' }]]);
+        expect(warnings()).toEqual([[SENT_FROM(), A, RATE_LIMIT_WARNING]]);
         expect(noteTexts()).toEqual([RATE_LIMIT_NOTE]);
         // The note left the chat unanswered: its summary is the customer's last stored message.
         expect(h.db.chat(A)).toMatchObject({ last_message: 'pesan 9', unread_count: 10 });
@@ -465,7 +468,7 @@ describe('contract harness (synthesis section 8, items 10-20)', () => {
     });
 
     it('17b. a warning that fails with Meta 190 answers 200, notes that it failed and records whatsapp_token_invalid', async () => {
-        vi.mocked(sendWhatsAppMessage).mockImplementation(async (_to, text) => {
+        vi.mocked(sendWhatsAppMessage).mockImplementation(async (_creds, _to, text) => {
             if (text === RATE_LIMIT_WARNING) throw Object.assign(new Error('Meta WhatsApp 190'), { code: 190 });
             return { waMessageId: `wamid.keluar-${++h.outSeq}`, raw: {} };
         });
@@ -722,7 +725,7 @@ describe('committed before the answer, effects after it (C1 verification MUT-1/M
 
     it('a rate-limit warning send that never settles does not hold the 200', async () => {
         const held = gate();
-        vi.mocked(sendWhatsAppMessage).mockImplementation(async (_to, text) => {
+        vi.mocked(sendWhatsAppMessage).mockImplementation(async (_creds, _to, text) => {
             if (text === RATE_LIMIT_WARNING) await held.wait;
             return { waMessageId: `wamid.keluar-${++h.outSeq}`, raw: {} };
         });

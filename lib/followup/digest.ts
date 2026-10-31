@@ -2,6 +2,7 @@ import { SupabaseClient } from '@supabase/supabase-js';
 import { getDefaultOrgId } from '@/lib/settings/org-context';
 import { computeFollowup } from '@/lib/followup/compute';
 import { sendTemplateMessage } from '@/lib/whatsapp/templates';
+import { getOrgWhatsAppCreds } from '@/lib/whatsapp/credentials';
 import { whatsappLogger } from '@/lib/utils/logger';
 
 // Daily WhatsApp follow-up digest to the owner. Triggered by the existing
@@ -109,7 +110,10 @@ export async function maybeSendFollowupDigest(supabase: SupabaseClient): Promise
             timeZone: 'Asia/Jakarta',
         });
 
-        await sendTemplateMessage({
+        // From the org's own number (Fase 2 task 2.2b). Without one this
+        // throws like a refused send: logged below, the day stays claimed.
+        const creds = await getOrgWhatsAppCreds(orgId, supabase);
+        await sendTemplateMessage(creds, {
             to,
             templateName,
             language,

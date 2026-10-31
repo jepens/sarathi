@@ -1044,7 +1044,7 @@ export async function scheduleMeeting(
         let salesWaNotified = false;
         if (!alreadyBooked) {
             try {
-                const wa = await notifySalesWhatsApp({
+                const wa = await notifySalesWhatsApp(orgId, {
                     customerName,
                     company: chat?.company,
                     eventInterest: chat?.event_interest,

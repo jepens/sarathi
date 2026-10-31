@@ -1,4 +1,5 @@
 import { sendTemplateMessage } from '@/lib/whatsapp/templates';
+import { getOrgWhatsAppCreds, WhatsAppNotConfiguredError, type WaCreds } from '@/lib/whatsapp/credentials';
 import { redactPII } from '@/lib/utils/logger';
 import { MEETING_TZ } from './rules';
 
@@ -10,6 +11,8 @@ import { MEETING_TZ } from './rules';
 //
 // Env-gated: without MEETING_NOTIFY_WHATSAPP it returns { sent:false } and the
 // booking still succeeds. Non-fatal — a send failure never fails the booking.
+// Sent from the booking org's own number (Fase 2 task 2.2b): an org without
+// one sends nothing (today every org but the default one).
 //
 // The template must have 4 BODY variables:
 //   {{1}} customer (name + company)  {{2}} date/time WIB  {{3}} topic  {{4}} link
@@ -72,11 +75,23 @@ export function buildMeetingWaVariables(input: MeetingWaNotifyInput): string[] {
 }
 
 export async function notifySalesWhatsApp(
+    orgId: string,
     input: MeetingWaNotifyInput,
 ): Promise<MeetingWaNotifyResult> {
     const recipients = parseNotifyRecipients(process.env.MEETING_NOTIFY_WHATSAPP);
     if (recipients.length === 0) {
         return { sent: false, skippedReason: 'MEETING_NOTIFY_WHATSAPP not set', recipients: [] };
+    }
+
+    let creds: WaCreds;
+    try {
+        creds = await getOrgWhatsAppCreds(orgId);
+    } catch (err) {
+        if (err instanceof WhatsAppNotConfiguredError) {
+            return { sent: false, skippedReason: 'WhatsApp not configured for this org', recipients };
+        }
+        console.error('Sales WA notify: WhatsApp credentials could not be read:', err);
+        return { sent: false, skippedReason: 'WhatsApp credentials could not be read', recipients };
     }
 
     const templateName = process.env.MEETING_NOTIFY_TEMPLATE?.trim() || 'meeting_notify';
@@ -89,7 +104,7 @@ export async function notifySalesWhatsApp(
     // recipient never blocks the others.
     for (const to of recipients) {
         try {
-            await sendTemplateMessage({ to, templateName, language, variables });
+            await sendTemplateMessage(creds, { to, templateName, language, variables });
             anySent = true;
         } catch (err) {
             const reason = err instanceof Error ? err.message : String(err);

@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { sendWhatsAppMessage } from '@/lib/whatsapp/client';
+import type { WaCreds } from '@/lib/whatsapp/wa-creds';
 import { resolveSendTarget } from '@/lib/whatsapp/recipient';
 import { logSystemMessage } from '@/lib/whatsapp/history';
 import { sanitizeForPg } from '@/lib/whatsapp/webhook/payload';
@@ -70,8 +71,8 @@ export interface NfmReplyPayload {
 export interface HandleFlowReplyParams {
     supabase: SupabaseClient;
     orgId: string;
-    phoneNumberId: string;
-    accessToken: string;
+    /** The receiving number's credentials: the confirmation goes out from it. */
+    creds: WaCreds;
     /** Canonical CRM key (phone_number PK in whatsapp_chats). */
     contactKey: string;
     bsuid: string | null;
@@ -197,7 +198,7 @@ export type FlowReplyOutcome =
  */
 export async function handleFlowReply(params: HandleFlowReplyParams): Promise<FlowReplyOutcome> {
     const {
-        supabase, orgId, phoneNumberId, accessToken,
+        supabase, orgId, creds,
         contactKey, bsuid, waId, inboundWamid, nfmReply,
     } = params;
     // Set once the gate insert stored the submission. From then on an error
@@ -348,7 +349,7 @@ export async function handleFlowReply(params: HandleFlowReplyParams): Promise<Fl
             // Send to the resolved target (recovered phone if known, else the
             // key/BSUID), not the raw inbound `from`.
             const target = await resolveSendTarget(supabase, orgId, contactKey);
-            const sendResult = await sendWhatsAppMessage(target, confirmText, { phoneNumberId, accessToken });
+            const sendResult = await sendWhatsAppMessage(creds, target, confirmText);
             const { error: outError } = await supabase
                 .from('whatsapp_messages')
                 .insert({

@@ -10,7 +10,11 @@ export const GRAPH_API_VERSION = 'v25.0';
 
 const GRAPH_ORIGIN = 'https://graph.facebook.com';
 
-/** The Graph API URL of `path`, e.g. graphUrl(`${phoneNumberId}/messages`). */
-export function graphUrl(path: string): string {
-    return `${GRAPH_ORIGIN}/${GRAPH_API_VERSION}/${path.replace(/^\/+/, '')}`;
+/**
+ * The Graph API URL of `path`, e.g. graphUrl(`${phoneNumberId}/messages`,
+ * creds.graphVersion). Every send passes its credentials' version (WaCreds,
+ * lib/whatsapp/credentials.ts), today always GRAPH_API_VERSION.
+ */
+export function graphUrl(path: string, version: string = GRAPH_API_VERSION): string {
+    return `${GRAPH_ORIGIN}/${version}/${path.replace(/^\/+/, '')}`;
 }

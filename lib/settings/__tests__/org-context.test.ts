@@ -206,7 +206,7 @@ describe('requireEnvIntegration', () => {
     it('checks the session strictly — a revoked session cannot reach the integration', async () => {
         state.membership = { org_id: DEFAULT_ORG, role: 'owner' };
         state.serverUser = 'revoked';
-        await expect(requireEnvIntegration('whatsapp')).resolves.toMatchObject({ ok: false, status: 401 });
+        await expect(requireEnvIntegration('portal')).resolves.toMatchObject({ ok: false, status: 401 });
         expect(userClient.auth.getUser).toHaveBeenCalledTimes(1);
         expect(userClient.auth.getClaims).not.toHaveBeenCalled();
         expect(state.tables).toEqual([]);
@@ -215,7 +215,7 @@ describe('requireEnvIntegration', () => {
 
     it('lets default-org members through (no Sailendra regression)', async () => {
         state.membership = { org_id: DEFAULT_ORG, role: 'owner' };
-        await expect(requireEnvIntegration('whatsapp')).resolves.toMatchObject({
+        await expect(requireEnvIntegration('email')).resolves.toMatchObject({
             ok: true,
             orgId: DEFAULT_ORG,
             userId: 'user-1',

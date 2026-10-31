@@ -1,7 +1,7 @@
 import { createClient } from '@/lib/supabase/server';
 import { sendWhatsAppMessage } from './client';
 import { resolveSendTarget } from './recipient';
-import { getWhatsAppSendCreds } from './credentials';
+import { getOrgWhatsAppCreds, WhatsAppNotConfiguredError, type WaCreds } from './credentials';
 import { generateRAGResponse } from '@/lib/ai/rag';
 import { whatsappLogger } from '@/lib/utils/logger';
 import { logSystemMessage } from '@/lib/whatsapp/history';
@@ -60,6 +60,10 @@ function isUnprocessableRow(metadata: unknown): boolean {
 // Operator-facing note logged when a handoff switches the chat to manual mode.
 export const HANDOFF_MANUAL_MODE_NOTICE =
     'Handoff ke tim: balasan otomatis AI dimatikan untuk chat ini. Balas customer secara manual, atau nyalakan lagi lewat switch "AI aktif".';
+
+// Operator-facing note logged when the org has no WhatsApp number to reply from.
+export const WHATSAPP_NOT_CONFIGURED_NOTICE =
+    'Pesan ini tidak dibalas AI: WhatsApp belum dikonfigurasi untuk organisasi ini (hubungi tim Sarathi).';
 
 // Operator-facing note logged when the org's daily AI quota stops a reply.
 export function aiQuotaReachedNotice(limit: number): string {
@@ -155,10 +159,10 @@ async function processConversation(jobs: QueueJob[], supabase: SupabaseClient): 
     const { org_id: orgId, phone_number: phoneNumber } = jobs[0];
     const ids = jobs.map((j) => j.id);
 
-    // Send credentials: the env credentials of the default org until Fase 2
-    // task 2.2b threads each org's own. Resolved up-front so the catch block's
-    // fallback message can use them too.
-    const creds = await getWhatsAppSendCreds();
+    // The credentials of the org's own number (Fase 2 task 2.2b), set below
+    // before the quota is counted and the model called; the catch block's
+    // fallback message uses them too (none if they were never resolved).
+    let creds: WaCreds | null = null;
     try {
         whatsappLogger.info(`Processing ${jobs.length} message(s) for ${phoneNumber}`);
 
@@ -176,6 +180,29 @@ async function processConversation(jobs: QueueJob[], supabase: SupabaseClient): 
             const closeError = await markJobsCompleted(supabase, ids);
             if (closeError) whatsappLogger.error(`Closing the jobs of ${phoneNumber} in manual mode failed`, closeError);
             whatsappLogger.info(`Conversation ${phoneNumber} skipped — AI disabled (manual mode)`);
+            return;
+        }
+
+        // An org without a WhatsApp number of its own gets no reply from any
+        // other number: its jobs fail at once, without retries (they cannot
+        // succeed), with a note for the operators and a team alert. A read
+        // error is thrown to the catch block and retried like any failure.
+        try {
+            creds = await getOrgWhatsAppCreds(orgId, supabase);
+        } catch (credsError) {
+            if (!(credsError instanceof WhatsAppNotConfiguredError)) throw credsError;
+            const { error: failError } = await supabase
+                .from('message_queue')
+                .update({ status: 'failed', error_message: 'whatsapp_not_configured', processed_at: nowIso(), updated_at: nowIso() })
+                .in('id', ids);
+            if (failError) whatsappLogger.error(`Failing the jobs of ${phoneNumber} (WhatsApp not configured) failed`, failError);
+            whatsappLogger.error(`Conversation ${phoneNumber} not answered — the org has no WhatsApp number configured`);
+            await recordOpsEvent(supabase, 'queue_job_failed', {
+                orgId,
+                detail: `${jobs.length} pesan tanpa balasan AI: WhatsApp belum dikonfigurasi untuk org ini`,
+            });
+            // The customer still needs a reply: the note must not mark the chat answered.
+            await logSystemMessage(orgId, phoneNumber, WHATSAPP_NOT_CONFIGURED_NOTICE, { touchChat: false });
             return;
         }
 
@@ -293,7 +320,7 @@ async function processConversation(jobs: QueueJob[], supabase: SupabaseClient): 
         const sendTarget = await resolveSendTarget(supabase, orgId, phoneNumber);
 
         // Send the reply with the org's credentials.
-        const sendResult = await sendWhatsAppMessage(sendTarget, aiResponse.message, creds);
+        const sendResult = await sendWhatsAppMessage(creds, sendTarget, aiResponse.message);
 
         // Mark the jobs done IMMEDIATELY after a successful send, BEFORE the
         // history writes — and guard it in its OWN try/catch. The reply is
@@ -398,12 +425,17 @@ async function processConversation(jobs: QueueJob[], supabase: SupabaseClient): 
                 { touchChat: false },
             );
 
-            // Send a single fallback message for the whole conversation.
-            try {
-                const fallbackTarget = await resolveSendTarget(supabase, orgId, phoneNumber);
-                await sendWhatsAppMessage(fallbackTarget, 'Maaf, terjadi kesalahan saat memproses pesan Anda.', creds);
-            } catch (fallbackError) {
-                whatsappLogger.error('Failed to send fallback message', fallbackError);
+            // Send a single fallback message for the whole conversation, from
+            // the org's own number (none when its credentials could not be read).
+            if (creds) {
+                try {
+                    const fallbackTarget = await resolveSendTarget(supabase, orgId, phoneNumber);
+                    await sendWhatsAppMessage(creds, fallbackTarget, 'Maaf, terjadi kesalahan saat memproses pesan Anda.');
+                } catch (fallbackError) {
+                    whatsappLogger.error('Failed to send fallback message', fallbackError);
+                }
+            } else {
+                whatsappLogger.warn(`No fallback message to ${phoneNumber}: the org's WhatsApp credentials were never read`);
             }
         } else {
             // Re-queue the whole group for another attempt (each job keeps its

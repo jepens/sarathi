@@ -94,7 +94,7 @@ describe('toOrgRole', () => {
 
 describe('decideEnvIntegrationAccess', () => {
     it('lets default-org members use the env integrations (no Sailendra regression)', () => {
-        for (const integration of ['whatsapp', 'portal', 'zoom', 'email'] as const) {
+        for (const integration of ['portal', 'zoom', 'email'] as const) {
             expect(
                 decideEnvIntegrationAccess({
                     signedIn: true,
@@ -111,12 +111,12 @@ describe('decideEnvIntegrationAccess', () => {
             signedIn: true,
             orgId: PILOT_ORG,
             defaultOrgId: DEFAULT_ORG,
-            integration: 'whatsapp',
+            integration: 'email',
         });
         expect(res).toEqual({
             ok: false,
             status: 403,
-            error: INTEGRATION_NOT_CONFIGURED_MESSAGE.whatsapp,
+            error: INTEGRATION_NOT_CONFIGURED_MESSAGE.email,
         });
         expect(INTEGRATION_NOT_CONFIGURED_MESSAGE.whatsapp).toBe(
             'Integrasi WhatsApp belum dikonfigurasi untuk organisasi ini.'

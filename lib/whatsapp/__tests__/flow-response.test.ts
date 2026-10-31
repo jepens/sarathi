@@ -29,13 +29,21 @@ import { sendWhatsAppMessage } from '@/lib/whatsapp/client';
 
 const ORG = 'aaaaaaaa-0000-4000-8000-00000000000a';
 const PHONE = '620000000000';
+// The receiving number's credentials (fake): the confirmation goes out from it.
+const CREDS = {
+    orgId: ORG,
+    integrationId: null,
+    phoneNumberId: '100000000000001',
+    wabaId: null,
+    accessToken: 'token-palsu',
+    graphVersion: 'v25.0',
+};
 
 function submit(nfmReply: NfmReplyPayload = { response_json: JSON.stringify({ flow_token: 'token-palsu', jenis_acara: 'outing', nama_pic: 'Budi Palsu' }) }) {
     return handleFlowReply({
         supabase: h.fake.client,
         orgId: ORG,
-        phoneNumberId: '100000000000001',
-        accessToken: 'token-palsu',
+        creds: CREDS,
         contactKey: PHONE,
         bsuid: null,
         waId: PHONE,
@@ -107,6 +115,9 @@ describe('handleFlowReply: its insert of the submission is the redelivery gate',
         expect(await submit()).toEqual({ status: 'handled' });
         expect(saveLeadInfo).toHaveBeenCalledTimes(1);
         expect(sendWhatsAppMessage).toHaveBeenCalledTimes(1);
+        // From the number the customer wrote to (its credentials), to the contact.
+        expect(vi.mocked(sendWhatsAppMessage).mock.calls[0][0]).toBe(CREDS);
+        expect(vi.mocked(sendWhatsAppMessage).mock.calls[0][1]).toBe(PHONE);
     });
 
     it('a bug before the gate is thrown to the webhook (503, D24), with no submission row, lead or confirmation', async () => {
@@ -151,7 +162,7 @@ describe('handleFlowReply: the answers', () => {
         expect(JSON.stringify(gate?.payload)).toContain('Budi Palsu�');
         expect(JSON.stringify(gate?.payload)).not.toContain('\\u0000');
         expect(vi.mocked(saveLeadInfo).mock.calls[0][2]).toMatchObject({ name: 'Budi Palsu�' });
-        expect(vi.mocked(sendWhatsAppMessage).mock.calls[0][1]).toContain('Terima kasih, Budi Palsu�!');
+        expect(vi.mocked(sendWhatsAppMessage).mock.calls[0][2]).toContain('Terima kasih, Budi Palsu�!');
     });
 
     it.each([

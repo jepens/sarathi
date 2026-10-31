@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Route-level guard for the central org context (KEA-2, KUA-14). Representative
 // API routes and server actions run against the REAL requireOrgContext() with a
@@ -403,14 +403,23 @@ describe('server actions', () => {
     });
 });
 
-describe('updateOrderStatus (customer WhatsApp via env credentials)', () => {
+describe("updateOrderStatus (customer WhatsApp from the org's own number)", () => {
     const ORDER_ID = '0b0e6c1e-1111-4222-8333-444455556666';
 
-    // A default-org member and a pending order with a customer phone, so a
-    // pending → cancelled change would notify the customer.
-    function seedDefaultOrgOrder() {
+    // The default org's env number (fake), the only org with one today.
+    beforeEach(() => {
+        vi.stubEnv('WHATSAPP_PHONE_NUMBER_ID', '100000000000001');
+        vi.stubEnv('WHATSAPP_ACCESS_TOKEN', 'token-palsu');
+    });
+    afterEach(() => {
+        vi.unstubAllEnvs();
+    });
+
+    // A member of `orgId` (default: the default org) and a pending order with a
+    // customer phone, so a pending → cancelled change would notify the customer.
+    function seedDefaultOrgOrder(orgId = DEFAULT_ORG) {
         h.rows = {
-            organization_members: { single: { org_id: DEFAULT_ORG, role: 'owner' } },
+            organization_members: { single: { org_id: orgId, role: 'owner' } },
             orders: {
                 single: {
                     id: ORDER_ID,
@@ -427,11 +436,23 @@ describe('updateOrderStatus (customer WhatsApp via env credentials)', () => {
         };
     }
 
-    it('notifies the customer for a live session (control)', async () => {
+    it("notifies the customer for a live session (control), with the org's credentials", async () => {
         seedDefaultOrgOrder();
         await expect(updateOrderStatus(ORDER_ID, 'cancelled')).resolves.toMatchObject({ success: true });
         expect(h.sendCancellationNotification).toHaveBeenCalledTimes(1);
+        expect(h.sendCancellationNotification.mock.calls[0][0]).toMatchObject({
+            orgId: DEFAULT_ORG,
+            phoneNumberId: '100000000000001',
+            accessToken: 'token-palsu',
+        });
         expect(fakeClient.auth.getUser).toHaveBeenCalled();
+    });
+
+    it('an org without a WhatsApp number of its own: the status changes, nothing is sent', async () => {
+        seedDefaultOrgOrder('5a11e024-0002-4000-8000-000000000002');
+        await expect(updateOrderStatus(ORDER_ID, 'cancelled')).resolves.toMatchObject({ success: true });
+        expect(h.sendCancellationNotification).not.toHaveBeenCalled();
+        expect(h.sendPaymentNotification).not.toHaveBeenCalled();
     });
 
     it.each(['paid', 'cancelled'])(

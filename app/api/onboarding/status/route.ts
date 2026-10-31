@@ -6,6 +6,7 @@ import {
 } from '@/lib/settings/org-context';
 import { getWebhookUrl, getVerifyToken } from '@/lib/settings/app-settings';
 import { resolvePublicOrigin } from '@/lib/utils/public-url';
+import { envWhatsAppSendConfigured } from '@/lib/whatsapp/credentials';
 import { NextResponse } from 'next/server';
 
 export const dynamic = 'force-dynamic';
@@ -34,12 +35,9 @@ export async function GET(request: Request) {
     const handoffPhone = (profileQ.data?.handoff_phone ?? '').trim();
 
     // WhatsApp credentials come from server env, not a per-org row — and they
-    // belong to the default org only.
+    // belong to the default org only (lib/whatsapp/credentials.ts reads them).
     const isDefault = await isDefaultOrg(orgId);
-    const whatsappConfigured =
-        isDefault &&
-        !!process.env.WHATSAPP_PHONE_NUMBER_ID &&
-        !!process.env.WHATSAPP_ACCESS_TOKEN;
+    const whatsappConfigured = isDefault && envWhatsAppSendConfigured();
 
     const steps = {
         profile: handoffPhone.length > 0,

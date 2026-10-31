@@ -45,11 +45,21 @@ let fake: FakeSupabase;
 let drains = 0;
 let seq = 0;
 
+// The receiving number's credentials (fake): sends go out from it.
+const WA_CTX = {
+    orgId: ORG,
+    integrationId: null,
+    phoneNumberId: '100000000000001',
+    wabaId: null,
+    accessToken: 'token-palsu',
+    graphVersion: 'v25.0',
+};
+
 function ctx(over: Partial<MessageContext> = {}): MessageContext {
     seq += 1;
     return {
         supabase: fake.client,
-        waCtx: { orgId: ORG, phoneNumberId: '100000000000001', accessToken: 'token-palsu', appSecret: 'rahasia-palsu' },
+        waCtx: WA_CTX,
         message: { from: PHONE, id: `wamid.fake-${seq}`, type: 'text', text: { body: 'halo, masih buka?' } },
         type: 'text',
         key: `wamid.fake-${seq}`,
@@ -246,11 +256,7 @@ describe('the rate limit of the main number (D23-1)', () => {
         expect(await text({}, { ...limited, rate_first: true })).toBe('rate_limited');
         expect(await text({}, { ...limited, rate_first: false })).toBe('rate_limited');
         expect(sendWhatsAppMessage).toHaveBeenCalledTimes(1);
-        expect(vi.mocked(sendWhatsAppMessage).mock.calls[0]).toEqual([
-            PHONE,
-            RATE_LIMIT_WARNING,
-            { phoneNumberId: '100000000000001', accessToken: 'token-palsu' },
-        ]);
+        expect(vi.mocked(sendWhatsAppMessage).mock.calls[0]).toEqual([WA_CTX, PHONE, RATE_LIMIT_WARNING]);
         expect(notes()).toEqual([[ORG, PHONE, RATE_LIMIT_NOTE, { touchChat: false }]]);
         expect(sendPushToOrg).not.toHaveBeenCalled();
         expect(drains).toBe(0);

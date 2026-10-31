@@ -1,9 +1,11 @@
 import { sendWhatsAppMessage } from '@/lib/whatsapp/client';
+import type { WaCreds } from '@/lib/whatsapp/wa-creds';
 import { redactPII } from '@/lib/utils/logger';
 
 /**
  * WhatsApp Notification Module
- * Sends notifications to customers about order status changes
+ * Sends notifications to customers about order status changes, from the
+ * order's org's own number (`creds`, Fase 2 task 2.2b)
  */
 
 interface Order {
@@ -23,7 +25,7 @@ interface Order {
 /**
  * Send WhatsApp notification when payment is confirmed
  */
-export async function sendPaymentNotification(order: Order): Promise<void> {
+export async function sendPaymentNotification(creds: WaCreds, order: Order): Promise<void> {
     try {
         // Format items list
         const itemsList = order.items
@@ -48,7 +50,7 @@ Pesanan Anda sedang diproses dan akan segera dikirim.
 Terima kasih telah berbelanja! 😊`;
 
         // Send via WhatsApp
-        await sendWhatsAppMessage(order.customer_phone, message);
+        await sendWhatsAppMessage(creds, order.customer_phone, message);
 
         console.log(`Payment notification sent to ${redactPII(order.customer_phone)}`);
     } catch (error) {
@@ -60,7 +62,7 @@ Terima kasih telah berbelanja! 😊`;
 /**
  * Send notification when order is cancelled
  */
-export async function sendCancellationNotification(order: Order): Promise<void> {
+export async function sendCancellationNotification(creds: WaCreds, order: Order): Promise<void> {
     try {
         const message = `❌ *Pesanan Dibatalkan*
 
@@ -72,7 +74,7 @@ Jika Anda sudah melakukan pembayaran, dana akan dikembalikan dalam 1-3 hari kerj
 
 Jika ada pertanyaan, silakan hubungi kami. Terima kasih! 🙏`;
 
-        await sendWhatsAppMessage(order.customer_phone, message);
+        await sendWhatsAppMessage(creds, order.customer_phone, message);
 
         console.log(`Cancellation notification sent to ${redactPII(order.customer_phone)}`);
     } catch (error) {

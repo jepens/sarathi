@@ -21,8 +21,7 @@ const h = vi.hoisted(() => ({
     logs: [] as unknown[][],
 }));
 
-vi.mock('@/lib/settings/org-context', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/lib/settings/org-context')>();
+vi.mock('@/lib/whatsapp/integration', () => {
     const table = (name: string) => ({
         upsert: async (row: Record<string, unknown>) => {
             h.writes.push({ table: name, op: 'upsert', row });
@@ -34,14 +33,14 @@ vi.mock('@/lib/settings/org-context', async (importOriginal) => {
         },
     });
     return {
-        accessDeniedResponse: actual.accessDeniedResponse,
-        // A default-org member; the cookie-bound client is a stub.
-        requireEnvIntegration: vi.fn(async () => ({
+        // A member of an org with a WhatsApp number; the cookie-bound client is a stub.
+        requireWhatsAppIntegration: vi.fn(async () => ({
             ok: true,
             supabase: { from: table, storage: { from: h.storageFrom } },
             userId: 'user-a1',
             orgId: ORG,
             role: 'owner',
+            creds: { orgId: ORG, integrationId: null, phoneNumberId: '100000000000001', wabaId: null, accessToken: 'token-palsu', graphVersion: 'v25.0' },
         })),
     };
 });

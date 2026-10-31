@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { verifyWhatsAppSignature } from '@/lib/whatsapp/security';
-import { envWebhookApp, resolveWhatsAppContext, type WebhookApp, type WhatsAppContext } from '@/lib/whatsapp/credentials';
+import { envWebhookApp, resolveWhatsAppContext, type WaCreds, type WebhookApp } from '@/lib/whatsapp/credentials';
 import { whatsappLogger } from '@/lib/utils/logger';
 import { webhookSummary } from '@/lib/whatsapp/webhook-summary';
 import { describeErrorForOps, recordOpsEvent } from '@/lib/ops/events';
@@ -189,7 +189,7 @@ async function walkBatch(supabase: SupabaseClient, webhookApp: WebhookApp, body:
     // Single-tenant: org + credentials come from env and the default org,
     // read strictly (never the seed org), once, when an item first needs
     // them. A read error makes each item that needs it retryable (503).
-    let orgRead: Promise<WhatsAppContext> | null = null;
+    let orgRead: Promise<WaCreds> | null = null;
     const run: BatchRun = {
         supabase,
         outcome,
