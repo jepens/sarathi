@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // The customer notifications of an order status change (paid, cancelled) go
 // out from the credentials they are handed: the order's org's own number
@@ -35,6 +35,10 @@ beforeEach(() => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
 });
 
+afterEach(() => {
+    vi.restoreAllMocks();
+});
+
 describe('order notifications', () => {
     it('payment: sent to the customer with the credentials handed in', async () => {
         await sendPaymentNotification(CREDS, ORDER);
@@ -56,8 +60,11 @@ describe('order notifications', () => {
     });
 
     it('a failed send is logged, never thrown (the status change already happened)', async () => {
-        vi.mocked(sendWhatsAppMessage).mockRejectedValue(new Error('Meta WhatsApp 131047'));
+        const refused = new Error('Meta WhatsApp 131047');
+        vi.mocked(sendWhatsAppMessage).mockRejectedValue(refused);
         await expect(sendPaymentNotification(CREDS, ORDER)).resolves.toBeUndefined();
         await expect(sendCancellationNotification(CREDS, ORDER)).resolves.toBeUndefined();
+        expect(console.error).toHaveBeenCalledWith('Error sending payment notification:', refused);
+        expect(console.error).toHaveBeenCalledWith('Error sending cancellation notification:', refused);
     });
 });

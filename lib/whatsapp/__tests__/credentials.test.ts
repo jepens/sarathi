@@ -136,8 +136,13 @@ describe('env checks', () => {
             expect(envWhatsAppSendConfigured(), JSON.stringify(token)).toBe(false);
         }
         expect(canSend({ phoneNumberId: '100000000000001', accessToken: 'token\u0000palsu' })).toBe(false);
-        expect(canSend({ phoneNumberId: '100000000000001', accessToken: 'EAAGpalsu123-_.~' })).toBe(true);
-        expect(canSend({ phoneNumberId: '', accessToken: 'EAAGpalsu123' })).toBe(false);
+        expect(canSend({ phoneNumberId: '100000000000001', accessToken: 'tokenPalsu123-_.~' })).toBe(true);
+        expect(canSend({ phoneNumberId: '', accessToken: 'tokenPalsu123' })).toBe(false);
+        // Missing values (an untyped database row): never usable.
+        for (const missing of [undefined, null]) {
+            expect(canSend({ phoneNumberId: missing as never, accessToken: 'tokenPalsu123' })).toBe(false);
+            expect(canSend({ phoneNumberId: '100000000000001', accessToken: missing as never })).toBe(false);
+        }
     });
 
     it('getOrgWhatsAppCreds refuses an unusable token as not configured, without quoting it', async () => {

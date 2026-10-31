@@ -18,8 +18,9 @@ export interface WaCreds {
 
 /**
  * The org has no WhatsApp number this server may send from: today any org
- * but the default one, or the default org while WHATSAPP_PHONE_NUMBER_ID or
- * WHATSAPP_ACCESS_TOKEN is unset. Never answered with another org's number.
+ * but the default one, or the default org while WHATSAPP_PHONE_NUMBER_ID is
+ * unset or WHATSAPP_ACCESS_TOKEN is unset or not usable (canSend). Never
+ * answered with another org's number.
  */
 export class WhatsAppNotConfiguredError extends Error {
     constructor(message = 'WhatsApp is not configured for this org') {
@@ -34,9 +35,18 @@ export class WhatsAppNotConfiguredError extends Error {
 // reaches responses, queue rows and logs: such a token is not usable.
 const USABLE_TOKEN = /^[\x21-\x7e]+$/;
 
-/** Whether the credentials can call the Cloud API: a number id and a usable token. */
+/**
+ * Whether the credentials can call the Cloud API: a number id and a usable
+ * token. Checks the types too: credentials built from an untyped database row
+ * (2.2c) must not pass with a missing value (RegExp.test(undefined) is true).
+ */
 export function canSend(creds: Pick<WaCreds, 'phoneNumberId' | 'accessToken'>): boolean {
-    return creds.phoneNumberId !== '' && USABLE_TOKEN.test(creds.accessToken);
+    return (
+        typeof creds.phoneNumberId === 'string' &&
+        creds.phoneNumberId !== '' &&
+        typeof creds.accessToken === 'string' &&
+        USABLE_TOKEN.test(creds.accessToken)
+    );
 }
 
 /** Throws WhatsAppNotConfiguredError unless the credentials can send (canSend). */

@@ -59,15 +59,21 @@ function credentialReads(text: string, fileName = 'x.ts'): string[] {
     return found;
 }
 
-/** The names a file imports from the credentials module. */
-function credentialImports(text: string, fileName: string): string[] {
-    const source = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true);
-    return source.statements.flatMap((stmt) => {
-        if (!ts.isImportDeclaration(stmt) || !ts.isStringLiteral(stmt.moduleSpecifier)) return [];
-        if (!/(^|\/)whatsapp\/credentials$|^\.\/credentials$/.test(stmt.moduleSpecifier.text)) return [];
-        const named = stmt.importClause?.namedBindings;
-        return named && ts.isNamedImports(named) ? named.elements.map((e) => (e.propertyName ?? e.name).text) : [];
-    });
+/**
+ * Whether code in `text` names one of the webhook-only helpers: an identifier
+ * (a static, aliased, namespace-member, re-exported or destructured use, from
+ * any path) or a string literal that is exactly the name (wa['name']).
+ * Comments are not code, so prose that mentions a helper is not a use.
+ */
+function namesWebhookOnlyHelper(text: string, fileName = 'x.ts'): boolean {
+    const source = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true, fileName.endsWith('x') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+    let found = false;
+    const visit = (node: ts.Node): void => {
+        if ((ts.isIdentifier(node) || ts.isStringLiteralLike(node)) && WEBHOOK_ONLY.has(node.text)) found = true;
+        if (!found) ts.forEachChild(node, visit);
+    };
+    visit(source);
+    return found;
 }
 
 const read = (rel: string) => readFileSync(join(root, rel), 'utf8');
@@ -84,9 +90,23 @@ describe('WhatsApp credentials are read only by the env shim', () => {
     });
 
     it("only the webhook uses the helpers that hand out the default org's credentials without an org check", () => {
-        const users = files.filter((rel) => rel !== SHIM && credentialImports(read(rel), rel).some((name) => WEBHOOK_ONLY.has(name)));
+        const users = files.filter((rel) => rel !== SHIM && namesWebhookOnlyHelper(read(rel), rel));
         expect(users.filter((rel) => !WEBHOOK_CALLERS.has(rel))).toEqual([]);
         expect(users).toEqual([...WEBHOOK_CALLERS]);
+    });
+
+    it('catches each way of using a webhook-only helper, and not a mention in a comment', () => {
+        const uses = [
+            "import { resolveWhatsAppContext } from '@/lib/whatsapp/credentials';",
+            "import { resolveWhatsAppContext as ctx } from '../credentials';",
+            "import * as wa from '@/lib/whatsapp/credentials'; wa.envWebhookApp();",
+            "export { resolveWhatsAppContext } from '@/lib/whatsapp/credentials';",
+            "const { resolveWhatsAppContext } = await import('@/lib/whatsapp/credentials');",
+            "const wa = await import('@/lib/whatsapp/credentials'); wa['envWebhookApp']();",
+        ];
+        for (const use of uses) expect(namesWebhookOnlyHelper(use), use).toBe(true);
+        expect(namesWebhookOnlyHelper('/** see resolveWhatsAppContext */ const x = 1; // envWebhookApp')).toBe(false);
+        expect(namesWebhookOnlyHelper("import { getOrgWhatsAppCreds } from '@/lib/whatsapp/credentials';")).toBe(false);
     });
 
     it('catches each form of a read, and not a name inside a message', () => {

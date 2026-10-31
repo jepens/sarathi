@@ -9,14 +9,15 @@ export { assertCanSend, canSend, WhatsAppNotConfiguredError, type WaCreds } from
 // WhatsApp credential resolution (Fase 2 task 2.2b). Every Cloud API call
 // takes a WaCreds, resolved for one org: getOrgWhatsAppCreds() for sends the
 // org starts (dashboard, queue, notifications), resolveWhatsAppContext() for
-// the number a webhook delivery arrived on. Nothing else reads the WhatsApp
-// credentials: this file is the Phase-0 env shim, the only reader of
-// WHATSAPP_PHONE_NUMBER_ID / WHATSAPP_ACCESS_TOKEN / WHATSAPP_APP_SECRET /
-// WHATSAPP_BUSINESS_ACCOUNT_ID (pinned by __tests__/env-shim.test.ts). The env
-// credentials are the default org's (Sailendra) and serve no other org. With
-// owner decision D6 (one Meta app per client) they move to Supabase Vault and
-// whatsapp_integrations (2.1b/2.2c, docs/FASE2_DESIGN.md); the call sites keep
-// this interface.
+// the number a webhook delivery arrived on. Nothing else in the app reads the
+// WhatsApp credentials: in Phase 0 this resolver is an env shim, the only app
+// file that reads WHATSAPP_PHONE_NUMBER_ID / WHATSAPP_ACCESS_TOKEN /
+// WHATSAPP_APP_SECRET / WHATSAPP_BUSINESS_ACCOUNT_ID (pinned by
+// __tests__/env-shim.test.ts). The env credentials are the default org's
+// (Sailendra) and serve no other org. With owner decision D6 (one Meta app per
+// client) they move to Supabase Vault and whatsapp_integrations (2.1b/2.2c,
+// docs/FASE2_DESIGN.md): this module stays, its env branch goes, and the call
+// sites keep this interface.
 
 // Trimmed: a newline or tab pasted along with a value would otherwise make
 // every event of the app's own number look like another number's (the Graph
@@ -87,9 +88,9 @@ export async function resolveWhatsAppContext(client: SupabaseClient): Promise<Wa
  * The credentials an org sends with. Phase 0: the env credentials, for the
  * default org only (read strictly, with a service-role client: a read error
  * throws, never answering for the seed org). Any other org, or the default
- * org without a number or token, gets WhatsAppNotConfiguredError, so no org
- * can ever send from another org's number. Without `client` a service-role
- * client is created.
+ * org without a number or a usable token (canSend), gets
+ * WhatsAppNotConfiguredError, so no org can ever send from another org's
+ * number. Without `client` a service-role client is created.
  */
 export async function getOrgWhatsAppCreds(orgId: string, client?: SupabaseClient): Promise<WaCreds> {
     const supabase = client ?? (await createServiceOrServerClient());
