@@ -206,7 +206,7 @@ describe('requireEnvIntegration', () => {
     it('checks the session strictly — a revoked session cannot reach the integration', async () => {
         state.membership = { org_id: DEFAULT_ORG, role: 'owner' };
         state.serverUser = 'revoked';
-        await expect(requireEnvIntegration('portal')).resolves.toMatchObject({ ok: false, status: 401 });
+        await expect(requireEnvIntegration('zoom')).resolves.toMatchObject({ ok: false, status: 401 });
         expect(userClient.auth.getUser).toHaveBeenCalledTimes(1);
         expect(userClient.auth.getClaims).not.toHaveBeenCalled();
         expect(state.tables).toEqual([]);
@@ -225,10 +225,10 @@ describe('requireEnvIntegration', () => {
 
     it('refuses another tenant with the integration message', async () => {
         state.membership = { org_id: PILOT_ORG, role: 'owner' };
-        await expect(requireEnvIntegration('portal')).resolves.toEqual({
+        await expect(requireEnvIntegration('proposals')).resolves.toEqual({
             ok: false,
             status: 403,
-            error: INTEGRATION_NOT_CONFIGURED_MESSAGE.portal,
+            error: INTEGRATION_NOT_CONFIGURED_MESSAGE.proposals,
         });
     });
 

@@ -7,15 +7,19 @@
 //   1. session — no verified session → 401;
 //   2. org membership — signed in but not a member of any org → 403 (a failed
 //      membership lookup is a 500, never silently "no org");
-//   3. env-credential integrations — Portal, Zoom and Resend credentials live
-//      in the server environment and belong to the DEFAULT org (Sailendra).
-//      Until per-tenant credentials exist, only members of that org may trigger
-//      them; everyone else gets a clear "not configured" error BEFORE any
-//      external call is made. WhatsApp has its own gate, which resolves the
-//      org's credentials (lib/whatsapp/integration.ts, Fase 2 task 2.2b).
+//   3. env-credential integrations — Zoom and Resend credentials live in the
+//      server environment and belong to the DEFAULT org (Sailendra). Until
+//      per-tenant credentials exist, only members of that org may trigger them;
+//      everyone else gets a clear "not configured" error BEFORE any external
+//      call is made. WhatsApp has its own gate, which resolves the org's
+//      credentials (lib/whatsapp/integration.ts, Fase 2 task 2.2b).
 
-/** Integrations whose credentials come from the server env (default org only). */
-export type EnvIntegration = 'portal' | 'zoom' | 'email';
+/**
+ * Integrations that belong to the default org only: their credentials come
+ * from the server env, or (proposals) the documents carry Sailendra's identity
+ * (owner decisions D8, D26: Sailendra-only until opened per tenant in Fase 4).
+ */
+export type EnvIntegration = 'zoom' | 'email' | 'proposals';
 
 /** organization_members.role (public.org_role). Enforcement lands in Fase 3. */
 export type OrgRole = 'owner' | 'admin' | 'staff';
@@ -27,9 +31,9 @@ export const SESSION_CHECK_FAILED_MESSAGE = 'Gagal memverifikasi sesi. Silakan c
 
 export const INTEGRATION_NOT_CONFIGURED_MESSAGE: Record<EnvIntegration | 'whatsapp', string> = {
     whatsapp: 'Integrasi WhatsApp belum dikonfigurasi untuk organisasi ini.',
-    portal: 'Integrasi Portal belum dikonfigurasi untuk organisasi ini.',
     zoom: 'Integrasi Zoom belum dikonfigurasi untuk organisasi ini.',
     email: 'Integrasi email belum dikonfigurasi untuk organisasi ini.',
+    proposals: 'Fitur proposal belum tersedia untuk organisasi ini.',
 };
 
 export const WHATSAPP_SETTINGS_UNAVAILABLE_MESSAGE = 'Pengaturan WhatsApp organisasi tidak bisa dibaca saat ini. Silakan coba lagi.';

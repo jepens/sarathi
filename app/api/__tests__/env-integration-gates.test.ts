@@ -1,10 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Route-level guard for KEA-2: every route/action that uses the env-configured
-// Portal / Zoom / Resend credentials must run requireEnvIntegration() BEFORE its
-// external call, and every WhatsApp route requireWhatsAppIntegration() (Fase 2
-// task 2.2b), whose credentials it must send with. If a refactor moves the gate
-// below the Meta / Portal / Zoom / Resend call, these tests fail:
+// Zoom / Resend credentials, or Sailendra's proposal documents (D8, D26), must
+// run requireEnvIntegration() BEFORE its external call, and every WhatsApp route
+// requireWhatsAppIntegration() (Fase 2 task 2.2b), whose credentials it must
+// send with. If a refactor moves the gate below the Meta / Zoom / Resend call,
+// these tests fail:
 //   - denied: the route answers with the gate's status and the external client
 //     is never called;
 //   - allowed: the gate is invoked before the external client (call order), and
@@ -20,9 +21,10 @@ const h = vi.hoisted(() => ({
     sendWhatsAppMedia: vi.fn(),
     listApprovedTemplates: vi.fn(),
     sendTemplateMessage: vi.fn(),
-    searchPortalClients: vi.fn(),
-    postHandoff: vi.fn(),
     sendProposalEmail: vi.fn(),
+    buildProposalPreview: vi.fn(),
+    generateFnaSummary: vi.fn(),
+    storageUpload: vi.fn(),
 }));
 
 // Supabase client stub. from() returns a chainable, thenable query builder:
@@ -30,13 +32,13 @@ const h = vi.hoisted(() => ({
 // awaiting the chain resolves to "no error". (The client itself must NOT be
 // thenable, or `await createClient()` would unwrap it.)
 function fakeSupabase() {
-    const lead = { phone_number: '628111', portal_client_id: null };
+    const lead = { phone_number: '628111' };
     const q: Record<string, unknown> = {};
     for (const m of ['select', 'eq', 'update', 'upsert', 'insert']) q[m] = () => q;
     q.single = async () => ({ data: lead, error: null });
     q.maybeSingle = async () => ({ data: lead, error: null });
     q.then = (resolve: (v: unknown) => unknown) => resolve({ data: null, error: null });
-    return { from: () => q };
+    return { from: () => q, storage: { from: () => ({ upload: h.storageUpload }) } };
 }
 
 vi.mock('@/lib/supabase/server', () => ({ createClient: vi.fn(async () => fakeSupabase()) }));
@@ -65,23 +67,18 @@ vi.mock('@/lib/whatsapp/templates', () => ({
     renderTemplateBody: () => '',
     extractBodyVariableIndices: () => [],
 }));
-vi.mock('@/lib/portal/config', () => ({ isPortalConfigured: () => true }));
-vi.mock('@/lib/portal/client', () => ({
-    searchPortalClients: h.searchPortalClients,
-    postHandoff: h.postHandoff,
-    PortalError: class PortalError extends Error {},
-}));
-vi.mock('@/lib/proposals/send', () => ({ sendProposalEmail: h.sendProposalEmail }));
-vi.mock('@/lib/proposals/fna', () => ({ normalizeFnaSnapshot: (v: unknown) => v }));
+vi.mock('@/lib/proposals/send', () => ({ sendProposalEmail: h.sendProposalEmail, buildProposalPreview: h.buildProposalPreview }));
+vi.mock('@/lib/proposals/fna', () => ({ normalizeFnaSnapshot: (v: unknown) => v, generateFnaSummary: h.generateFnaSummary }));
 
 import { POST as sendPOST } from '@/app/api/chat/send/route';
 import { POST as sendMediaPOST } from '@/app/api/chat/send-media/route';
 import { POST as sendTemplatePOST } from '@/app/api/chat/send-template/route';
 import { GET as templatesGET } from '@/app/api/chat/templates/route';
-import { GET as portalClientsGET } from '@/app/api/portal/clients/route';
 import { GET as zoomCheckGET } from '@/app/api/meetings/zoom-check/route';
 import { POST as proposalPOST } from '@/app/api/proposals/[phone]/route';
-import { handoffToPortal } from '@/app/dashboard/pipeline/actions';
+import { POST as proposalUploadPOST } from '@/app/api/proposals/[phone]/upload/route';
+import { GET as proposalPreviewGET } from '@/app/api/proposals/[phone]/preview/route';
+import { POST as proposalFnaPOST } from '@/app/api/proposals/[phone]/fna-summary/route';
 
 const DENIED = {
     ok: false as const,
@@ -118,9 +115,10 @@ beforeEach(() => {
         h.sendWhatsAppMedia,
         h.listApprovedTemplates,
         h.sendTemplateMessage,
-        h.searchPortalClients,
-        h.postHandoff,
         h.sendProposalEmail,
+        h.buildProposalPreview,
+        h.generateFnaSummary,
+        h.storageUpload,
     ]) {
         fn.mockRejectedValue(new Error('stop'));
     }
@@ -151,12 +149,11 @@ function mediaReq(): Request {
 
 const phoneParams = { params: Promise.resolve({ phone: '628111' }) };
 
-const handoffInput = {
-    phone: '628111',
-    idempotencyKey: '0b0e6c1e-1111-4222-8333-444455556666',
-    title: 'Proposal',
-    client: { mode: 'new', name: 'PT Contoh' },
-};
+function pdfReq(): Request {
+    const form = new FormData();
+    form.set('file', new File([new Uint8Array([37, 80, 68, 70])], 'proposal.pdf', { type: 'application/pdf' }));
+    return new Request('http://localhost/api/proposals/628111/upload', { method: 'POST', body: form });
+}
 
 interface Case {
     name: string;
@@ -206,11 +203,6 @@ const cases: Case[] = [
         whatsapp: true,
     },
     {
-        name: 'GET /api/portal/clients',
-        run: () => portalClientsGET(new Request('http://localhost/api/portal/clients?q=astra')),
-        externals: [h.searchPortalClients],
-    },
-    {
         name: 'GET /api/meetings/zoom-check',
         run: () => zoomCheckGET(new Request('http://localhost/api/meetings/zoom-check?create=1')),
         externals: [fetchMock],
@@ -221,9 +213,20 @@ const cases: Case[] = [
         externals: [h.sendProposalEmail],
     },
     {
-        name: 'handoffToPortal (server action)',
-        run: () => handoffToPortal(handoffInput),
-        externals: [h.postHandoff],
+        name: 'POST /api/proposals/[phone]/upload',
+        // The upload validates the phone (8-15 digits) before Storage.
+        run: () => proposalUploadPOST(pdfReq(), { params: Promise.resolve({ phone: '6281112223' }) }),
+        externals: [h.storageUpload],
+    },
+    {
+        name: 'GET /api/proposals/[phone]/preview',
+        run: () => proposalPreviewGET(new Request('http://localhost/api/proposals/628111/preview'), phoneParams),
+        externals: [h.buildProposalPreview],
+    },
+    {
+        name: 'POST /api/proposals/[phone]/fna-summary',
+        run: () => proposalFnaPOST(new Request('http://localhost/api/proposals/628111/fna-summary', { method: 'POST' }), phoneParams),
+        externals: [h.generateFnaSummary],
     },
 ];
 

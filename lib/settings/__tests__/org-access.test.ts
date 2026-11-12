@@ -11,7 +11,7 @@ import {
 } from '@/lib/settings/org-access';
 
 // The Fase 0 containment rules (KEA-2): a signed-in user operates only the org
-// they are a member of, and env-credential integrations (WhatsApp, Portal,
+// they are a member of, and env-credential integrations (WhatsApp,
 // Zoom, Resend) are reserved for members of the default org.
 
 const DEFAULT_ORG = '5a11e024-0001-4000-8000-000000000001';
@@ -94,7 +94,7 @@ describe('toOrgRole', () => {
 
 describe('decideEnvIntegrationAccess', () => {
     it('lets default-org members use the env integrations (no Sailendra regression)', () => {
-        for (const integration of ['portal', 'zoom', 'email'] as const) {
+        for (const integration of ['zoom', 'email', 'proposals'] as const) {
             expect(
                 decideEnvIntegrationAccess({
                     signedIn: true,
@@ -129,7 +129,7 @@ describe('decideEnvIntegrationAccess', () => {
                 signedIn: false,
                 orgId: null,
                 defaultOrgId: DEFAULT_ORG,
-                integration: 'portal',
+                integration: 'proposals',
             })
         ).toMatchObject({ ok: false, status: 401 });
         expect(

@@ -247,24 +247,30 @@ const ENV_INTEGRATION: Record<
         gate: 'requireEnvIntegration',
         args: ["'zoom'"],
     },
-    'GET /api/portal/clients': {
-        file: 'app/api/portal/clients/route.ts',
-        name: 'GET',
-        gate: 'requireEnvIntegration',
-        args: ["'portal'"],
-    },
     'POST /api/proposals/[phone] (email)': {
         file: 'app/api/proposals/[phone]/route.ts',
         name: 'POST',
         gate: 'requireEnvIntegration',
         args: ["'email'"],
     },
-    'action handoffToPortal': {
-        file: 'app/dashboard/pipeline/actions.ts',
-        name: 'handoffToPortal',
+    // Proposal documents carry Sailendra's identity: default org only (D8, D26).
+    'POST /api/proposals/[phone]/upload': {
+        file: 'app/api/proposals/[phone]/upload/route.ts',
+        name: 'POST',
         gate: 'requireEnvIntegration',
-        args: ["'portal'"],
-        syncPrelude: true,
+        args: ["'proposals'"],
+    },
+    'GET /api/proposals/[phone]/preview': {
+        file: 'app/api/proposals/[phone]/preview/route.ts',
+        name: 'GET',
+        gate: 'requireEnvIntegration',
+        args: ["'proposals'"],
+    },
+    'POST /api/proposals/[phone]/fna-summary': {
+        file: 'app/api/proposals/[phone]/fna-summary/route.ts',
+        name: 'POST',
+        gate: 'requireEnvIntegration',
+        args: ["'proposals'"],
     },
     // Sends customer WhatsApp (the org's own number) on paid / cancelled. The
     // status change itself is tenant data, so it gates on the strict org

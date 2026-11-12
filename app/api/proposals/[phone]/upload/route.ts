@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { randomUUID } from 'node:crypto';
 import { generateProposalRef } from '@/lib/proposals/ref';
-import { accessDeniedResponse, requireOrgContext } from '@/lib/settings/org-context';
+import { accessDeniedResponse, requireEnvIntegration } from '@/lib/settings/org-context';
 import { proposalObjectKey } from '@/lib/storage/object-paths';
 
 // POST /api/proposals/[phone]/upload
@@ -31,7 +31,8 @@ export async function POST(
 ) {
     // Membership gate: the object key + the proposals row are both stamped with
     // the caller's org (storage RLS authorises by the "<org_id>/" prefix).
-    const access = await requireOrgContext();
+    // Proposals are Sailendra-only (D8, D26): the default org's members only.
+    const access = await requireEnvIntegration('proposals');
     if (!access.ok) return accessDeniedResponse(access);
     const { supabase, orgId, userId } = access;
 

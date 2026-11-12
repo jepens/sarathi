@@ -3,6 +3,7 @@ import OpenAI from 'openai';
 import { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
 import { getActiveSystemMessage } from './system-message';
 import { getBusinessProfile } from '@/lib/settings/business-profile';
+import { getDefaultOrgId } from '@/lib/settings/org-context';
 import { redactForLog, redactPII } from '@/lib/utils/logger';
 import {
     buildTools,
@@ -313,6 +314,12 @@ export async function generateRAGResponse(
         // so each org's bot speaks as itself, never as Sailendra.
         const profile = await getBusinessProfile(supabase, orgId);
 
+        // Online meetings (Zoom room, invite email, sales WhatsApp) run on
+        // Sailendra's own accounts: the meeting tools and their instructions
+        // are for the default org only (owner decisions D8, D26; opened per
+        // tenant in Fase 4).
+        const meetingsEnabled = orgId === (await getDefaultOrgId(supabase));
+
         // Retrieval tuned for a small, curated knowledge base: a low threshold
         // + generous cap effectively injects the whole KB (no relevant chunk
         // silently dropped, which the old 0.5/top-5 setting did) while still
@@ -432,7 +439,7 @@ the customer a payment or booking is confirmed; say the team will check it.
 
 ADVANCED ACTIONS:
 
-• check_meeting_availability — BEFORE proposing or confirming a meeting time,
+${meetingsEnabled ? `• check_meeting_availability — BEFORE proposing or confirming a meeting time,
   call this with the specific datetime to make sure the slot is free (weekdays
   only, 10:00–22:00 WIB, no clash with a 15-minute buffer, max 4/day, max 1
   upcoming meeting per customer). If the result "available" is false, relay the
@@ -465,7 +472,7 @@ ADVANCED ACTIONS:
      with the date/time; add "undangan kalender dikirim ke email kakak" only when
      the result's "customer_emailed" is true. The tool also emails the admin and
      notifies the sales team on WhatsApp, and sets the lead stage to "scheduled".
-
+` : ''}
 • handoff_to_human — call when the customer (1) explicitly asks to talk to
   someone, (2) is negotiating beyond your authority (heavy discount, custom
   scope), (3) asks technical questions you cannot answer from the Knowledge
@@ -524,7 +531,7 @@ WHEN CALLING create_order:
 
         const systemPrompt = `${baseSystemMessage}
 
-Waktu saat ini: **${nowWib} WIB**. Gunakan ini untuk menghitung tanggal/jam relatif (mis. "besok", "Senin depan", "minggu ini") saat menjadwalkan meeting. Saat memanggil schedule_meeting, kirim meeting_at sebagai ISO 8601 lengkap dengan offset +07:00 (mis. "2026-06-03T14:00:00+07:00").
+Waktu saat ini: **${nowWib} WIB**. Gunakan ini untuk menghitung tanggal/jam relatif (mis. "besok", "Senin depan", "minggu ini").${meetingsEnabled ? ' Saat memanggil schedule_meeting, kirim meeting_at sebagai ISO 8601 lengkap dengan offset +07:00 (mis. "2026-06-03T14:00:00+07:00").' : ''}
 ${phoneNumber ? leadCaptureInstruction : ''}
 ${orderInstruction}
 
@@ -585,14 +592,13 @@ ${wrapUntrustedContext(contextText)}
             'schedule_meeting',
             'handoff_to_human',
         ]);
-        const allTools = buildTools(profile);
-        const tools = phoneNumber
-            ? allTools
-            : allTools.filter(
-                  (t) =>
-                      t.type !== 'function' ||
-                      !phoneScopedTools.has(t.function.name)
-              );
+        const meetingTools = new Set(['check_meeting_availability', 'schedule_meeting']);
+        const tools = buildTools(profile).filter(
+            (t) =>
+                t.type !== 'function' ||
+                ((phoneNumber || !phoneScopedTools.has(t.function.name)) &&
+                    (meetingsEnabled || !meetingTools.has(t.function.name)))
+        );
 
         // Wrap callbacks so a throw from caller code can't crash the runner.
         const safeEmitText = opts?.onTextChunk
