@@ -255,6 +255,25 @@ const ENV_INTEGRATION: Record<
         gate: 'requireEnvIntegration',
         args: ["'email'"],
     },
+    // Proposal documents carry Sailendra's identity: default org only (D8, D26).
+    'POST /api/proposals/[phone]/upload': {
+        file: 'app/api/proposals/[phone]/upload/route.ts',
+        name: 'POST',
+        gate: 'requireEnvIntegration',
+        args: ["'proposals'"],
+    },
+    'GET /api/proposals/[phone]/preview': {
+        file: 'app/api/proposals/[phone]/preview/route.ts',
+        name: 'GET',
+        gate: 'requireEnvIntegration',
+        args: ["'proposals'"],
+    },
+    'POST /api/proposals/[phone]/fna-summary': {
+        file: 'app/api/proposals/[phone]/fna-summary/route.ts',
+        name: 'POST',
+        gate: 'requireEnvIntegration',
+        args: ["'proposals'"],
+    },
     'action handoffToPortal': {
         file: 'app/dashboard/pipeline/actions.ts',
         name: 'handoffToPortal',

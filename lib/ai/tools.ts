@@ -286,7 +286,7 @@ export function buildTools(p: BusinessProfile): ChatCompletionTool[] {
                     notes: {
                         type: ['string', 'null'],
                         description:
-                            'Optional context for MJ — what the customer wants to discuss (event type, peserta count, budget). Helps MJ prepare. Pass null if nothing extra to add.',
+                            `Optional context for ${p.handoffName} — what the customer wants to discuss (event type, peserta count, budget). Helps ${p.handoffName} prepare. Pass null if nothing extra to add.`,
                     },
                 },
                 required: ['meeting_at', 'notes'],
@@ -307,7 +307,7 @@ export function buildTools(p: BusinessProfile): ChatCompletionTool[] {
                     reason: {
                         type: 'string',
                         description:
-                            'Why this lead needs MJ — e.g. "customer asking for >20% discount", "wants to discuss custom event format", "frustrated with response time".',
+                            `Why this lead needs ${p.handoffName} — e.g. "customer asking for >20% discount", "wants to discuss custom event format", "frustrated with response time".`,
                     },
                 },
                 required: ['reason'],

@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { accessDeniedResponse, requireOrgContext } from '@/lib/settings/org-context';
+import { accessDeniedResponse, isDefaultOrg, requireOrgContext } from '@/lib/settings/org-context';
 import { leadInputSchema } from '@/lib/leads/schema';
 import { createOrFillLead } from '@/lib/leads/create';
 import { isPortalConfigured } from '@/lib/portal/config';
@@ -44,7 +44,9 @@ export async function GET(request: Request) {
 
     // portalEnabled lets the client gate the "Buat Proposal di Portal" action
     // without exposing the shared secret (it's derived from server-only env).
-    return NextResponse.json({ leads: data ?? [], portalEnabled: isPortalConfigured() });
+    // The Portal is Sailendra's (D8): only the default org sees the action.
+    const portalEnabled = isPortalConfigured() && (await isDefaultOrg(access.orgId));
+    return NextResponse.json({ leads: data ?? [], portalEnabled });
 }
 
 // Create a single lead manually (the "+ Tambah Lead" form). Dedup is
