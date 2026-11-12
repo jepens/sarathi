@@ -243,12 +243,6 @@ const ENV_INTEGRATION: Record<
         gate: 'requireEnvIntegration',
         args: ["'zoom'"],
     },
-    'GET /api/portal/clients': {
-        file: 'app/api/portal/clients/route.ts',
-        name: 'GET',
-        gate: 'requireEnvIntegration',
-        args: ["'portal'"],
-    },
     'POST /api/proposals/[phone] (email)': {
         file: 'app/api/proposals/[phone]/route.ts',
         name: 'POST',
@@ -273,13 +267,6 @@ const ENV_INTEGRATION: Record<
         name: 'POST',
         gate: 'requireEnvIntegration',
         args: ["'proposals'"],
-    },
-    'action handoffToPortal': {
-        file: 'app/dashboard/pipeline/actions.ts',
-        name: 'handoffToPortal',
-        gate: 'requireEnvIntegration',
-        args: ["'portal'"],
-        syncPrelude: true,
     },
     // Sends customer WhatsApp (env number) on paid / cancelled. The status
     // change itself is tenant data, so it gates on the strict org context.

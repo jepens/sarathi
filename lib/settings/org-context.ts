@@ -44,7 +44,7 @@ import {
 // WhatsApp webhook uses getDefaultOrgIdStrict().
 //
 // The default org (Sailendra) also owns every env-configured integration
-// (WhatsApp, Portal, Zoom, Resend). Routes that use those credentials must gate
+// (WhatsApp, Zoom, Resend). Routes that use those credentials must gate
 // on requireEnvIntegration() so another tenant can never act as Sailendra.
 
 /** The signed-in member's context. `supabase` is the cookie-bound (RLS) client. */
@@ -203,7 +203,7 @@ export async function requireUserContext(): Promise<UserAccess> {
  * Gate for env-credential integrations: a member AND the member's org is the
  * default org. Call it BEFORE any external side effect. The session is checked
  * strictly (Auth-server round trip), so a signed-out / banned user cannot send
- * WhatsApp messages, call Portal / Zoom or email proposals with a still-valid JWT.
+ * WhatsApp messages, call Zoom or email proposals with a still-valid JWT.
  */
 export async function requireEnvIntegration(integration: EnvIntegration): Promise<OrgAccess> {
     const access = await requireOrgContext({ strict: true });
@@ -220,7 +220,7 @@ export async function requireEnvIntegration(integration: EnvIntegration): Promis
 
 /**
  * True when `orgId` is the default org — the org that owns the env-configured
- * WhatsApp / Portal / Zoom / Resend credentials.
+ * WhatsApp / Zoom / Resend credentials.
  */
 export async function isDefaultOrg(orgId: string | null | undefined): Promise<boolean> {
     if (!orgId) return false;

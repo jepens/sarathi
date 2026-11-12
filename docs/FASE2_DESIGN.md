@@ -755,9 +755,9 @@ The non-WhatsApp parts of the same flows (Zoom, invite email, Portal, proposal e
 **As built (2026-11-12, owner decision D26: no table yet).** The Sailendra-only features are gated on the default org in code, without a migration:
 - the proposal upload, preview and FNA summary routes use `requireEnvIntegration('proposals')`;
 - `generateRAGResponse` offers the meeting tools (`check_meeting_availability`, `schedule_meeting`) and their prompt instructions to the default org only, so no other org's AI can create a Zoom room, an invite email or a sales WhatsApp on Sailendra's accounts;
-- `GET /api/leads` reports `portalEnabled` for the default org only.
+- the Sailendra Portal integration is removed altogether (owner decision D27: Portal and Sarathi are disconnected; the `portal_*` columns stay, no migration).
 
-Portal, the proposal email, order notifications and the digest were already default-org only. The `org_features` table below is deferred to Fase 4, when a feature is first opened to a tenant (D8).
+The proposal email, order notifications and the digest were already default-org only. The `org_features` table below is deferred to Fase 4, when a feature is first opened to a tenant (D8).
 
 - **Storage:** `org_features(org_id, feature, enabled)`. A missing row means OFF.
 - **Features:**
