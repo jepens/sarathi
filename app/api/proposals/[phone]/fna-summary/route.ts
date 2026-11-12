@@ -1,4 +1,4 @@
-import { accessDeniedResponse, requireOrgContext } from '@/lib/settings/org-context';
+import { accessDeniedResponse, requireEnvIntegration } from '@/lib/settings/org-context';
 import { NextResponse } from 'next/server';
 import { generateFnaSummary } from '@/lib/proposals/fna';
 
@@ -13,7 +13,8 @@ export async function POST(
     _request: Request,
     { params }: { params: Promise<{ phone: string }> }
 ) {
-    const access = await requireOrgContext();
+    // Proposals (and their FNA) are Sailendra-only (D8, D26).
+    const access = await requireEnvIntegration('proposals');
     if (!access.ok) return accessDeniedResponse(access);
     const { supabase, orgId } = access;
 

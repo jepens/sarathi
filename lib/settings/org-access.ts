@@ -13,8 +13,12 @@
 //      may trigger them; everyone else gets a clear "not configured" error
 //      BEFORE any external call is made.
 
-/** Integrations whose credentials come from the server env (default org only). */
-export type EnvIntegration = 'whatsapp' | 'portal' | 'zoom' | 'email';
+/**
+ * Integrations that belong to the default org only: their credentials come
+ * from the server env, or (proposals) the documents carry Sailendra's identity
+ * (owner decisions D8, D26: Sailendra-only until opened per tenant in Fase 4).
+ */
+export type EnvIntegration = 'whatsapp' | 'portal' | 'zoom' | 'email' | 'proposals';
 
 /** organization_members.role (public.org_role). Enforcement lands in Fase 3. */
 export type OrgRole = 'owner' | 'admin' | 'staff';
@@ -29,6 +33,7 @@ export const INTEGRATION_NOT_CONFIGURED_MESSAGE: Record<EnvIntegration, string> 
     portal: 'Integrasi Portal belum dikonfigurasi untuk organisasi ini.',
     zoom: 'Integrasi Zoom belum dikonfigurasi untuk organisasi ini.',
     email: 'Integrasi email belum dikonfigurasi untuk organisasi ini.',
+    proposals: 'Fitur proposal belum tersedia untuk organisasi ini.',
 };
 
 /**

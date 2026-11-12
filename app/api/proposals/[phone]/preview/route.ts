@@ -1,4 +1,4 @@
-import { accessDeniedResponse, requireOrgContext } from '@/lib/settings/org-context';
+import { accessDeniedResponse, requireEnvIntegration } from '@/lib/settings/org-context';
 import { NextResponse } from 'next/server';
 import { buildProposalPreview } from '@/lib/proposals/send';
 
@@ -18,8 +18,9 @@ export async function GET(
     { params }: { params: Promise<{ phone: string }> }
 ) {
     // Membership gate; buildProposalPreview reads through its own cookie-bound
-    // (RLS) client, so it only ever sees this org's leads/proposals.
-    const access = await requireOrgContext();
+    // (RLS) client, so it only ever sees this org's leads/proposals. Proposals
+    // are Sailendra-only (D8, D26): the default org's members only.
+    const access = await requireEnvIntegration('proposals');
     if (!access.ok) return accessDeniedResponse(access);
 
     const { phone } = await params;
