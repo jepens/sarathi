@@ -2,7 +2,7 @@
 -- vector-search functions stay inside the caller's org (tracker 1.2, audit
 -- KUA-13 / KEA-5 / KEA-25).
 begin;
-select plan(48);
+select plan(56);
 
 select tests.create_two_orgs();
 
@@ -49,7 +49,9 @@ select ok(not has_function_privilege(r, 'private.broadcast_org_changes()', 'exec
           format('private.broadcast_org_changes: not executable by %s', r))
 from unnest(array['anon', 'authenticated', 'service_role']) r;
 
--- Server-only functions: never callable through the API roles.
+-- Server-only functions: never callable through the API roles. The webhook's
+-- inbound ingest and its work queue (0072; behaviour in 220_wa_inbound_ingest)
+-- are for the service role only.
 select ok(not has_function_privilege(r, f, 'execute'),
           format('%s: not executable by %s', f, r))
 from unnest(array['public.bump_unread(uuid, text)',
@@ -57,7 +59,12 @@ from unnest(array['public.bump_unread(uuid, text)',
                   'public.verify_webhook_token(text)',
                   'public.handle_new_user()',
                   'public.sync_vendor_from_contact()',
-                  'public.cleanup_vendor_on_untag()']) f,
+                  'public.cleanup_vendor_on_untag()',
+                  'public.wa_ingest_inbound(uuid, text, text, text, timestamptz, text, text, text, text, '
+                      || 'text, text, text, jsonb, boolean, text, integer, boolean, text, integer, text, jsonb)',
+                  'public.wa_apply_statuses(uuid, jsonb)',
+                  'public.claim_inbound_work(integer, integer, uuid)',
+                  'public.cleanup_old_inbound_work()']) f,
      unnest(array['anon', 'authenticated']) r;
 
 -- ---------------------------------------------------------------------------

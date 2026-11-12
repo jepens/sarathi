@@ -31,6 +31,17 @@ tenant data that means at least:
   catalog in a dedicated test (`whatsapp_integrations`, 0069:
   `190_whatsapp_integrations_locked.test.sql`).
 
+**Service-role-only tables.** RLS on, the deny policy "service_role only" for
+`anon` and `authenticated`, no table privilege for either, and the functions
+that serve them executable by the service role only:
+`whatsapp_integrations` (0069, `190`), `ops_events` and `ops_alert_state`
+(0070, `200`), `org_usage_counters` and `org_quota_overrides` (0071, `210`),
+`whatsapp_inbound_work` (0072: the webhook's durable follow-up work, whose
+payload can hold a Flow's answers; catalog, both orgs' members and anon
+pinned in `220_wa_inbound_ingest.test.sql`). `message_queue` and
+`rate_limits` carry the same deny policy but still grant `authenticated` its
+table privileges (RLS refuses every row, `010`).
+
 **anon gets no table privileges (since 0063).** A table, view or sequence that
 `postgres` creates in `public` (migrations run as `postgres`) gives `anon`
 nothing: 0063 removed `anon` from the default privileges of `postgres` in
@@ -127,7 +138,39 @@ stops the `supabase_*_sarathi` containers; never use `--all`.
   (the user's role and claims plus `realtime.topic`; a null user = anon key).
   Its behaviour block tells messages apart by id, not by `inserted_at`
   (production's default is `now()`, newer Realtime images use
-  `clock_timestamp()`).
+  `clock_timestamp()`). `220_wa_inbound_ingest.test.sql` counts the
+  broadcasts of one ingest call the same way and skips those four
+  assertions without that partition (150 reports it).
+- `220_wa_inbound_ingest.test.sql` stages what one session cannot run, a
+  second delivery committing in the middle of a call or a step that fails,
+  with temporary triggers (on `rate_limits`, `org_usage_counters`,
+  `message_queue`, `whatsapp_chats`) that it creates and drops inside its own
+  transaction.
+
+The webhook end to end (PR-C2), `lib/whatsapp/webhook/__tests__/local-db.test.ts`,
+is a vitest file CI skips: the real route, pipeline and `processQueue` against
+this stack through PostgREST, only Meta, Web Push and the AI mocked. After
+`npx supabase db reset`, start the API (`npx supabase stop` first when only
+`db start` runs; it keeps the data):
+`npx supabase start -x gotrue,realtime,storage-api,imgproxy,mailpit,postgres-meta,studio,edge-runtime,logflare,vector,supavisor`,
+then `LOCAL_SUPABASE_URL=http://127.0.0.1:56321 LOCAL_SUPABASE_SERVICE_KEY=<key>
+LOCAL_SUPABASE_DB_CONTAINER=supabase_db_sarathi npx vitest run
+lib/whatsapp/webhook/__tests__/local-db.test.ts`, `<key>` being the CLI's
+default local service_role key (`npx supabase status -o env` shows it while
+auth runs). Without the container name the scenarios that alter the database
+for a moment (psql) are skipped. Localhost only: the run creates and deletes
+its own org, the default org until it ends. It refuses to start when the
+container is not the database of the stack the URL points at, or when the
+queue holds another org's pending or processing jobs (its drains would answer
+them). A `LOCAL_DB_KEEP=1` run leaves its org, its rows and pending jobs (the
+default org is restored). A run killed before its cleanup can also leave its
+org as the default org (a later run that gets past its checks sets it back, to
+the seed org), and `wa_ingest_inbound` renamed or without its grant, or
+`platform_settings` unreadable for service_role (only a later run with
+`LOCAL_SUPABASE_DB_CONTAINER` set restores those; without it a later run stops
+at its checks and leaves the default org as it is). In both cases run
+`npx supabase db reset` before `npx supabase test db` or the local app on the
+same stack (080, 110 and 130 expect a clean queue and the seed org).
 
 ## Realtime org bus (0064 expand, client, 0068 contract)
 
@@ -473,8 +516,8 @@ line to `production.txt`.
   permanent ones, or *pending* lines of a migration not yet applied to
   production (see above). Entries that no longer differ fail as stale. It
   currently holds no pending block: the replay matches production exactly
-  (re-checked 2026-10-18 after applying 0067, against a fresh read-only
-  production query: 701 lines, md5 `5a7feadb1272324db7f97d63aad90653`).
+  (re-checked 2026-10-30 after applying 0072, against a fresh read-only
+  production query: 750 lines, md5 `25ceb46d87114b88472d3b264248d4a2`).
 - Not fingerprinted: sequence privileges, column-level privileges, MAINTAIN,
   foreign-table privileges and default privileges (`pg_default_acl`); the
   `relpriv` lines cover only `arwdDxt` on tables and views. Whenever

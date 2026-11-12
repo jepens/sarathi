@@ -3,17 +3,18 @@ import { describeErrorForOps, recordOpsEvent } from '@/lib/ops/events';
 
 // Per-org quotas on the WhatsApp AI path (tracker 3.4, migration 0071; owner
 // decision 2026-10-18 "Sedang", D22): per org, at most 30 new AI bursts a
-// minute (webhook: a text that opens a chat's AI burst is counted; a fragment
-// that joins the burst still waiting in the queue and a redelivery are not)
-// and at most 300 AI replies a day, 00:00 to 00:00 WIB (queue: one unit per
-// burst with a message not counted before; a plain retry is free, a message
-// that joins a failing burst counts again). Over a limit the AI stops (hard
-// stop); the message itself is still stored for the operators. The team is
-// alerted (ops_events, emailed by lib/ops/alerts.ts) on the first refusal after
-// a call that was let through (once per window, and again when a raised limit
-// is reached), and warned when the daily count reaches 80% of the limit in
-// force. There is no 80% warning for the minute window: nobody can act within
-// the minute, and its refusals are alerted anyway.
+// minute (webhook: a text that opens a chat's AI burst is counted, since 0072
+// inside wa_ingest_inbound, in the transaction that stores the message; a
+// fragment that joins the burst still waiting in the queue and a redelivery
+// are not) and at most 300 AI replies a day, 00:00 to 00:00 WIB (queue: one
+// unit per burst with a message not counted before; a plain retry is free, a
+// message that joins a failing burst counts again). Over a limit the AI stops
+// (hard stop); the message itself is still stored for the operators. The team
+// is alerted (ops_events, emailed by lib/ops/alerts.ts) on the first refusal
+// after a call that was let through (once per window, and again when a raised
+// limit is reached), and warned when the daily count reaches 80% of the limit
+// in force. There is no 80% warning for the minute window: nobody can act
+// within the minute, and its refusals are alerted anyway.
 //
 // The team changes one org's limits in public.org_quota_overrides (service
 // role only; not app_settings, which every org member can write).
@@ -50,6 +51,50 @@ export function warnThreshold(limit: number): number {
     return Math.max(1, Math.ceil(limit * QUOTA_WARN_SHARE));
 }
 
+// The alert texts, in one place for both callers: consumeOrgQuota (the queue)
+// and the webhook, whose minute quota is counted inside wa_ingest_inbound.
+function exceededDetail(metric: QuotaMetric, limit: number): string {
+    return metric === 'ai_reply_day'
+        ? `batas ${limit} balasan AI per hari tercapai`
+        : `batas ${limit} percakapan AI baru per menit tercapai`;
+}
+
+function checkFailedDetail(metric: QuotaMetric, reason: string): string {
+    return `${metric}: ${reason}`;
+}
+
+/** What wa_ingest_inbound reported about the minute quota of one message. */
+export interface InboundQuotaReport {
+    /** The limit in force (quota_limit) whenever the quota was asked, also when the message went through; else null. */
+    limit: number | null;
+    /** A refusal right after a call that was let through: the one to alert. */
+    firstRefusal: boolean;
+    /** SQLSTATE of a counter failure (the message was let through), else null. */
+    error: string | null;
+}
+
+/**
+ * The team alerts of the minute quota as the webhook's ingest reported it,
+ * with the texts of consumeOrgQuota: quota_check_failed when the counter
+ * failed (fail-open), quota_inbound_exceeded on the first refusal. Never
+ * throws.
+ */
+export async function recordInboundQuotaAlerts(
+    client: SupabaseClient,
+    orgId: string,
+    report: InboundQuotaReport,
+): Promise<void> {
+    if (report.error) {
+        await recordOpsEvent(client, 'quota_check_failed', { orgId, detail: checkFailedDetail('inbound_minute', report.error) });
+    }
+    if (report.firstRefusal) {
+        await recordOpsEvent(client, 'quota_inbound_exceeded', {
+            orgId,
+            detail: exceededDetail('inbound_minute', report.limit ?? QUOTA_DEFAULTS.inbound_minute),
+        });
+    }
+}
+
 /**
  * Counts one call against the org's current window and says whether it is
  * within the limit. Never throws.
@@ -83,7 +128,7 @@ export async function consumeOrgQuota(
         const code = (err as { code?: unknown } | null)?.code;
         const reason = typeof code === 'string' && code ? code : describeErrorForOps(err);
         console.error('Org quota check failed, letting the call through', { metric, reason });
-        await recordOpsEvent(client, 'quota_check_failed', { orgId, detail: `${metric}: ${reason}` });
+        await recordOpsEvent(client, 'quota_check_failed', { orgId, detail: checkFailedDetail(metric, reason) });
         return { allowed: true, used: 0, refused: 0, limit: QUOTA_DEFAULTS[metric], firstRefusal: false };
     }
 
@@ -91,13 +136,7 @@ export async function consumeOrgQuota(
         await recordOpsEvent(
             client,
             metric === 'ai_reply_day' ? 'quota_ai_daily_exceeded' : 'quota_inbound_exceeded',
-            {
-                orgId,
-                detail:
-                    metric === 'ai_reply_day'
-                        ? `batas ${decision.limit} balasan AI per hari tercapai`
-                        : `batas ${decision.limit} percakapan AI baru per menit tercapai`,
-            },
+            { orgId, detail: exceededDetail(metric, decision.limit) },
         );
     } else if (decision.allowed && metric === 'ai_reply_day' && decision.used === warnThreshold(decision.limit)) {
         await recordOpsEvent(client, 'quota_ai_daily_warning', {

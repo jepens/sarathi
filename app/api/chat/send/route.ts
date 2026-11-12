@@ -23,9 +23,12 @@ export async function POST(request: Request) {
         message = body.message;
         // Optional: reply to an earlier message (its wamid). Meta shows the reply
         // quoted on the customer's phone; we also store it so the dashboard can
-        // render the quote.
+        // render the quote. A syn. key (an inbound message Meta sent without an
+        // id, stored under a synthetic key since PR-C2) is not Meta's: as a
+        // context it would make Meta refuse the whole reply, so it is dropped
+        // (ChatWindow hides the reply button for it; an open old tab may not).
         const contextMessageId: string | null =
-            typeof body.context_message_id === 'string' && body.context_message_id
+            typeof body.context_message_id === 'string' && body.context_message_id && !body.context_message_id.startsWith('syn.')
                 ? body.context_message_id
                 : null;
 

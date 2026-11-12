@@ -14,7 +14,9 @@
 //   from(t).update(x).eq('id', id)         // awaited
 //   from(t).upsert(x, opts)                // awaited
 //   from(t).insert(x)                      // awaited (no .select)
-//   rpc(name, args)
+//   rpc(name, args)                        // awaited, or .abortSignal(s) first
+// .abortSignal(s) may appear anywhere in a chain (the webhook passes its time
+// budget); the fake ignores the signal.
 
 export type SqlOp = 'select' | 'insert' | 'update' | 'upsert' | 'delete' | null;
 
@@ -42,7 +44,9 @@ export interface FakeSupabase {
 
 export function makeFakeSupabase(opts: {
     resolve?: Resolver;
-    rpc?: (name: string, args: unknown) => { data?: unknown; error?: unknown };
+    rpc?: (name: string, args: unknown) =>
+        | { data?: unknown; error?: unknown; status?: number }
+        | Promise<{ data?: unknown; error?: unknown; status?: number }>;
 }): FakeSupabase {
     const calls: FakeCall[] = [];
     const rpcCalls: Array<{ name: string; args: unknown }> = [];
@@ -82,6 +86,7 @@ export function makeFakeSupabase(opts: {
             not(c: string, op: string, v: unknown) { ctx.filters.push(['not', c, [op, v]]); return b; },
             or(expr: string) { ctx.filters.push(['or', expr, undefined]); return b; },
             in(c: string, v: unknown) { ctx.filters.push(['in', c, v]); return finalize(); },
+            abortSignal() { return b; }, // the signal is not a filter
             order() { return b; }, // args (column, {ascending}) are ignored by the fake
             limit(n: number) { ctx.limitN = n; return finalize(); },
             maybeSingle() { ctx.single = 'maybe'; return finalize(); },
@@ -99,7 +104,9 @@ export function makeFakeSupabase(opts: {
         rpc: (name: string, args: unknown) => {
             rpcCalls.push({ name, args });
             const r = opts.rpc ? opts.rpc(name, args) : { data: [], error: null };
-            return Promise.resolve(r);
+            // Like postgrest-js: awaitable, and .abortSignal() returns the same call.
+            const call = Promise.resolve(r);
+            return Object.assign(call, { abortSignal: () => call });
         },
     };
 

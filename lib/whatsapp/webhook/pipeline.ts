@@ -1,24 +1,33 @@
 import { NextResponse } from 'next/server';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { verifyWhatsAppSignature } from '@/lib/whatsapp/security';
-import { envWebhookApp, resolveWhatsAppContext } from '@/lib/whatsapp/credentials';
+import { envWebhookApp, resolveWhatsAppContext, type WebhookApp, type WhatsAppContext } from '@/lib/whatsapp/credentials';
 import { whatsappLogger } from '@/lib/utils/logger';
 import { webhookSummary } from '@/lib/whatsapp/webhook-summary';
 import { describeErrorForOps, recordOpsEvent } from '@/lib/ops/events';
+import { getDebounceSeconds, processQueue } from '@/lib/whatsapp/queue-db';
 import { readBodyCapped } from '@/lib/whatsapp/webhook/verify';
 import { serviceRoleClient } from '@/lib/whatsapp/webhook/service-client';
-import { routeOtherNumber } from '@/lib/whatsapp/webhook/router';
-import { handleUserIdUpdate } from '@/lib/whatsapp/webhook/handlers/user-id-update';
-import { handleStatuses } from '@/lib/whatsapp/webhook/handlers/statuses';
-import { handleInboundMessage } from '@/lib/whatsapp/webhook/handlers/messages';
+import { routeChanges, type RoutedChange } from '@/lib/whatsapp/webhook/router';
+import { errorCodes, isRecord, listChanges, messagesOf, statusesOf } from '@/lib/whatsapp/webhook/payload';
+import { PREDEDUP_CHUNK } from '@/lib/whatsapp/webhook/limits';
+import { BatchOutcome, respond } from '@/lib/whatsapp/webhook/outcome';
+import { runInBackground } from '@/lib/whatsapp/webhook/background';
+import type { BatchRun } from '@/lib/whatsapp/webhook/types';
+import { handleUserIdUpdates } from '@/lib/whatsapp/webhook/handlers/user-id-update';
+import { handleChangeStatuses } from '@/lib/whatsapp/webhook/handlers/statuses';
+import { handleMessageItem, hasIdentity, planMessage, type MessagePlan } from '@/lib/whatsapp/webhook/handlers/messages';
 
 // The webhook's POST, outside route.ts (Next.js limits what a route file
-// exports): the gate, then the event's handler.
+// exports): the gate, then the walk over every entry, change, message and
+// status of the delivery, then one answer for the whole batch.
 
 export async function processWebhook(request: Request): Promise<NextResponse> {
+    const startedAt = Date.now();
     // Set once the signature has passed: only then is a failure a Meta delivery
     // the team must hear about (anyone can POST junk to this URL).
     let verified = false;
-    let alertOrgId: string | null = null;
+    let outcome: BatchOutcome | null = null;
     try {
         // The exact bytes Meta signed, at most Meta's 3 MB: a larger body is
         // refused before it is read in full (anyone can POST here). The
@@ -80,9 +89,6 @@ export async function processWebhook(request: Request): Promise<NextResponse> {
 
         // Check if this is an event from a WhatsApp Business Account
         if (body.object === 'whatsapp_business_account') {
-            const change = body.entry?.[0]?.changes?.[0];
-            const metadata = change?.value?.metadata;
-
             // Without a usable number id nothing can be routed: 503 (Meta
             // retries once it is fixed) and an alert.
             if (!webhookApp.phoneNumberId) {
@@ -93,50 +99,8 @@ export async function processWebhook(request: Request): Promise<NextResponse> {
                 });
                 return new NextResponse('Service Unavailable', { status: 503 });
             }
-
-            // ========== HANDLE user_id_update (Phase B) ==========
-            // Fires when a customer changes their phone number → BSUID
-            // regenerates. We move our stored bsuid old→new so the contact
-            // stays linked. Detect by the change field name or a
-            // user_id_update(s) key on the value. Before the number gate: a
-            // BSUID is scoped to the business portfolio, so the change applies
-            // to this org's contacts whichever number of the WABA reported it.
-            const changeValue = (change?.value ?? {}) as Record<string, unknown>;
-            const isUserIdUpdate =
-                change?.field === 'user_id_update' ||
-                'user_id_updates' in changeValue ||
-                'user_id_update' in changeValue;
-            if (isUserIdUpdate) {
-                const idCtx = await resolveWhatsAppContext(supabase);
-                alertOrgId = idCtx.orgId;
-                await handleUserIdUpdate(supabase, idCtx.orgId, changeValue);
-                return new NextResponse('EVENT_RECEIVED', { status: 200 });
-            }
-
-            const route = await routeOtherNumber(supabase, webhookApp, metadata);
-            if (route.route === 'dropped') return new NextResponse('EVENT_RECEIVED', { status: 200 });
-            // Store-only: the other number whose event is kept in the inbox (no
-            // AI, no automatic send from the wrong number), else null.
-            const storeOnly = route.route === 'store_only' ? route.other : null;
-
-            // Single-tenant: org + credentials come from env; the org is read
-            // strictly (a read error throws → 500, Meta retries).
-            const waCtx = await resolveWhatsAppContext(supabase);
-            alertOrgId = waCtx.orgId;
-
-            // ========== HANDLE STATUS CALLBACKS ==========
-            const statuses = body.entry?.[0]?.changes?.[0]?.value?.statuses;
-
-            if (statuses && statuses.length > 0) {
-                await handleStatuses(supabase, waCtx, statuses);
-
-                // Always return 200 to Meta
-                return new NextResponse('EVENT_RECEIVED', { status: 200 });
-            }
-
-            // ========== HANDLE INBOUND MESSAGES ==========
-            if (change?.value?.messages?.[0]) await handleInboundMessage({ supabase, waCtx, value: change.value, storeOnly });
-            return new NextResponse('EVENT_RECEIVED', { status: 200 });
+            outcome = new BatchOutcome(startedAt);
+            return await walkBatch(supabase, webhookApp, body, outcome);
         } else {
             // Signed by our app but not a WhatsApp Business Account event:
             // acknowledge it (a 404 would make Meta retry it for days).
@@ -145,13 +109,153 @@ export async function processWebhook(request: Request): Promise<NextResponse> {
         }
 
     } catch (error) {
+        // Only a bug gets here: every item has its own guard, and its failure
+        // decides the answer through respond(). Meta retries the delivery.
         whatsappLogger.error('Error processing webhook', error);
-        // Team alert (3.5): Meta retries the delivery, but a webhook that keeps
-        // failing loses messages once Meta gives up. Signed deliveries only.
+        // Team alert (3.5): a webhook that keeps failing loses messages once
+        // Meta gives up. Signed deliveries only.
         const alertClient = verified ? serviceRoleClient() : null;
         if (alertClient) {
-            await recordOpsEvent(alertClient, 'webhook_error', { orgId: alertOrgId, detail: describeErrorForOps(error) });
+            await recordOpsEvent(alertClient, 'webhook_error', { orgId: outcome?.orgId ?? null, detail: describeErrorForOps(error) });
         }
         return new NextResponse('Internal Server Error', { status: 500 });
     }
+}
+
+/** A change whose messages and statuses are handled: the main number's, or another's in process mode. */
+const isRouted = (c: RoutedChange) => c.route.route === 'main' || c.route.route === 'store_only';
+
+/**
+ * The keys of the batch's messages that are already stored in the org (any
+ * role: a contact card's note counts), one query per PREDEDUP_CHUNK keys.
+ * They are skipped without any side effect, so a resend of a batch Meta got a
+ * 503 for redoes only what failed. A failing query is ignored: the database
+ * function's own redelivery gate decides then.
+ */
+async function storedKeys(run: BatchRun, plans: MessagePlan[]): Promise<Set<string>> {
+    const found = new Set<string>();
+    const keys = [...new Set(plans.filter((p) => p.stores && hasIdentity(p)).map((p) => p.key))];
+    if (keys.length === 0) return found;
+    let orgId: string;
+    try {
+        orgId = (await run.org()).orgId;
+    } catch {
+        return found; // every message reports the org error itself
+    }
+    const signal = run.outcome.signal();
+    for (let i = 0; i < keys.length; i += PREDEDUP_CHUNK) {
+        try {
+            const { data, error } = await run.supabase
+                .from('whatsapp_messages')
+                .select('wa_message_id')
+                .eq('org_id', orgId)
+                .abortSignal(signal)
+                .in('wa_message_id', keys.slice(i, i + PREDEDUP_CHUNK));
+            if (error) throw error;
+            for (const row of Array.isArray(data) ? data : []) {
+                if (isRecord(row) && typeof row.wa_message_id === 'string') found.add(row.wa_message_id);
+            }
+        } catch (error) {
+            whatsappLogger.warn(`Webhook pre-dedup query failed (${describeErrorForOps(error)}) — the ingest gate decides`);
+        }
+    }
+    return found;
+}
+
+/** Drains the queue now and once more after the debounce window: once per batch. */
+function drainQueue(supabase: SupabaseClient): void {
+    // A no-op for the conversations of this batch (coalescing waits for the
+    // burst to settle), but it answers the ones that have settled.
+    runInBackground('queue drain', () => processQueue(supabase));
+    // This batch's conversations are answered ~debounce seconds after the
+    // customer's last message. Works on the persistent server; the
+    // per-minute cron is the backstop if the timer is lost on a restart.
+    const delayMs = (getDebounceSeconds() + 5) * 1000;
+    setTimeout(() => {
+        runInBackground('delayed queue drain', () => processQueue(supabase));
+    }, delayMs);
+}
+
+/**
+ * The walk over one delivery (Fase 2 task 2.2a part 2): route every change,
+ * then pass 1 (user_id_update entries), the pre-dedup, pass 2 (messages, in
+ * Meta's time order) and pass 3 (statuses, one call per change). Each item
+ * has its own guard, so one failure never stops the others; respond() turns
+ * the result into the answer.
+ */
+async function walkBatch(supabase: SupabaseClient, webhookApp: WebhookApp, body: unknown, outcome: BatchOutcome): Promise<NextResponse> {
+    const changes = await routeChanges(supabase, webhookApp, listChanges(body));
+
+    // Single-tenant: org + credentials come from env and the default org,
+    // read strictly (never the seed org), once, when an item first needs
+    // them. A read error makes each item that needs it retryable (503).
+    let orgRead: Promise<WhatsAppContext> | null = null;
+    const run: BatchRun = {
+        supabase,
+        outcome,
+        org: () =>
+            (orgRead ??= resolveWhatsAppContext(supabase).then((ctx) => {
+                outcome.orgId = ctx.orgId;
+                return ctx;
+            })),
+        requestDrain: () => {
+            outcome.drain = true;
+        },
+        heldBsuids: new Set<string>(),
+    };
+
+    const routed = changes.filter(isRouted);
+    for (const change of routed) {
+        if (!isRecord(change.value)) {
+            // A 'messages' change whose value is not an object: nothing in it
+            // can be read, now or on a retry.
+            outcome.items += 1;
+            outcome.done('skipped');
+            await recordOpsEvent(supabase, 'webhook_payload_invalid', { detail: 'perubahan "messages" tanpa isi terbaca; dilewati' });
+            continue;
+        }
+        const codes = errorCodes(change.value);
+        if (codes.length > 0) whatsappLogger.warn(`Webhook change carries Meta errors: ${codes.join(',')}`);
+    }
+
+    // Storing works without the access token, sending (AI replies, the
+    // rate-limit warning, Flow confirmations) does not: say so once.
+    if (routed.some((c) => messagesOf(c.value).length + statusesOf(c.value).length > 0)) {
+        try {
+            const ctx = await run.org();
+            if (!ctx.accessToken) {
+                await recordOpsEvent(supabase, 'webhook_unconfigured', {
+                    orgId: ctx.orgId,
+                    detail: 'WHATSAPP_ACCESS_TOKEN tidak diset di server: pesan masuk tetap disimpan, tetapi balasan AI dan peringatan tidak terkirim',
+                });
+            }
+        } catch {
+            // Every item that needs the org reports the read error itself.
+        }
+    }
+
+    // Pass 1: BSUID moves first, so a message with the new id finds its chat.
+    await handleUserIdUpdates(run, changes.filter((c) => c.route.route === 'user_id_update').map((c) => c.value));
+
+    // Pass 2: the messages of every routed change, oldest first by Meta's
+    // time (payload order on ties; no time sorts as now).
+    const now = Date.now();
+    const plans = routed
+        .flatMap((change) => {
+            const storeOnly = change.route.route === 'store_only' ? change.route.other : null;
+            return messagesOf(change.value).map((m) => planMessage(m, change.value, storeOnly, now));
+        })
+        .map((plan, position) => ({ plan, position, at: plan.waTs?.getTime() ?? now }))
+        .sort((a, b) => a.at - b.at || a.position - b.position)
+        .map(({ plan }) => plan);
+    outcome.items += plans.length;
+    const stored = await storedKeys(run, plans);
+    for (const plan of plans) await handleMessageItem(run, plan, stored);
+
+    // Pass 3: statuses, one call per change (they only move forward, so
+    // their order does not matter).
+    for (const change of routed) await handleChangeStatuses(run, statusesOf(change.value));
+
+    if (outcome.drain) drainQueue(supabase);
+    return respond(supabase, outcome);
 }

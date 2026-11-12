@@ -14,6 +14,8 @@ export type OpsEventKind =
     | 'webhook_unrouted'
     | 'webhook_unrouted_new'
     | 'webhook_unconfigured'
+    | 'webhook_payload_invalid'
+    | 'webhook_deferred'
     | 'queue_job_failed'
     | 'whatsapp_token_invalid'
     | 'quota_inbound_exceeded'
@@ -72,9 +74,12 @@ export function resetOpsEventThrottle(): void {
 async function writeEvent(client: SupabaseClient, kind: string, orgId: string | null, detail: string, count: number): Promise<void> {
     try {
         const { error } = await client.rpc('record_ops_event', { p_kind: kind, p_org: orgId, p_detail: detail, p_count: count });
-        if (error) console.error('Ops event not recorded', { kind, code: error.code });
+        // The detail (PII-free, redacted) goes to the log: when the cause also
+        // blocks this write (a refused key, a read-only database), the log is
+        // the only place left that names it.
+        if (error) console.error('Ops event not recorded', { kind, code: error.code, detail });
     } catch {
-        console.error('Ops event not recorded', { kind });
+        console.error('Ops event not recorded', { kind, detail });
     }
 }
 
