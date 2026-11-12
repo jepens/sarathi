@@ -1,8 +1,7 @@
 import { NextResponse } from 'next/server';
-import { accessDeniedResponse, isDefaultOrg, requireOrgContext } from '@/lib/settings/org-context';
+import { accessDeniedResponse, requireOrgContext } from '@/lib/settings/org-context';
 import { leadInputSchema } from '@/lib/leads/schema';
 import { createOrFillLead } from '@/lib/leads/create';
-import { isPortalConfigured } from '@/lib/portal/config';
 
 // Lead = whatsapp_chats row enriched with EO/CRM fields.
 // "Leads" is the user-facing name; the backing table is whatsapp_chats because
@@ -11,8 +10,7 @@ import { isPortalConfigured } from '@/lib/portal/config';
 const LEAD_FIELDS =
     'phone_number, contact_name, company, email, event_interest, participant_count, ' +
     'location_pref, event_date_pref, event_goals, budget_range, lead_stage, ' +
-    'assigned_to, source, tags, notes, last_message, last_message_at, updated_at, ' +
-    'portal_client_id, portal_last_proposal_url';
+    'assigned_to, source, tags, notes, last_message, last_message_at, updated_at';
 
 export async function GET(request: Request) {
     const access = await requireOrgContext();
@@ -42,11 +40,7 @@ export async function GET(request: Request) {
         return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    // portalEnabled lets the client gate the "Buat Proposal di Portal" action
-    // without exposing the shared secret (it's derived from server-only env).
-    // The Portal is Sailendra's (D8): only the default org sees the action.
-    const portalEnabled = isPortalConfigured() && (await isDefaultOrg(access.orgId));
-    return NextResponse.json({ leads: data ?? [], portalEnabled });
+    return NextResponse.json({ leads: data ?? [] });
 }
 
 // Create a single lead manually (the "+ Tambah Lead" form). Dedup is

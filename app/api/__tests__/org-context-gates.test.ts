@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Route-level guard for the central org context (KEA-2, KUA-14). Representative
 // API routes and server actions run against the REAL requireOrgContext() with a
@@ -329,26 +329,6 @@ describe('env-integration routes verify the session with the Auth server', () =>
         const res = await leadsGET(new Request('http://localhost/api/leads'));
         expect(res.status).toBe(403); // signed in per JWT, no membership in the stub
         expect(fakeClient.auth.getUser).not.toHaveBeenCalled();
-    });
-});
-
-describe('GET /api/leads: the Portal action is Sailendra-only (D8, D26)', () => {
-    beforeEach(() => {
-        vi.stubEnv('PORTAL_BASE_URL', 'https://portal.contoh.test');
-        vi.stubEnv('PORTAL_INTAKE_TOKEN', 'token-palsu');
-    });
-    afterEach(() => {
-        vi.unstubAllEnvs();
-    });
-
-    it.each([
-        ['the default org sees it', DEFAULT_ORG, true],
-        ['any other org does not', '5a11e024-0002-4000-8000-000000000002', false],
-    ])('%s', async (_label, orgId, enabled) => {
-        h.rows = { organization_members: { single: { org_id: orgId, role: 'owner' } } };
-        const res = await leadsGET(new Request('http://localhost/api/leads'));
-        expect(res.status).toBe(200);
-        expect((await res.json()).portalEnabled).toBe(enabled);
     });
 });
 

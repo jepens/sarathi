@@ -225,10 +225,10 @@ describe('requireEnvIntegration', () => {
 
     it('refuses another tenant with the integration message', async () => {
         state.membership = { org_id: PILOT_ORG, role: 'owner' };
-        await expect(requireEnvIntegration('portal')).resolves.toEqual({
+        await expect(requireEnvIntegration('proposals')).resolves.toEqual({
             ok: false,
             status: 403,
-            error: INTEGRATION_NOT_CONFIGURED_MESSAGE.portal,
+            error: INTEGRATION_NOT_CONFIGURED_MESSAGE.proposals,
         });
     });
 
