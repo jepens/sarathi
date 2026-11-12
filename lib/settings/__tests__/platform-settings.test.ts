@@ -13,7 +13,7 @@ interface Call {
     filters: Array<[string, unknown]>;
 }
 
-type Answer = { data: unknown; error: unknown };
+type Answer = { data: unknown; error: unknown; status?: number };
 
 function fakeClient(answers: Record<string, Answer>) {
     const calls: Call[] = [];
@@ -105,6 +105,21 @@ describe('getDefaultOrgIdStrict (the WhatsApp webhook, Fase 2 task 2.2a)', () =>
         expect(err).toBeInstanceOf(Error);
         expect((err as Error).message).toMatch(/default_org_id could not be read \(57014\)/);
         expect(describeErrorForOps(err)).toBe('database 57014');
+    });
+
+    it("refuses an answer that is not PostgREST's 200: an empty 404 (a wrong URL) comes back from postgrest-js as a 204 without an error", async () => {
+        const { client } = fakeClient({ platform_settings: { data: null, error: null, status: 204 } });
+        const err = await getDefaultOrgIdStrict(client).catch((e: unknown) => e);
+        expect(err).toMatchObject({ name: 'PlatformSettingReadError', status: 204 });
+        // A real "no row" is a 200: the seed org.
+        expect(await getDefaultOrgIdStrict(fakeClient({ platform_settings: { data: null, error: null, status: 200 } }).client)).toBe(SEED);
+    });
+
+    it("keeps the HTTP status of a refused read for the alert's hint (a wrong API key or URL shows here first)", async () => {
+        const { client } = fakeClient({ platform_settings: { data: null, error: { message: 'Invalid API key' }, status: 401 } });
+        const err = await getDefaultOrgIdStrict(client).catch((e: unknown) => e);
+        expect(err).toMatchObject({ name: 'PlatformSettingReadError', status: 401 });
+        expect((err as { code?: unknown }).code).toBeUndefined();
     });
 });
 

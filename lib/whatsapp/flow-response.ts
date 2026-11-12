@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { sendWhatsAppMessage } from '@/lib/whatsapp/client';
 import { resolveSendTarget } from '@/lib/whatsapp/recipient';
 import { logSystemMessage } from '@/lib/whatsapp/history';
+import { sanitizeForPg } from '@/lib/whatsapp/webhook/payload';
 import { whatsappLogger } from '@/lib/utils/logger';
 import { saveLeadInfo, updateLeadStage } from '@/lib/ai/tools';
 import { getBusinessProfile } from '@/lib/settings/business-profile';
@@ -170,20 +171,49 @@ function confirmationMessage(b: BriefAcara): string {
 }
 
 /**
- * Handle one nfm_reply submission end-to-end. Never throws — the webhook must
- * always return 200 to Meta regardless of what fails here.
+ * What handleFlowReply did, for the webhook's answer to Meta:
+ * - 'gate_failed': its own insert of the submission (the redelivery gate)
+ *   failed other than as a duplicate. Only the chat summary upsert ran before
+ *   it (and runs again on the resend); no lead, stage, note or confirmation.
+ *   The webhook answers 503 so Meta's resend does the whole submission once
+ *   (PR-C2).
+ * - 'unreadable': response_json is missing or not a JSON object. Nothing was
+ *   written; the webhook stores a placeholder and alerts, so the submission
+ *   is never dropped silently.
  */
-export async function handleFlowReply(params: HandleFlowReplyParams): Promise<void> {
+export type FlowReplyOutcome =
+    | { status: 'handled' }
+    | { status: 'duplicate' }
+    | { status: 'unreadable' }
+    | { status: 'gate_failed'; error: unknown; httpStatus: number };
+
+/**
+ * Handle one nfm_reply submission end-to-end. Throws only an unexpected error
+ * raised before its gate insert stored the submission: a bug of this code,
+ * which the webhook answers with 503 so that Meta resends the submission
+ * until it is fixed (owner decision D24). Every failure after the gate is
+ * logged (the lead and the confirmation matter more than a clean history), a
+ * failed gate is reported in the result.
+ */
+export async function handleFlowReply(params: HandleFlowReplyParams): Promise<FlowReplyOutcome> {
     const {
         supabase, orgId, phoneNumberId, accessToken,
         contactKey, bsuid, waId, inboundWamid, nfmReply,
     } = params;
+    // Set once the gate insert stored the submission. From then on an error
+    // must not make the webhook answer 503: Meta's resend would be a
+    // duplicate, and the rest of the follow-ups would never run.
+    let gated = false;
 
     try {
-        const data = parseFlowResponse(nfmReply.response_json);
+        // Sanitised after parsing: the answers travel inside response_json as
+        // JSON escapes (\u0000, a lone \udXXX surrogate), which only JSON.parse
+        // turns into the code units Postgres refuses (22P05).
+        const parsed = parseFlowResponse(nfmReply.response_json);
+        const data = parsed ? sanitizeForPg(parsed) : null;
         if (!data) {
-            whatsappLogger.warn(`nfm_reply from ${contactKey} had no parsable response_json — skipping`);
-            return;
+            whatsappLogger.warn('nfm_reply had no parsable response_json — reported as unreadable');
+            return { status: 'unreadable' };
         }
 
         const brief = extractBrief(data);
@@ -213,7 +243,7 @@ export async function handleFlowReply(params: HandleFlowReplyParams): Promise<vo
         // -- 1b. History insert = idempotency gate. Meta redelivers webhooks;
         //        the unique index on wa_message_id turns a duplicate into 23505,
         //        and we stop BEFORE lead writes / confirmation send.
-        const { error: msgError } = await supabase
+        const { error: msgError, status: msgStatus } = await supabase
             .from('whatsapp_messages')
             .insert({
                 org_id: orgId,
@@ -225,12 +255,16 @@ export async function handleFlowReply(params: HandleFlowReplyParams): Promise<vo
         if (msgError) {
             if (msgError.code === '23505') {
                 whatsappLogger.info(`Duplicate flow reply ${inboundWamid} — already processed, skipping`);
-                return;
+                return { status: 'duplicate' };
             }
-            // Non-duplicate failure: log and continue — losing the history row
-            // is bad, but losing the lead + confirmation is worse.
-            whatsappLogger.error('flow-response: history insert failed', msgError);
+            // Any other failure: stop before the lead, the stage, the note and
+            // the confirmation. The webhook answers 503 and Meta's resend does
+            // the whole submission once (part 1 answered 200 whatever happened,
+            // so it went on without the row and a resend could not repeat it).
+            whatsappLogger.error('flow-response: history insert failed — retryable', msgError);
+            return { status: 'gate_failed', error: msgError, httpStatus: msgStatus };
         }
+        gated = true;
 
         // -- 2a. CRM upsert through the same guarded path the AI uses (name
         //        lock, junk filter, company-email guard all apply).
@@ -268,16 +302,25 @@ export async function handleFlowReply(params: HandleFlowReplyParams): Promise<vo
 
         // -- 2b. Advance the pipeline, but never DOWNGRADE: only new/unset
         //        moves to qualifying (a quoted/scheduled/booked lead who re-fills
-        //        the form keeps their stage).
-        const { data: stageRow } = await supabase
+        //        the form keeps their stage). A stage that could not be read is
+        //        not taken for unset: the lead keeps it. protectHumanStages
+        //        makes the write itself refuse a stage the team set meanwhile
+        //        (booked/won/lost, KEA-12).
+        const { data: stageRow, error: stageError } = await supabase
             .from('whatsapp_chats')
             .select('lead_stage')
             .eq('org_id', orgId)
             .eq('phone_number', contactKey)
             .maybeSingle();
-        const currentStage = stageRow?.lead_stage ?? null;
-        if (currentStage === null || currentStage === 'new') {
-            await updateLeadStage(orgId, contactKey, 'qualifying', 'Mengisi form Brief Acara (WhatsApp Flow)');
+        if (stageError) {
+            whatsappLogger.error('flow-response: lead stage could not be read — stage left unchanged', stageError);
+        } else {
+            const currentStage = stageRow?.lead_stage ?? null;
+            if (currentStage === null || currentStage === 'new') {
+                await updateLeadStage(orgId, contactKey, 'qualifying', 'Mengisi form Brief Acara (WhatsApp Flow)', {
+                    protectHumanStages: true,
+                });
+            }
         }
 
         // -- 3. Context for Nindra: the brief becomes a system message in the
@@ -324,6 +367,11 @@ export async function handleFlowReply(params: HandleFlowReplyParams): Promise<vo
 
         whatsappLogger.info(`Flow "Brief Acara" processed for ${contactKey} (${lines.length} field(s))`);
     } catch (error) {
+        // Before the gate the submission itself is not stored (at most the
+        // chat summary is): a bug there goes to the webhook, which answers 503
+        // (D24).
+        if (!gated) throw error;
         whatsappLogger.error('flow-response: unexpected error handling nfm_reply', error);
     }
+    return { status: 'handled' };
 }

@@ -16,11 +16,9 @@ vi.mock('@/lib/quota/org-quota', () => ({ consumeOrgQuota: vi.fn() }));
 
 import {
     processQueue,
-    enqueueMessage,
     getDebounceSeconds,
     HANDOFF_MANUAL_MODE_NOTICE,
     aiQuotaReachedNotice,
-    inboundQueueState,
 } from '@/lib/whatsapp/queue-db';
 import { generateRAGResponse } from '@/lib/ai/rag';
 import { sendWhatsAppMessage } from '@/lib/whatsapp/client';
@@ -135,69 +133,6 @@ describe('getDebounceSeconds', () => {
         expect(getDebounceSeconds()).toBe(0);
         process.env.WHATSAPP_DEBOUNCE_SECONDS = '99999';
         expect(getDebounceSeconds()).toBe(300);
-    });
-});
-
-describe('enqueueMessage (V2 idempotency)', () => {
-    it('inserts with wa_message_id and returns the new id', async () => {
-        const fake = makeFakeSupabase({
-            resolve: () => ({ data: { id: 'job-1' }, error: null }),
-        });
-        const id = await enqueueMessage(ORG, PHONE, 'halo', fake.client, 'wamid.in.1');
-        expect(id).toBe('job-1');
-        const insert = fake.calls.find((c) => c.table === 'message_queue' && c.op === 'insert');
-        expect(insert).toBeTruthy();
-        expect((insert!.payload as Record<string, unknown>).wa_message_id).toBe('wamid.in.1');
-    });
-
-    it('returns null on a duplicate webhook (23505) instead of throwing', async () => {
-        const fake = makeFakeSupabase({
-            resolve: () => ({ error: { code: '23505', message: 'duplicate key' } }),
-        });
-        const id = await enqueueMessage(ORG, PHONE, 'halo', fake.client, 'wamid.in.dup');
-        expect(id).toBeNull();
-    });
-
-    it('rethrows on a non-duplicate error', async () => {
-        const fake = makeFakeSupabase({
-            resolve: () => ({ error: { code: '23502', message: 'not null violation' } }),
-        });
-        await expect(enqueueMessage(ORG, PHONE, 'halo', fake.client, 'wamid.in.2')).rejects.toBeTruthy();
-    });
-});
-
-describe('inboundQueueState (what the org inbound quota does not count, tracker 3.4)', () => {
-    const W = 'wamid.in.q1';
-    function fakeQueue(rows: { queued?: boolean; stored?: boolean; pending?: boolean; fail?: boolean }) {
-        return makeFakeSupabase({
-            resolve: (c) => {
-                if (rows.fail) return { data: null, error: { code: '57014' } };
-                const byWamid = c.filters.some(([op, col]) => op === 'eq' && col === 'wa_message_id');
-                const byPending = c.filters.some(([op, col, v]) => op === 'eq' && col === 'status' && v === 'pending');
-                if (byWamid && c.table === 'message_queue') return { data: rows.queued ? [{ id: 'j1' }] : [], error: null };
-                if (byWamid && c.table === 'whatsapp_messages') return { data: rows.stored ? [{ id: 'm1' }] : [], error: null };
-                if (byPending) return { data: rows.pending ? [{ id: 'j2' }] : [], error: null };
-                return { data: [], error: null };
-            },
-        });
-    }
-
-    it('spots a redelivery (queued, or only stored: refused or manual mode) and a burst still waiting, all scoped to the org', async () => {
-        const f = fakeQueue({ queued: true, pending: true });
-        expect(await inboundQueueState(f.client, ORG, PHONE, W)).toEqual({ duplicate: true, joinsBurst: true });
-        for (const c of f.calls) expect(c.filters).toContainEqual(['eq', 'org_id', ORG]);
-        expect(f.calls.find((c) => c.filters.some(([, col]) => col === 'status'))!.filters).toContainEqual(['eq', 'phone_number', PHONE]);
-        const storedOnly = fakeQueue({ stored: true });
-        expect(await inboundQueueState(storedOnly.client, ORG, PHONE, W)).toEqual({ duplicate: true, joinsBurst: false });
-        expect(storedOnly.calls.find((c) => c.table === 'whatsapp_messages')!.filters).toContainEqual(['eq', 'role', 'user']);
-        expect(await inboundQueueState(fakeQueue({}).client, ORG, PHONE, W)).toEqual({ duplicate: false, joinsBurst: false });
-    });
-
-    it('without a wamid only the waiting burst is checked; a read error counts the message', async () => {
-        const f = fakeQueue({ pending: true });
-        expect(await inboundQueueState(f.client, ORG, PHONE, null)).toEqual({ duplicate: false, joinsBurst: true });
-        expect(f.calls).toHaveLength(1);
-        expect(await inboundQueueState(fakeQueue({ fail: true }).client, ORG, PHONE, W)).toEqual({ duplicate: false, joinsBurst: false });
     });
 });
 
@@ -628,6 +563,30 @@ describe('processQueue — history around the burst (tracker 3.4)', () => {
         const select = fake.calls.find((c) => c.table === 'whatsapp_messages' && c.op === 'select')!;
         expect(select.select).toContain('metadata');
         // Left out in the query too, so they do not take the 30 places.
+        expect(select.filters).toContainEqual(['is', 'metadata->>other_number', null]);
+    });
+
+    it('leaves out the placeholder of a message the webhook could not process (metadata.unprocessable)', async () => {
+        const fake = clientFor({
+            jobs: [job('j1', 'jadi bisa?', '2026-06-20T10:05:00.000Z', { wamid: 'wamid.b1' })],
+            history: [
+                { role: 'assistant', content: 'jawaban lama', wa_message_id: 'wamid.o1' },
+                {
+                    role: 'user',
+                    content: 'Pesan jenis "text" tidak bisa diproses otomatis (isinya tidak ditampilkan di Sarathi)',
+                    wa_message_id: 'wamid.x1',
+                    metadata: { unprocessable: 'text' },
+                },
+                { role: 'user', content: 'jadi bisa?', wa_message_id: 'wamid.b1', metadata: {} },
+            ],
+        });
+        await processQueue(fake.client);
+        const [message, history] = ragMock.mock.calls[0];
+        expect(message).toBe('jadi bisa?');
+        expect(history).toEqual([{ role: 'assistant', content: 'jawaban lama' }]);
+        // Left out in the query too, so they do not take the 30 places.
+        const select = fake.calls.find((c) => c.table === 'whatsapp_messages' && c.op === 'select')!;
+        expect(select.filters).toContainEqual(['is', 'metadata->>unprocessable', null]);
         expect(select.filters).toContainEqual(['is', 'metadata->>other_number', null]);
     });
 

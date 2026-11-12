@@ -72,8 +72,10 @@ export async function GET(request: Request) {
         // Prune old completed/failed queue rows (and stale rate-limit rows) so
         // the table and the wamid idempotency indexes don't grow unbounded.
         // Guarded to ~once/hour (this endpoint runs every minute); never let it
-        // break the queue. Retention is 24h, safely beyond Meta's redelivery
-        // horizon, so pruning can't reopen the dedup window.
+        // break the queue. Pruning cannot reopen the dedup window: since 0072
+        // the webhook's redelivery gate is the stored message row
+        // (wa_ingest_inbound), which is never pruned; the queue's own wamid
+        // index only backs it up.
         if (new Date().getMinutes() === 0) {
             try {
                 await supabase.rpc('cleanup_old_queue_entries');

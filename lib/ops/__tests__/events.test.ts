@@ -61,6 +61,25 @@ describe('recordOpsEvent', () => {
         await expect(recordOpsEvent(throwing.client as any, 'webhook_error')).resolves.toBeUndefined();
     });
 
+    it('logs the kind, the code and the redacted detail when the event cannot be recorded (the log is then the only trace)', async () => {
+        const failing = fakeClient(() => ({ error: { code: '25006' } }));
+        const throwing = fakeClient(() => {
+            throw new Error('network');
+        });
+        const detail = 'database 25006 — database hanya-baca, disk penuh? ke 628123456789';
+        vi.mocked(console.error).mockClear();
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await recordOpsEvent(failing.client as any, 'webhook_error', { detail });
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await recordOpsEvent(throwing.client as any, 'webhook_deferred', { detail });
+        const logged = vi.mocked(console.error).mock.calls.filter((c) => c[0] === 'Ops event not recorded').map((c) => c[1]);
+        expect(logged).toEqual([
+            { kind: 'webhook_error', code: '25006', detail: expect.stringContaining('database 25006 — database hanya-baca') },
+            { kind: 'webhook_deferred', detail: expect.stringContaining('database 25006 — database hanya-baca') },
+        ]);
+        expect(JSON.stringify(logged)).not.toContain('628123456789');
+    });
+
     it("records a burst's held-back tail when its window ends, once", async () => {
         vi.useFakeTimers();
         const f = fakeClient(() => ({ error: null }));

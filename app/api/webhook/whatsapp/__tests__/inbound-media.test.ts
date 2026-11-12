@@ -79,15 +79,13 @@ vi.mock('@/lib/whatsapp/client', () => ({
     sendWhatsAppMessage: vi.fn(),
 }));
 vi.mock('@/lib/notifications/web-push', () => ({ sendPushToOrg: h.sendPushToOrg }));
-vi.mock('@/lib/whatsapp/rate-limiter-db', () => ({ checkRateLimit: vi.fn(async () => true) }));
 vi.mock('@/lib/whatsapp/queue-db', () => ({
-    enqueueMessage: vi.fn(),
     processQueue: vi.fn(async () => {}),
     getDebounceSeconds: () => 0,
 }));
 vi.mock('@/lib/whatsapp/recipient', () => ({ resolveSendTarget: vi.fn() }));
 vi.mock('@/lib/whatsapp/history', () => ({ logSystemMessage: vi.fn() }));
-vi.mock('@/lib/whatsapp/flow-response', () => ({ handleFlowReply: vi.fn() }));
+vi.mock('@/lib/whatsapp/flow-response', () => ({ handleFlowReply: vi.fn(async () => ({ status: 'handled' })) }));
 vi.mock('@/lib/settings/app-settings', () => ({ checkVerifyToken: vi.fn() }));
 vi.mock('@/lib/utils/logger', () => {
     const record = (...args: unknown[]) => void h.logs.push(args);

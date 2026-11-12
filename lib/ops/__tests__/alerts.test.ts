@@ -97,7 +97,7 @@ describe('maybeSendOpsAlerts', () => {
         expect(await run()).toEqual({ sent: false, kinds: [] });
         expect(h.send).not.toHaveBeenCalled();
         expect(fns()).toEqual(['claim_ops_alerts']);
-        expect(fake.rpcCalls[0].args).toEqual({ p_cooldown_seconds: 3600, p_daily_kinds: ['webhook_unrouted'] });
+        expect(fake.rpcCalls[0].args).toEqual({ p_cooldown_seconds: 3600, p_daily_kinds: ['webhook_unrouted', 'webhook_deferred'] });
     });
 
     it('emails every claimed group once, then marks the events sent with the claim stamp', async () => {
@@ -131,6 +131,22 @@ describe('maybeSendOpsAlerts', () => {
         );
         expect(text).toContain('pertama kali dalam 7 hari');
         expect(text).toContain('paling cepat 1 jam lagi (1 hari lagi untuk: Webhook untuk nomor lain di WABA (bukan nomor org ini)). ');
+    });
+
+    it('a webhook batch deferred under load is emailed once a day; a message that could not be processed within the hour', () => {
+        // webhook_deferred: Meta sends the batch again, so it only matters when it keeps happening.
+        expect(DAILY_ALERT_KINDS).toContain('webhook_deferred');
+        expect(DAILY_ALERT_KINDS).not.toContain('webhook_payload_invalid');
+        expect(DAILY_ALERT_KINDS).not.toContain('webhook_error');
+        const { text } = buildOpsAlertEmail(
+            [group('webhook_payload_invalid', 1), group('webhook_deferred', 2), group('webhook_error', 3)],
+            new Map(),
+            NOW,
+        );
+        expect(text).toContain('Event WhatsApp tidak bisa diproses: pesan disimpan sebagai pengganti tanpa isi atau dilewati; status/pembaruan dilewati: 1 kejadian');
+        expect(text).toContain('Webhook WhatsApp menunda event karena batas waktu 8 detik (503, Meta mengirim ulang; bila sering: database lambat): 2 kejadian');
+        // A failing webhook answers 503 now (500 only for a bug): Meta sends again.
+        expect(text).toContain('Webhook WhatsApp gagal diproses (503/500, Meta mengirim ulang): 3 kejadian');
     });
 
     it('the footer names the kinds that wait a day before the next email', () => {

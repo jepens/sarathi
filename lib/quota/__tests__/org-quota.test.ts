@@ -18,6 +18,7 @@ import {
     firstInboundRefusalNote,
     inboundQuotaNotice,
     QUOTA_DEFAULTS,
+    recordInboundQuotaAlerts,
     warnThreshold,
 } from '@/lib/quota/org-quota';
 
@@ -124,6 +125,36 @@ describe('consumeOrgQuota', () => {
         expect((await consumeOrgQuota(thrown.client, ORG, 'inbound_minute')).allowed).toBe(true);
         expect((await consumeOrgQuota(client({ data: [], error: null }).client, ORG, 'inbound_minute')).allowed).toBe(true);
         expect(h.record.mock.calls.map((c) => c[2].detail)).toEqual(['inbound_minute: TypeError', 'inbound_minute: Error']);
+    });
+});
+
+describe('recordInboundQuotaAlerts (the minute quota counted inside wa_ingest_inbound, 0072)', () => {
+    it("alerts the first refusal with the org's own limit, in consumeOrgQuota's words", async () => {
+        await recordInboundQuotaAlerts(client({}).client, ORG, { limit: 12, firstRefusal: true, error: null });
+        expect(h.record.mock.calls).toEqual([
+            [expect.anything(), 'quota_inbound_exceeded', { orgId: ORG, detail: 'batas 12 percakapan AI baru per menit tercapai' }],
+        ]);
+        // The same text as a refusal reported by consumeOrgQuota.
+        h.record.mockClear();
+        await consumeOrgQuota(client({ data: row(false, 12, 1, 12, true) }).client, ORG, 'inbound_minute');
+        expect(h.record.mock.calls[0][2]).toEqual({ orgId: ORG, detail: 'batas 12 percakapan AI baru per menit tercapai' });
+    });
+
+    it('alerts a counter failure (the message was let through) with its SQLSTATE only', async () => {
+        await recordInboundQuotaAlerts(client({}).client, ORG, { limit: null, firstRefusal: false, error: '57014' });
+        expect(h.record.mock.calls).toEqual([
+            [expect.anything(), 'quota_check_failed', { orgId: ORG, detail: 'inbound_minute: 57014' }],
+        ]);
+    });
+
+    it('a later refusal of the window, or an allowed message, alerts nothing', async () => {
+        await recordInboundQuotaAlerts(client({}).client, ORG, { limit: 30, firstRefusal: false, error: null });
+        expect(h.record).not.toHaveBeenCalled();
+    });
+
+    it('falls back to the default limit when the refusal carries none', async () => {
+        await recordInboundQuotaAlerts(client({}).client, ORG, { limit: null, firstRefusal: true, error: null });
+        expect(h.record.mock.calls[0][2]).toEqual({ orgId: ORG, detail: `batas ${QUOTA_DEFAULTS.inbound_minute} percakapan AI baru per menit tercapai` });
     });
 });
 
