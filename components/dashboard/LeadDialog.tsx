@@ -320,7 +320,7 @@ export function LeadDialog({ open, onOpenChange, onSuccess, leadToEdit }: LeadDi
                             id="company"
                             value={form.company}
                             onChange={(e) => set('company', e.target.value)}
-                            placeholder="PT Astra, Kemenkeu, dll."
+                            placeholder="mis. PT Maju Bersama, Dinas Pendidikan"
                         />
                     </div>
 

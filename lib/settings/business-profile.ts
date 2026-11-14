@@ -2,10 +2,11 @@ import { SupabaseClient } from '@supabase/supabase-js';
 
 // Sarathi is a vertical SaaS for Event Organizers. A tenant's identity — company
 // name, the WhatsApp persona's name, specialties, hand-off contact, etc. — used
-// to be hardcoded as "Sailendra / Nindra" across the AI + proposal code, then
-// lived as one GLOBAL profile in app_settings. It now lives per-org in the
-// dedicated `business_profiles` table (migration 0039): one row per org, RLS-
-// isolated. Every caller passes the org so each tenant's bot speaks as itself.
+// to be hardcoded across the AI + proposal code, then lived as one GLOBAL
+// profile in app_settings. It now lives per-org in the dedicated
+// `business_profiles` table (migration 0039): one row per org, RLS-isolated.
+// Every caller passes the org so each tenant's bot speaks as itself. The
+// default org's values are its own row (seeded by 0039), not a code constant.
 
 export interface BusinessProfile {
     businessName: string;
@@ -18,22 +19,6 @@ export interface BusinessProfile {
     businessEmail: string;
     website: string;
 }
-
-// Sailendra's real values. Kept as a named reference (it seeds Sailendra's
-// business_profiles row in migration 0039) — NOT used as a fallback, so a fresh
-// tenant never inherits Sailendra's identity.
-export const DEFAULT_BUSINESS_PROFILE: BusinessProfile = {
-    businessName: 'Sailendra Organizer',
-    assistantName: 'Nindra',
-    specialties: 'Team Building, Capacity Building, dan Company Gathering',
-    establishedYear: '2016',
-    serviceAreas:
-        'Jabodetabek, Bandung, Jogja, Bali, kota lain di Indonesia, dan internasional atas permintaan',
-    handoffName: 'MJ (Mang Jajang)',
-    handoffPhone: '+62 812-8195-8110',
-    businessEmail: 'info@sailendra.co.id',
-    website: 'sailendra.co.id',
-};
 
 // Neutral fallback for an org that hasn't filled in its profile yet (or any
 // field left blank). Deliberately brand-less so an unconfigured tenant's bot

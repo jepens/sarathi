@@ -158,7 +158,7 @@ export function buildTools(p: BusinessProfile): ChatCompletionTool[] {
                     },
                     company: {
                         type: ['string', 'null'],
-                        description: 'Instansi/perusahaan/organisasi lead (mis. "PT Astra", "Kemenkeu", "Universitas Indonesia"). Untuk acara korporat/instansi. Pass null jika perorangan atau belum disebut.',
+                        description: 'Instansi/perusahaan/organisasi lead (mis. "PT Maju Bersama", "Dinas Pendidikan", "Universitas X"). Untuk acara korporat/instansi. Pass null jika perorangan atau belum disebut.',
                     },
                     email: {
                         type: ['string', 'null'],
@@ -199,7 +199,7 @@ export function buildTools(p: BusinessProfile): ChatCompletionTool[] {
                     contact_type: {
                         type: ['string', 'null'],
                         description:
-                            'Who is this contact? DEFAULT IS "lead". Anyone asking about, planning, pricing, or booking an event for themselves/their company is a "lead" (a CLIENT) — even if they mention vendors or budgets. Only use "vendor" when the person is clearly SELLING/OFFERING their OWN goods or services TO Sailendra (e.g. "saya supplier catering, mau menawarkan paket", a sales rep pitching transport/souvenirs/partnership). "other" = clearly neither (spam, wrong number). If there is ANY doubt between lead and vendor, choose "lead". Pass null if you truly cannot tell yet — do NOT guess "vendor".',
+                            `Who is this contact? DEFAULT IS "lead". Anyone asking about, planning, pricing, or booking an event for themselves/their company is a "lead" (a CLIENT) — even if they mention vendors or budgets. Only use "vendor" when the person is clearly SELLING/OFFERING their OWN goods or services TO ${p.businessName} (e.g. "saya supplier catering, mau menawarkan paket", a sales rep pitching transport/souvenirs/partnership). "other" = clearly neither (spam, wrong number). If there is ANY doubt between lead and vendor, choose "lead". Pass null if you truly cannot tell yet — do NOT guess "vendor".`,
                     },
                     vendor_category: {
                         type: ['string', 'null'],

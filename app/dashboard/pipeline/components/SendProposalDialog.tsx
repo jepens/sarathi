@@ -31,6 +31,8 @@ interface SendProposalDialogProps {
     budgetRange: string | null;
     notes: string | null;
     source: string | null;
+    /** The org's business name (business profile), for the suggested intro. */
+    businessName: string;
     onSent: () => void;
 }
 
@@ -62,6 +64,7 @@ export function SendProposalDialog({
     budgetRange,
     notes,
     source,
+    businessName,
     onSent,
 }: SendProposalDialogProps) {
     const suggested = buildSuggestedIntro({
@@ -69,6 +72,7 @@ export function SendProposalDialog({
         eventInterest,
         participantCount,
         locationPref,
+        businessName,
     });
     const [introNote, setIntroNote] = useState(suggested);
     const [uploaded, setUploaded] = useState<UploadedProposal | null>(null);
@@ -504,11 +508,13 @@ function buildSuggestedIntro({
     eventInterest,
     participantCount,
     locationPref,
+    businessName,
 }: {
     contactName: string | null;
     eventInterest: string | null;
     participantCount: number | null;
     locationPref: string | null;
+    businessName: string;
 }): string {
     const name = contactName ?? 'kak';
     const interest = eventInterest?.trim();
@@ -522,7 +528,7 @@ function buildSuggestedIntro({
         return `Halo ${name}, berikut penawaran awal untuk ${interest} dengan ${pax} peserta sesuai obrolan kita kemarin.`;
     }
     if (interest) {
-        return `Halo ${name}, berikut penawaran awal untuk acara ${interest} dari Sailendra Organizer.`;
+        return `Halo ${name}, berikut penawaran awal untuk acara ${interest} dari ${businessName}.`;
     }
     return '';
 }

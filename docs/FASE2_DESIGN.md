@@ -781,6 +781,15 @@ The non-WhatsApp parts of the same flows (Zoom, invite email, Portal, proposal e
 
 The proposal email, order notifications and the digest were already default-org only. The `org_features` table below is deferred to Fase 4, when a feature is first opened to a tenant (D8).
 
+**As built (2026-11-14, F10: neutral identity).** What every org can pick or receive no longer carries Sailendra's identity:
+- the persona presets (Settings > System Message) are built from the org's business profile (`lib/ai/persona-presets.ts`); client names, prices, venues and capacity come from the org's Knowledge Base. They follow D4 (honest when asked);
+- the Knowledge Base templates hold `[ISI: ...]` placeholders instead of Sailendra's name, year, areas and clients;
+- the fallback persona (`buildSystemMessage`) and the presets offer an online meeting only when the org can book one (`meetings`, the default org per D26). Otherwise they offer a follow-up with the hand-off contact and promise no meeting or calendar invite. The default org's persona text is unchanged;
+- the Brief Acara confirmation, the Pipeline hand-off action (label and `assigned_to`), the proposal intro, the lead-field examples and the profile placeholders use the org's own profile or neutral examples;
+- the unused `DEFAULT_BUSINESS_PROFILE` constant is gone (the default org's values are its own row, seeded by 0039).
+
+Inside the default-org-only features (proposal email/PDF, meeting invites) Sailendra's identity stays, as D26 allows. They switch to profile fields when a feature opens to a tenant (Fase 4). The "by Sailendra" credit in the dashboard is D10 (Fase 4).
+
 - **Storage:** `org_features(org_id, feature, enabled)`. A missing row means OFF.
 - **Features:**
   - `meeting_tools`: the AI tools check_meeting_availability and schedule_meeting, plus the prompt section about meetings;

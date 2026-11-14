@@ -161,12 +161,15 @@ function briefSummaryLines(b: BriefAcara): string[] {
     return lines;
 }
 
-function confirmationMessage(b: BriefAcara): string {
+// The confirmation speaks as the receiving org (its business profile), never
+// as another business (F10).
+function confirmationMessage(b: BriefAcara, businessName: string | undefined): string {
     const sapaan = b.namaPic ? `Terima kasih, ${b.namaPic}!` : 'Terima kasih!';
     const acara = b.jenisLabel ? ` untuk ${b.jenisLabel}` : '';
+    const tim = businessName?.trim() ? `Tim ${businessName.trim()}` : 'Tim kami';
     return (
         `${sapaan} Brief acara${acara} sudah kami terima. ` +
-        'Tim Sailendra akan menyiapkan penawarannya dan segera menghubungi Anda. ' +
+        `${tim} akan menyiapkan penawarannya dan segera menghubungi Anda. ` +
         'Sambil menunggu, silakan tanyakan apa saja soal paket, venue, atau aktivitas — saya siap bantu.'
     );
 }
@@ -342,10 +345,10 @@ export async function handleFlowReply(params: HandleFlowReplyParams): Promise<Fl
                 : '')
         );
 
-        // -- 4. Deterministic confirmation (no AI round-trip; Nindra takes over
-        //       naturally on the customer's next free-text message).
+        // -- 4. Deterministic confirmation (no AI round-trip; the assistant
+        //       takes over naturally on the customer's next free-text message).
         try {
-            const confirmText = confirmationMessage(brief);
+            const confirmText = confirmationMessage(brief, profile?.businessName);
             // Send to the resolved target (recovered phone if known, else the
             // key/BSUID), not the raw inbound `from`.
             const target = await resolveSendTarget(supabase, orgId, contactKey);
