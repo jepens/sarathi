@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { downloadWhatsAppMedia } from '@/lib/whatsapp/client';
+import type { WaCreds } from '@/lib/whatsapp/wa-creds';
 import { whatsappLogger } from '@/lib/utils/logger';
 import { logSystemMessage } from '@/lib/whatsapp/history';
 import { sendPushToOrg } from '@/lib/notifications/web-push';
@@ -48,7 +49,8 @@ export function inboundMediaSummary(kind: InboundMediaKind, filename: string | n
 interface InboundMediaParams {
     supabase: SupabaseClient;
     orgId: string;
-    creds: { phoneNumberId: string; accessToken: string };
+    /** The receiving number's credentials (the download needs its token). */
+    creds: WaCreds;
     contactKey: string;
     bsuid: string | null;
     waId: string | null;
@@ -88,7 +90,7 @@ export async function handleInboundMedia(params: InboundMediaParams): Promise<vo
         }
 
         // Pull the bytes from Meta (2-step download).
-        const media = await downloadWhatsAppMedia(mediaId, creds);
+        const media = await downloadWhatsAppMedia(creds, mediaId);
         const mime = media.mime;
 
         // Best-effort copy into the private chat-media bucket so the dashboard can
@@ -227,7 +229,7 @@ export async function handleMediaMessage(ctx: MessageContext): Promise<ItemResul
         handleInboundMedia({
             supabase,
             orgId: waCtx.orgId,
-            creds: { phoneNumberId: waCtx.phoneNumberId, accessToken: waCtx.accessToken },
+            creds: waCtx,
             contactKey,
             bsuid: identity.bsuid,
             waId: identity.waId,

@@ -5,8 +5,9 @@ import ts from 'typescript';
 
 // Structural guard (KUA-14): EVERY exported user-facing API route handler must
 // go through the central org context — requireOrgContext(),
-// requireEnvIntegration() or (session-only) requireUserContext() — before the
-// body is parsed, data is touched or an external call is made. A new handler
+// requireEnvIntegration(), requireWhatsAppIntegration() (lib/whatsapp/
+// integration.ts) or (session-only) requireUserContext() — before the body is
+// parsed, data is touched or an external call is made. A new handler
 // that forgets the gate (or moves it below other work) fails here.
 //
 // The check parses each route with the TypeScript compiler API and inspects
@@ -25,10 +26,11 @@ import ts from 'typescript';
 //     are ignored.
 //
 // Handlers with EXTERNAL side effects through the env (default-org)
-// credentials must verify the session with the Auth server (revocation, F1-B
-// item 3): ENV_INTEGRATION pins the exact gate per handler — including the
-// server actions that do the same — so switching one back to the plain
-// requireOrgContext() cannot reopen the gap silently.
+// credentials, or through the org's WhatsApp credentials, must verify the
+// session with the Auth server (revocation, F1-B item 3): ENV_INTEGRATION pins
+// the exact gate per handler — including the server actions that do the same
+// — so switching one back to the plain requireOrgContext() cannot reopen the
+// gap silently.
 //
 // Routes with their OWN authentication are exempt:
 //   - webhook/whatsapp — Meta signature (X-Hub-Signature-256);
@@ -38,7 +40,7 @@ import ts from 'typescript';
 const API_DIR = join(process.cwd(), 'app', 'api');
 const EXEMPT = new Set(['webhook/whatsapp/route.ts', 'queue/process/route.ts']);
 const METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS']);
-const GATES = new Set(['requireOrgContext', 'requireUserContext', 'requireEnvIntegration']);
+const GATES = new Set(['requireOrgContext', 'requireUserContext', 'requireEnvIntegration', 'requireWhatsAppIntegration']);
 
 function routeFiles(dir: string): string[] {
     return readdirSync(dir).flatMap((name) => {
@@ -217,26 +219,28 @@ const handlerCases = files.flatMap((rel) => findHandlers(parse(rel)).map((h) => 
 
 // Env-credential side effects → the exact gate each one must use. `file` is
 // relative to the repo root; `name` is the HTTP method or server-action export.
-const WA = ["'whatsapp'"];
+// WhatsApp sends gate on requireWhatsAppIntegration() (strict session, then the
+// org's own credentials; Fase 2 task 2.2b).
+const WA: string[] = [];
 // Server actions validate their arguments synchronously first (`syncPrelude`).
 const ENV_INTEGRATION: Record<
     string,
     { file: string; name: string; gate: string; args: string[]; syncPrelude?: boolean }
 > = {
-    'POST /api/chat/send': { file: 'app/api/chat/send/route.ts', name: 'POST', gate: 'requireEnvIntegration', args: WA },
+    'POST /api/chat/send': { file: 'app/api/chat/send/route.ts', name: 'POST', gate: 'requireWhatsAppIntegration', args: WA },
     'POST /api/chat/send-media': {
         file: 'app/api/chat/send-media/route.ts',
         name: 'POST',
-        gate: 'requireEnvIntegration',
+        gate: 'requireWhatsAppIntegration',
         args: WA,
     },
     'POST /api/chat/send-template': {
         file: 'app/api/chat/send-template/route.ts',
         name: 'POST',
-        gate: 'requireEnvIntegration',
+        gate: 'requireWhatsAppIntegration',
         args: WA,
     },
-    'GET /api/chat/templates': { file: 'app/api/chat/templates/route.ts', name: 'GET', gate: 'requireEnvIntegration', args: WA },
+    'GET /api/chat/templates': { file: 'app/api/chat/templates/route.ts', name: 'GET', gate: 'requireWhatsAppIntegration', args: WA },
     'GET /api/meetings/zoom-check': {
         file: 'app/api/meetings/zoom-check/route.ts',
         name: 'GET',
@@ -268,8 +272,9 @@ const ENV_INTEGRATION: Record<
         gate: 'requireEnvIntegration',
         args: ["'proposals'"],
     },
-    // Sends customer WhatsApp (env number) on paid / cancelled. The status
-    // change itself is tenant data, so it gates on the strict org context.
+    // Sends customer WhatsApp (the org's own number) on paid / cancelled. The
+    // status change itself is tenant data, so it gates on the strict org
+    // context and resolves the credentials only for the notification.
     'action updateOrderStatus': {
         file: 'app/dashboard/orders/actions.ts',
         name: 'updateOrderStatus',
@@ -310,10 +315,10 @@ describe('env-integration side effects use the strict gate', () => {
         expect({ gate: result.gate, args: result.args }).toEqual({ gate, args });
     });
 
-    it('every API route that uses requireEnvIntegration is pinned above', () => {
+    it('every API route that uses requireEnvIntegration or requireWhatsAppIntegration is pinned above', () => {
         const pinned = new Set(cases.map((c) => c.file));
         const unpinned = files
-            .filter((rel) => parse(rel).text.includes('requireEnvIntegration('))
+            .filter((rel) => /require(Env|WhatsApp)Integration\(/.test(parse(rel).text))
             .map((rel) => `app/api/${rel}`)
             .filter((file) => !pinned.has(file));
         expect(unpinned).toEqual([]);

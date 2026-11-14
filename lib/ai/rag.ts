@@ -280,18 +280,18 @@ export interface RAGStreamOpts {
      */
     signal?: AbortSignal;
     /**
-     * Org whose Knowledge Base + products to retrieve. Fase 1: omit → the single
-     * default org. Fase 2: the webhook passes the org resolved from the receiving
-     * WhatsApp number, isolating each tenant's retrieval.
+     * Org whose Knowledge Base + products to retrieve, and whose persona the
+     * bot speaks as: the queue passes the conversation's org, the web chat the
+     * caller's. Required (Fase 2 task 2.2b): no fallback to the default org.
      */
-    orgId?: string;
+    orgId: string;
 }
 
 export async function generateRAGResponse(
     message: string,
     history: ChatMessage[] = [],
-    phoneNumber?: string,
-    opts?: RAGStreamOpts
+    phoneNumber: string | undefined,
+    opts: RAGStreamOpts
 ): Promise<RAGResponse> {
     try {
         // 1. Generate embedding for the user's message
@@ -306,9 +306,8 @@ export async function generateRAGResponse(
         const supabase = await createServiceOrServerClient();
 
         // Scope retrieval to the message's org so a tenant's AI can never pull
-        // another tenant's Knowledge Base/products. Fase 1: the single default
-        // org; Fase 2: opts.orgId resolved from the receiving WhatsApp number.
-        const orgId = opts?.orgId ?? (await getDefaultOrgId(supabase));
+        // another tenant's Knowledge Base/products.
+        const orgId = opts.orgId;
 
         // The tenant's identity (persona name, hand-off contact, company email)
         // drives the system prompt, the tool descriptions, and the lead guards —

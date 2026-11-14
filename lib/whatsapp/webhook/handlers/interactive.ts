@@ -38,8 +38,7 @@ export async function handleInteractiveMessage(ctx: MessageContext): Promise<Ite
     const result = await handleFlowReply({
         supabase,
         orgId: waCtx.orgId,
-        phoneNumberId: waCtx.phoneNumberId,
-        accessToken: waCtx.accessToken,
+        creds: waCtx,
         contactKey,
         bsuid: identity.bsuid,
         waId: identity.waId,

@@ -97,7 +97,7 @@ beforeEach(() => {
     run = {
         supabase: fake.client,
         outcome,
-        org: async () => ({ orgId: ORG, phoneNumberId: PNID, accessToken: 'token-palsu', appSecret: 'rahasia-palsu' }),
+        org: async () => ({ orgId: ORG, integrationId: null, phoneNumberId: PNID, wabaId: null, accessToken: 'token-palsu', graphVersion: 'v25.0' }),
         requestDrain: () => {},
         heldBsuids: new Set<string>(),
     };

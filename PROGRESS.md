@@ -919,7 +919,7 @@ const history = (historyData || []).reverse().map(msg => ({
 }));
 
 // Generate AI response with conversation history
-const aiResponse = await generateRAGResponse(job.message_text, history, job.phone_number);
+const aiResponse = await generateRAGResponse(job.message_text, history, job.phone_number, { orgId: job.org_id });
 ```
 
 **Benefits**:

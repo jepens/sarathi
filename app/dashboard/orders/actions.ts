@@ -8,7 +8,9 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { reduceStock, returnStock } from '@/lib/inventory/stock';
 import { sendPaymentNotification, sendCancellationNotification } from '@/lib/notifications/notifications';
-import { isDefaultOrg, requireOrgContext } from '@/lib/settings/org-context';
+import { requireOrgContext } from '@/lib/settings/org-context';
+import { getOrgWhatsAppCreds, WhatsAppNotConfiguredError, type WaCreds } from '@/lib/whatsapp/credentials';
+import { resolveSendTarget } from '@/lib/whatsapp/recipient';
 import { isBookingStatus, planStatusSideEffects } from '@/lib/bookings/status-effects';
 import { createOrFillLead } from '@/lib/leads/create';
 import { normalizePhone } from '@/lib/leads/schema';
@@ -42,6 +44,23 @@ const STATUS_ORDER_SELECT =
     'id, status, customer_name, customer_phone, items, total_amount, delivery_info, order_type';
 
 /**
+ * The credentials of the org's own WhatsApp number for a customer
+ * notification, or null: an org without one (WhatsAppNotConfiguredError) or
+ * credentials that cannot be read right now (logged) send nothing. The status
+ * change itself has already succeeded.
+ */
+async function orderNotifyCreds(orgId: string): Promise<WaCreds | null> {
+    try {
+        return await getOrgWhatsAppCreds(orgId);
+    } catch (error) {
+        if (!(error instanceof WhatsAppNotConfiguredError)) {
+            console.error('Order notification skipped: WhatsApp credentials could not be read', error);
+        }
+        return null;
+    }
+}
+
+/**
  * Change an order's status and run the transition's side effects (stock +
  * customer WhatsApp). Hardened (KEA-19):
  *   - requires a signed-in org member;
@@ -51,7 +70,8 @@ const STATUS_ORDER_SELECT =
  *   - compare-and-set on the status it read, and side effects run only when
  *     that update really changed a row (no phantom notifications for a
  *     foreign/unknown id, and no double send on concurrent clicks);
- *   - WhatsApp notifications only for the default org (env credentials).
+ *   - WhatsApp notifications only from the org's own number (Fase 2 task
+ *     2.2b; today the default org's env credentials).
  */
 export async function updateOrderStatus(
     orderId: string,
@@ -66,9 +86,9 @@ export async function updateOrderStatus(
         }
 
         // Strict session check (Auth-server round trip, not the local JWT
-        // check): a status change can send customer WhatsApp messages through
-        // the env credentials, so a signed-out / banned user must be refused
-        // before their JWT expires — same rule as requireEnvIntegration.
+        // check): a status change can send customer WhatsApp messages from
+        // the org's number, so a signed-out / banned user must be refused
+        // before their JWT expires — same rule as requireWhatsAppIntegration.
         const access = await requireOrgContext({ strict: true });
         if (!access.ok) return { success: false, message: access.error };
         const { supabase, orgId } = access;
@@ -141,22 +161,25 @@ export async function updateOrderStatus(
             message = 'Pesanan dibatalkan';
         }
 
-        // Customer WhatsApp goes out through the env (default-org) number only,
-        // built from the DB row.
-        if (effects.notify && order.customer_phone && (await isDefaultOrg(orgId))) {
+        // Customer WhatsApp goes out from the org's own number only (Fase 2
+        // task 2.2b), built from the DB row; an org without one sends nothing.
+        // A phone-hidden customer (a BSUID key) is sent to its recovered phone
+        // when there is one, as the AI replies are.
+        const notifyCreds = effects.notify && order.customer_phone ? await orderNotifyCreds(orgId) : null;
+        if (effects.notify && order.customer_phone && notifyCreds) {
             const notifyOrder = {
                 id: order.id,
                 customer_name: order.customer_name ?? '',
-                customer_phone: order.customer_phone,
+                customer_phone: await resolveSendTarget(supabase, orgId, order.customer_phone),
                 items,
                 total_amount: Number(order.total_amount ?? 0),
                 delivery_info: order.delivery_info ?? '',
                 order_type: order.order_type ?? 'service',
             };
             if (effects.notify === 'payment') {
-                await sendPaymentNotification(notifyOrder);
+                await sendPaymentNotification(notifyCreds, notifyOrder);
             } else {
-                await sendCancellationNotification(notifyOrder);
+                await sendCancellationNotification(notifyCreds, notifyOrder);
             }
         }
 

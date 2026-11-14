@@ -1,22 +1,23 @@
 import { NextResponse } from 'next/server';
 import { sendWhatsAppMessage, describeWhatsAppError, type WhatsAppApiError } from '@/lib/whatsapp/client';
 import { whatsappLogger } from '@/lib/utils/logger';
-import { accessDeniedResponse, requireEnvIntegration } from '@/lib/settings/org-context';
+import { accessDeniedResponse } from '@/lib/settings/org-context';
+import { requireWhatsAppIntegration } from '@/lib/whatsapp/integration';
 
 export async function POST(request: Request) {
     let phone_number: string | undefined;
     let message: string | undefined;
 
     try {
-        // Resolve the sender's org from their membership and require it to be
-        // the org that owns the env WhatsApp credentials — checked FIRST, before
-        // the body is read and before Meta is called, so another tenant can
-        // never send from Sailendra's number. org_id is also set explicitly
-        // below (part of the composite key); relying on the column DEFAULT
-        // would mis-stamp another tenant's reply.
-        const access = await requireEnvIntegration('whatsapp');
+        // Resolve the sender's org from their membership and the credentials
+        // of that org's own WhatsApp number — checked FIRST, before the body is
+        // read and before Meta is called, so no tenant can ever send from
+        // another org's number. org_id is also set explicitly below (part of
+        // the composite key); relying on the column DEFAULT would mis-stamp
+        // another tenant's reply.
+        const access = await requireWhatsAppIntegration();
         if (!access.ok) return accessDeniedResponse(access);
-        const { supabase, orgId } = access;
+        const { supabase, orgId, creds } = access;
 
         const body = await request.json();
         phone_number = body.phone_number;
@@ -43,7 +44,7 @@ export async function POST(request: Request) {
         // don't want a phantom assistant message stored locally that the
         // customer never actually received. Capture wamid so the webhook
         // status callback can later flip this row to delivered/read/failed.
-        const sendResult = await sendWhatsAppMessage(phone_number, message, undefined, contextMessageId);
+        const sendResult = await sendWhatsAppMessage(creds, phone_number, message, contextMessageId);
 
         const { error: chatError } = await supabase
             .from('whatsapp_chats')

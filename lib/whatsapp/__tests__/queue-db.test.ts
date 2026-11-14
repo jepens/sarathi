@@ -4,10 +4,16 @@ import { makeFakeSupabase, type FakeCall, type Resolver } from './fakeSupabase';
 // ---- Module mocks (the external boundaries of the queue pipeline) ----------
 vi.mock('@/lib/ai/rag', () => ({ generateRAGResponse: vi.fn() }));
 vi.mock('@/lib/whatsapp/client', () => ({ sendWhatsAppMessage: vi.fn() }));
-vi.mock('@/lib/whatsapp/credentials', () => ({ getWhatsAppSendCreds: vi.fn() }));
+// The resolver is mocked; its error class is the real one (no dependencies).
+vi.mock('@/lib/whatsapp/credentials', async () => {
+    const { WhatsAppNotConfiguredError } = await import('@/lib/whatsapp/wa-creds');
+    return { getOrgWhatsAppCreds: vi.fn(), WhatsAppNotConfiguredError };
+});
 vi.mock('@/lib/whatsapp/history', () => ({ logSystemMessage: vi.fn() }));
 vi.mock('@/lib/utils/logger', () => ({
     whatsappLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    // recordOpsEvent redacts its detail (fake data only: passed through).
+    redactPII: (s: string) => s,
 }));
 // queue-db imports createClient from here at module load; never used when a
 // client is injected, but mock it so next/headers isn't pulled into the test.
@@ -18,23 +24,34 @@ import {
     processQueue,
     getDebounceSeconds,
     HANDOFF_MANUAL_MODE_NOTICE,
+    WHATSAPP_NOT_CONFIGURED_NOTICE,
     aiQuotaReachedNotice,
 } from '@/lib/whatsapp/queue-db';
 import { generateRAGResponse } from '@/lib/ai/rag';
 import { sendWhatsAppMessage } from '@/lib/whatsapp/client';
-import { getWhatsAppSendCreds } from '@/lib/whatsapp/credentials';
+import { getOrgWhatsAppCreds, WhatsAppNotConfiguredError } from '@/lib/whatsapp/credentials';
 import { logSystemMessage } from '@/lib/whatsapp/history';
 import { consumeOrgQuota } from '@/lib/quota/org-quota';
 import { whatsappLogger } from '@/lib/utils/logger';
+import { resetOpsEventThrottle } from '@/lib/ops/events';
 
 const ragMock = vi.mocked(generateRAGResponse);
 const sendMock = vi.mocked(sendWhatsAppMessage);
-const credsMock = vi.mocked(getWhatsAppSendCreds);
+const credsMock = vi.mocked(getOrgWhatsAppCreds);
 const logSystemMock = vi.mocked(logSystemMessage);
 const quotaMock = vi.mocked(consumeOrgQuota);
 
 const ORG = 'org-1';
 const PHONE = '628111';
+// The org's own number (fake), as getOrgWhatsAppCreds resolves it.
+const CREDS = {
+    orgId: ORG,
+    integrationId: null,
+    phoneNumberId: 'pn',
+    wabaId: null,
+    accessToken: 'tok',
+    graphVersion: 'v25.0',
+};
 
 interface JobOpts { retries?: number; max_retries?: number; wamid?: string; counted?: boolean; }
 function job(id: string, text: string, createdAt: string, o: JobOpts = {}) {
@@ -106,7 +123,7 @@ function clientFor(s: Scenario) {
 beforeEach(() => {
     vi.clearAllMocks();
     delete process.env.WHATSAPP_DEBOUNCE_SECONDS;
-    credsMock.mockResolvedValue({ phoneNumberId: 'pn', accessToken: 'tok' });
+    credsMock.mockResolvedValue(CREDS);
     ragMock.mockResolvedValue({ message: 'AI reply', sources: [] });
     sendMock.mockResolvedValue({ waMessageId: 'wamid.out', raw: {} });
     quotaMock.mockResolvedValue({ allowed: true, used: 1, refused: 0, limit: 300, firstRefusal: false });
@@ -175,7 +192,7 @@ describe('processQueue — V1 burst coalescing', () => {
         });
         await processQueue(fake.client);
         expect(sendMock).toHaveBeenCalledTimes(2);
-        const recipients = sendMock.mock.calls.map((c) => c[0]).sort();
+        const recipients = sendMock.mock.calls.map((c) => c[1]).sort();
         expect(recipients).toEqual(['628AAA', '628BBB']);
     });
 
@@ -244,7 +261,7 @@ describe('processQueue — history trim (do not double-feed the burst; drop syst
             ],
         });
         await processQueue(fake.client);
-        const [, history] = ragMock.mock.calls[0] as [string, HistRow[]];
+        const history = ragMock.mock.calls[0][1] as HistRow[];
         expect(history.some((m) => m.role === 'system')).toBe(false);
         expect(history).toEqual([
             { role: 'user', content: 'a' },
@@ -358,7 +375,93 @@ describe('processQueue — retry & exhaustion on send failure', () => {
         expect(logSystemMock).toHaveBeenCalledWith(ORG, PHONE, expect.stringContaining('gagal memproses pesan'), { touchChat: false });
         // failed attempt + one fallback message
         expect(sendMock).toHaveBeenCalledTimes(2);
-        expect(sendMock.mock.calls[1][1]).toMatch(/Maaf, terjadi kesalahan/);
+        expect(sendMock.mock.calls[1][2]).toMatch(/Maaf, terjadi kesalahan/);
+        // The fallback goes out from the same number as the reply.
+        expect(sendMock.mock.calls[1][0]).toBe(CREDS);
+    });
+});
+
+describe("processQueue — the org's own WhatsApp number (Fase 2 task 2.2b)", () => {
+    // The team alert is throttled per kind and org; earlier tests used the window.
+    beforeEach(() => resetOpsEventThrottle());
+
+    it("the reply is sent with the credentials of the conversation's org", async () => {
+        const fake = clientFor({ jobs: [job('j1', 'm1', '2026-06-20T10:00:00.000Z')] });
+        await processQueue(fake.client);
+        expect(credsMock).toHaveBeenCalledTimes(1);
+        expect(credsMock).toHaveBeenCalledWith(ORG, fake.client);
+        expect(sendMock).toHaveBeenCalledTimes(1);
+        expect(sendMock.mock.calls[0][0]).toBe(CREDS);
+        expect(sendMock.mock.calls[0][1]).toBe(PHONE);
+        expect(sendMock.mock.calls[0][2]).toBe('AI reply');
+    });
+
+    it('two orgs in one claim: each conversation gets its own org\'s credentials', async () => {
+        const jobs = [
+            { ...job('a1', 'hai', '2026-06-20T10:00:00.000Z'), org_id: 'org-a', phone_number: '628AAA' },
+            { ...job('b1', 'halo', '2026-06-20T10:00:01.000Z'), org_id: 'org-b', phone_number: '628BBB' },
+        ];
+        credsMock.mockImplementation(async (orgId: string) => ({ ...CREDS, orgId, phoneNumberId: `pn-${orgId}` }));
+        const fake = makeFakeSupabase({
+            resolve: (c) => {
+                if (c.table === 'whatsapp_chats' && c.op === 'select') return { data: { ai_enabled: true } };
+                if (c.table === 'whatsapp_messages' && c.op === 'select') return { data: [] };
+                return { data: null, error: null };
+            },
+            rpc: () => ({ data: jobs, error: null }),
+        });
+        await processQueue(fake.client);
+        const sent = sendMock.mock.calls.map((c) => [c[1], (c[0] as typeof CREDS).phoneNumberId]).sort();
+        expect(sent).toEqual([
+            ['628AAA', 'pn-org-a'],
+            ['628BBB', 'pn-org-b'],
+        ]);
+    });
+
+    it('an org without a number: the jobs fail at once, no quota, no AI, no send, a note and a team alert', async () => {
+        credsMock.mockRejectedValueOnce(new WhatsAppNotConfiguredError());
+        const fake = clientFor({ jobs: [job('j1', 'm1', '2026-06-20T10:00:00.000Z'), job('j2', 'm2', '2026-06-20T10:00:02.000Z')] });
+        await processQueue(fake.client);
+        expect(quotaMock).not.toHaveBeenCalled();
+        expect(ragMock).not.toHaveBeenCalled();
+        expect(sendMock).not.toHaveBeenCalled();
+        const failed = queueUpdates(fake.calls, 'failed');
+        expect(failed).toHaveLength(1);
+        expect(failed[0].filters).toContainEqual(['in', 'id', ['j1', 'j2']]);
+        expect((failed[0].payload as Record<string, unknown>).error_message).toBe('whatsapp_not_configured');
+        // No retry: they cannot succeed.
+        expect(queueUpdates(fake.calls, 'pending')).toHaveLength(0);
+        expect(logSystemMock).toHaveBeenCalledWith(ORG, PHONE, WHATSAPP_NOT_CONFIGURED_NOTICE, { touchChat: false });
+        const alert = fake.rpcCalls.find((c) => c.name === 'record_ops_event');
+        // Its own kind: no attempt was made, so not 'queue_job_failed'.
+        expect(alert?.args).toMatchObject({ p_kind: 'whatsapp_not_configured', p_org: ORG });
+    });
+
+    it('a chat in manual mode is closed without reading the credentials', async () => {
+        const fake = clientFor({ jobs: [job('j1', 'm1', '2026-06-20T10:00:00.000Z')], aiEnabled: false });
+        await processQueue(fake.client);
+        expect(credsMock).not.toHaveBeenCalled();
+        expect(queueUpdates(fake.calls, 'completed')).toHaveLength(1);
+    });
+
+    it('credentials that cannot be read are retried like any failure (no AI call yet)', async () => {
+        credsMock.mockRejectedValueOnce(Object.assign(new Error('platform setting default_org_id could not be read (HTTP 503)'), { name: 'PlatformSettingReadError' }));
+        const fake = clientFor({ jobs: [job('j1', 'm1', '2026-06-20T10:00:00.000Z', { retries: 0, max_retries: 3 })] });
+        await processQueue(fake.client);
+        expect(ragMock).not.toHaveBeenCalled();
+        expect(quotaMock).not.toHaveBeenCalled();
+        expect(sendMock).not.toHaveBeenCalled();
+        expect(queueUpdates(fake.calls, 'pending')).toHaveLength(1);
+        expect(queueUpdates(fake.calls, 'failed')).toHaveLength(0);
+    });
+
+    it('out of retries without readable credentials: failed, with no fallback from any number', async () => {
+        credsMock.mockRejectedValueOnce(Object.assign(new Error('platform setting default_org_id could not be read (HTTP 503)'), { name: 'PlatformSettingReadError' }));
+        const fake = clientFor({ jobs: [job('j1', 'm1', '2026-06-20T10:00:00.000Z', { retries: 2, max_retries: 3 })] });
+        await processQueue(fake.client);
+        expect(queueUpdates(fake.calls, 'failed')).toHaveLength(1);
+        expect(sendMock).not.toHaveBeenCalled();
+        expect(logSystemMock).toHaveBeenCalledWith(ORG, PHONE, expect.stringContaining('gagal memproses pesan'), { touchChat: false });
     });
 });
 
@@ -632,7 +735,7 @@ describe('processQueue — handoff switches the AI off only after the reply is s
         await processQueue(fake.client);
 
         expect(sendMock).toHaveBeenCalledTimes(1);
-        expect(sendMock.mock.calls[0][1]).toBe('Tim kami akan menghubungi kakak');
+        expect(sendMock.mock.calls[0][2]).toBe('Tim kami akan menghubungi kakak');
         const off = aiOffUpdates(fake.calls);
         expect(off).toHaveLength(1);
         expect(off[0].filters).toContainEqual(['eq', 'org_id', ORG]);
@@ -671,7 +774,7 @@ describe('processQueue — handoff switches the AI off only after the reply is s
         });
         await processQueue(retry.client);
         expect(sendMock).toHaveBeenCalledTimes(1);
-        expect(sendMock.mock.calls[0][1]).toBe('Baik kak, tim kami segera menghubungi');
+        expect(sendMock.mock.calls[0][2]).toBe('Baik kak, tim kami segera menghubungi');
         expect(queueUpdates(retry.calls, 'completed')).toHaveLength(1);
         expect(aiOffUpdates(retry.calls)).toHaveLength(1);
     });

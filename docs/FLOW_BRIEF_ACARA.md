@@ -96,7 +96,8 @@ untuk ditinjau 13 Agu 2026, status *Sedang ditinjau*. Body 4 paragraf (termasuk 
 membalas chat agar jalur Nindra tetap terbuka), footer "Sailendra Organizer", tombol Flow
 **"Isi Brief Acara"** → **flow v2** (`1790632228793903`), layar awal Brief Acara.
 Setelah disetujui Meta, kirim dari Sarathi:
-`sendTemplateMessage({ templateName: 'brief_acara_sailendra_v2', language: 'id', to })`.
+`sendTemplateMessage(creds, { templateName: 'brief_acara_sailendra_v2', language: 'id', to })`,
+dengan `creds = await getOrgWhatsAppCreds(orgId)` (kredensial nomor org, sejak 2.2b).
 
 > ⚠️ Ada template lama `brief_acara_sailendra` (status Aktif) yang terikat **flow v1 tanpa
 > pertanyaan cakupan paket** — JANGAN dipakai. Setelah `brief_acara_sailendra_v2` aktif:

@@ -1038,13 +1038,15 @@ export async function scheduleMeeting(
         }
 
         // Notify the sales team on WhatsApp for every NEW booking (not idempotent
-        // repeats), regardless of whether the Zoom link is ready yet — the
-        // template fills "menyusul" when it's still pending. Sent as an approved
-        // Meta template so it works outside the 24h window. Non-fatal, env-gated.
+        // repeats) of an org with its own WhatsApp number (Fase 2 task 2.2b: any
+        // other org's booking sends nothing), regardless of whether the Zoom link
+        // is ready yet — the template fills "menyusul" when it's still pending.
+        // Sent as an approved Meta template so it works outside the 24h window.
+        // Non-fatal, env-gated.
         let salesWaNotified = false;
         if (!alreadyBooked) {
             try {
-                const wa = await notifySalesWhatsApp({
+                const wa = await notifySalesWhatsApp(orgId, {
                     customerName,
                     company: chat?.company,
                     eventInterest: chat?.event_interest,

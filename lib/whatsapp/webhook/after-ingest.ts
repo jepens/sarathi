@@ -180,7 +180,8 @@ async function rateLimitEffects(ctx: MessageContext, key: string): Promise<void>
     let warned = false;
     try {
         const target = await resolveSendTarget(supabase, orgId, key);
-        await sendWhatsAppMessage(target, RATE_LIMIT_WARNING, { phoneNumberId: waCtx.phoneNumberId, accessToken: waCtx.accessToken });
+        // From the number the customer wrote to.
+        await sendWhatsAppMessage(waCtx, target, RATE_LIMIT_WARNING);
         warned = true;
     } catch (error) {
         whatsappLogger.error('The rate-limit warning could not be sent', error);

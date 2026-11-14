@@ -367,13 +367,10 @@ Provides a centralized, user-friendly interface for managing all application cre
 - `components/ui/tabs.tsx`: Radix UI tabs component
 
 **Helper Functions** (`lib/settings/app-settings.ts`):
-- `getWhatsAppAccessToken()` - Throws error if not configured
-- `getWhatsAppPhoneNumberId()` - Throws error if not configured
-- `getWhatsAppAppSecret()` - Returns null if not configured (optional)
 - `getOpenAIApiKey()` - Throws error if not configured
 - `getShippingApiKey()` - Returns null (optional)
-- `isWhatsAppConfigured()` - Check all required WhatsApp fields
 - `isAIConfigured()` - Check OpenAI key
+- WhatsApp credentials (since Fase 2 task 2.2b): `getOrgWhatsAppCreds(orgId)` in `lib/whatsapp/credentials.ts`, the only file that reads WHATSAPP_ACCESS_TOKEN, WHATSAPP_PHONE_NUMBER_ID, WHATSAPP_APP_SECRET and WHATSAPP_BUSINESS_ACCOUNT_ID (`getVerifyToken()` here still reads WHATSAPP_VERIFY_TOKEN)
 
 **Server Actions** (`app/dashboard/settings/actions.ts`):
 - `updateWebhookSettings()` - Save WhatsApp credentials
@@ -527,11 +524,12 @@ const history = (historyData || []).reverse().map(msg => ({
     content: msg.content
 }));
 
-// Pass to AI
+// Pass to AI: the conversation's org (required since Fase 2 task 2.2b, no default-org fallback)
 const aiResponse = await generateRAGResponse(
-    job.message_text, 
-    history, 
-    job.phone_number
+    job.message_text,
+    history,
+    job.phone_number,
+    { orgId: job.org_id }
 );
 ```
 

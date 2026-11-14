@@ -126,49 +126,6 @@ export async function checkVerifyToken(inputToken: string, client?: SupabaseClie
 }
 
 /**
- * Get WhatsApp Access Token from env. The WhatsApp env values are trimmed
- * here as in lib/whatsapp/credentials.ts (a pasted newline breaks them).
- */
-export async function getWhatsAppAccessToken(): Promise<string> {
-    const token = process.env.WHATSAPP_ACCESS_TOKEN?.trim();
-    if (!token) {
-        throw new Error('WhatsApp Access Token not configured in .env');
-    }
-    return token;
-}
-
-/**
- * Get WhatsApp Phone Number ID from env
- */
-export async function getWhatsAppPhoneNumberId(): Promise<string> {
-    const phoneId = process.env.WHATSAPP_PHONE_NUMBER_ID?.trim();
-    if (!phoneId) {
-        throw new Error('WhatsApp Phone Number ID not configured in .env');
-    }
-    return phoneId;
-}
-
-/**
- * Get WhatsApp App Secret from env
- */
-export async function getWhatsAppAppSecret(): Promise<string | null> {
-    return process.env.WHATSAPP_APP_SECRET?.trim() || null;
-}
-
-/**
- * Get WhatsApp Business Account ID (WABA) from env. Required for the
- * template-message API (listing approved templates + sending re-engagement
- * messages outside the 24-hour customer service window).
- */
-export async function getWhatsAppBusinessAccountId(): Promise<string> {
-    const wabaId = process.env.WHATSAPP_BUSINESS_ACCOUNT_ID?.trim();
-    if (!wabaId) {
-        throw new Error('WhatsApp Business Account ID not configured in .env (WHATSAPP_BUSINESS_ACCOUNT_ID)');
-    }
-    return wabaId;
-}
-
-/**
  * Get OpenAI API Key from env
  */
 export async function getOpenAIApiKey(): Promise<string> {
@@ -184,18 +141,6 @@ export async function getOpenAIApiKey(): Promise<string> {
  */
 export async function getShippingApiKey(): Promise<string | null> {
     return process.env.SHIPPING_COST_KOMERCE_API_KEY || null;
-}
-
-/**
- * Check if WhatsApp is fully configured
- */
-export async function isWhatsAppConfigured(client?: SupabaseClient): Promise<boolean> {
-    const accessToken = process.env.WHATSAPP_ACCESS_TOKEN?.trim();
-    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID?.trim();
-    // Verify token is a platform setting (platform_settings)
-    const verifyToken = await getPlatformSetting(await platformClient(client), 'whatsapp_verify_token');
-
-    return !!(accessToken && phoneNumberId && verifyToken);
 }
 
 /**

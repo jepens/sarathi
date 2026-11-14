@@ -1,12 +1,8 @@
-import {
-    getWhatsAppAccessToken,
-    getWhatsAppPhoneNumberId,
-    getWhatsAppBusinessAccountId,
-} from '@/lib/settings/app-settings';
 import { makeWhatsAppApiError } from '@/lib/whatsapp/client';
 import type { SendWhatsAppResult } from '@/lib/whatsapp/client';
 import { buildRecipient } from '@/lib/whatsapp/recipient';
 import { graphUrl } from '@/lib/whatsapp/graph';
+import { assertCanSend, type WaCreds } from '@/lib/whatsapp/wa-creds';
 
 // ---------------------------------------------------------------------------
 // Template message support — for re-engagement OUTSIDE the 24-hour customer
@@ -17,7 +13,8 @@ import { graphUrl } from '@/lib/whatsapp/graph';
 // MARKETING, AUTHENTICATION). Once APPROVED we can send it with variable
 // substitution.
 //
-// API surface:
+// API surface (each takes the credentials of the org's number, WaCreds; the
+// WABA is creds.wabaId):
 //   listApprovedTemplates() → fetch APPROVED templates from the WABA
 //   sendTemplateMessage()   → render & send to a recipient
 //
@@ -47,18 +44,26 @@ interface TemplateListResponse {
     paging?: { next?: string; previous?: string };
 }
 
+/** The WABA of the credentials; throws when it is not configured. */
+function requireWaba(creds: WaCreds): string {
+    assertCanSend(creds);
+    if (!creds.wabaId) {
+        throw new Error('WhatsApp Business Account ID not configured (WHATSAPP_BUSINESS_ACCOUNT_ID)');
+    }
+    return creds.wabaId;
+}
+
 /**
  * Fetch APPROVED message templates for the WABA. Filters server-side via
  * `?status=APPROVED` and paginates up to `limit` (default 100; Meta caps).
  */
-export async function listApprovedTemplates(limit = 100): Promise<WhatsAppTemplate[]> {
-    const accessToken = await getWhatsAppAccessToken();
-    const wabaId = await getWhatsAppBusinessAccountId();
+export async function listApprovedTemplates(creds: WaCreds, limit = 100): Promise<WhatsAppTemplate[]> {
+    const wabaId = requireWaba(creds);
 
-    const url = graphUrl(`${wabaId}/message_templates?status=APPROVED&limit=${limit}`);
+    const url = graphUrl(`${wabaId}/message_templates?status=APPROVED&limit=${limit}`, creds.graphVersion);
     const response = await fetch(url, {
         headers: {
-            Authorization: `Bearer ${accessToken}`,
+            Authorization: `Bearer ${creds.accessToken}`,
         },
         // Templates change rarely; let Next.js dedupe within a request but
         // don't aggressively cache across requests (admins update templates
@@ -90,15 +95,15 @@ export async function listApprovedTemplates(limit = 100): Promise<WhatsAppTempla
  * Returns null when not found or on any error (caller falls back gracefully).
  */
 async function getTemplateDefinition(
+    creds: WaCreds,
     name: string,
     language: string,
 ): Promise<WhatsAppTemplate | null> {
     try {
-        const accessToken = await getWhatsAppAccessToken();
-        const wabaId = await getWhatsAppBusinessAccountId();
-        const url = graphUrl(`${wabaId}/message_templates?name=${encodeURIComponent(name)}&limit=25`);
+        const wabaId = requireWaba(creds);
+        const url = graphUrl(`${wabaId}/message_templates?name=${encodeURIComponent(name)}&limit=25`, creds.graphVersion);
         const response = await fetch(url, {
-            headers: { Authorization: `Bearer ${accessToken}` },
+            headers: { Authorization: `Bearer ${creds.accessToken}` },
             cache: 'no-store',
         });
         if (!response.ok) return null;
@@ -188,12 +193,8 @@ interface SendTemplateOptions {
  * so the caller (route handler) can store wa_message_id + status='sent'
  * uniformly. Status callbacks update the row exactly as for free-form text.
  */
-export async function sendTemplateMessage(opts: SendTemplateOptions): Promise<SendWhatsAppResult> {
-    const phoneNumberId = await getWhatsAppPhoneNumberId();
-    const accessToken = await getWhatsAppAccessToken();
-    if (!phoneNumberId || !accessToken) {
-        throw new Error('WhatsApp not configured. Please configure in /dashboard/settings');
-    }
+export async function sendTemplateMessage(creds: WaCreds, opts: SendTemplateOptions): Promise<SendWhatsAppResult> {
+    assertCanSend(creds);
 
     const components: Array<Record<string, unknown>> = [];
     if (opts.variables && opts.variables.length > 0) {
@@ -207,7 +208,7 @@ export async function sendTemplateMessage(opts: SendTemplateOptions): Promise<Se
     // payload or Meta rejects with 131009 "Components sub_type invalid".
     // Best-effort: if the definition lookup fails we send without it (same
     // behavior as before this fix) and let Meta's error surface.
-    const definition = await getTemplateDefinition(opts.templateName, opts.language);
+    const definition = await getTemplateDefinition(creds, opts.templateName, opts.language);
     if (definition) {
         components.push(...buildFlowButtonComponents(definition));
     }
@@ -224,10 +225,10 @@ export async function sendTemplateMessage(opts: SendTemplateOptions): Promise<Se
         },
     };
 
-    const response = await fetch(graphUrl(`${phoneNumberId}/messages`), {
+    const response = await fetch(graphUrl(`${creds.phoneNumberId}/messages`, creds.graphVersion), {
         method: 'POST',
         headers: {
-            Authorization: `Bearer ${accessToken}`,
+            Authorization: `Bearer ${creds.accessToken}`,
             'Content-Type': 'application/json',
         },
         body: JSON.stringify(body),

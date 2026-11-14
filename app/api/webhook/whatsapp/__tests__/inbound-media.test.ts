@@ -69,9 +69,11 @@ vi.mock('@/lib/whatsapp/credentials', () => ({
     envWebhookApp: () => ({ appSecret: 'app-secret', phoneNumberId: 'phone-number-id' }),
     resolveWhatsAppContext: vi.fn(async () => ({
         orgId: ORG,
+        integrationId: null,
         phoneNumberId: 'phone-number-id',
+        wabaId: null,
         accessToken: 'access-token',
-        appSecret: 'app-secret',
+        graphVersion: 'v25.0',
     })),
 }));
 vi.mock('@/lib/whatsapp/client', () => ({

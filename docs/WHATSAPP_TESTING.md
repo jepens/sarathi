@@ -90,16 +90,21 @@ TEST_PHONE=<your-number> node --env-file=.env.local scripts/test-webhook.js
 
 **Manual Test Script**:
 
-Create `scripts/test-send-message.mjs`:
+Create `scripts/test-send-message.ts` and run it with a TypeScript runner that resolves the tsconfig `@/` paths. Put NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY and the WHATSAPP_* values in the environment, and set TEST_ORG_ID to platform_settings.default_org_id (the only org with a number since Fase 2 task 2.2b):
 
 ```javascript
 import { sendWhatsAppMessage } from '../lib/whatsapp/client.ts';
+import { getOrgWhatsAppCreds } from '../lib/whatsapp/credentials.ts';
 
+const orgId = process.env.TEST_ORG_ID; // the default org (the only one with a number)
+if (!orgId) throw new Error('Set TEST_ORG_ID to the default org id (platform_settings.default_org_id)');
 const testNumber = '6281234567890'; // Replace with your test number
 const testMessage = 'Halo! Ini adalah pesan test dari Sahabat UMKM.';
 
 try {
-    const result = await sendWhatsAppMessage(testNumber, testMessage);
+    // Every send takes the credentials of one org's number (Fase 2 task 2.2b).
+    const creds = await getOrgWhatsAppCreds(orgId);
+    const result = await sendWhatsAppMessage(creds, testNumber, testMessage);
     console.log('✅ Message sent successfully:', result);
 } catch (error) {
     console.error('❌ Failed to send message:', error);

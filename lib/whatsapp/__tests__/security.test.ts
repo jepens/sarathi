@@ -1,19 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import crypto from 'node:crypto';
 
-// security.ts imports getWhatsAppAppSecret (app-settings) + the logger. Mock both
-// so the node test doesn't pull a server-only chain, and so we can drive the
-// env-fallback path. Most tests pass an explicit appSecretOverride and never
-// touch the mock.
-vi.mock('@/lib/settings/app-settings', () => ({ getWhatsAppAppSecret: vi.fn() }));
+// security.ts takes the app secret from its caller (the webhook passes the env
+// app's, lib/whatsapp/credentials.ts) and reads no env itself (Fase 2 task
+// 2.2b). The logger is mocked to keep the output quiet.
 vi.mock('@/lib/utils/logger', () => ({
     whatsappLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
 import { verifyWhatsAppSignature } from '@/lib/whatsapp/security';
-import { getWhatsAppAppSecret } from '@/lib/settings/app-settings';
-
-const getSecretMock = vi.mocked(getWhatsAppAppSecret);
 
 const SECRET = 'test-app-secret';
 const PAYLOAD = '{"object":"whatsapp_business_account","entry":[]}';
@@ -61,11 +56,12 @@ describe('verifyWhatsAppSignature', () => {
         expect(await verifyWhatsAppSignature(Buffer.from(PAYLOAD, 'utf8'), validHex, SECRET)).toBe(true);
     });
 
-    it('falls back to the env app secret when no override is given', async () => {
-        getSecretMock.mockResolvedValue(SECRET);
-        expect(await verifyWhatsAppSignature(PAYLOAD, validHex)).toBe(true);
-
-        getSecretMock.mockResolvedValue(null); // env var not set
-        expect(await verifyWhatsAppSignature(PAYLOAD, validHex)).toBe(false);
+    it('reads no env secret: with none passed, nothing verifies', async () => {
+        vi.stubEnv('WHATSAPP_APP_SECRET', SECRET);
+        try {
+            expect(await verifyWhatsAppSignature(PAYLOAD, validHex, null)).toBe(false);
+        } finally {
+            vi.unstubAllEnvs();
+        }
     });
 });

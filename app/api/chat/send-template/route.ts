@@ -7,7 +7,8 @@ import {
 } from '@/lib/whatsapp/templates';
 import { describeWhatsAppError, type WhatsAppApiError } from '@/lib/whatsapp/client';
 import { whatsappLogger } from '@/lib/utils/logger';
-import { accessDeniedResponse, requireEnvIntegration } from '@/lib/settings/org-context';
+import { accessDeniedResponse } from '@/lib/settings/org-context';
+import { requireWhatsAppIntegration } from '@/lib/whatsapp/integration';
 
 // POST /api/chat/send-template
 // Body: { phone_number, template_name, language, variables?: string[] }
@@ -32,11 +33,11 @@ function isStringArray(v: unknown): v is string[] {
 
 export async function POST(request: Request) {
     // Explicit org for the composite (org_id, phone_number) key — see
-    // send/route.ts. Must be the default org (env WhatsApp credentials); checked
-    // before the template lookup + send hit Meta.
-    const access = await requireEnvIntegration('whatsapp');
+    // send/route.ts. The org's own WhatsApp credentials; checked before the
+    // template lookup + send hit Meta.
+    const access = await requireWhatsAppIntegration();
     if (!access.ok) return accessDeniedResponse(access);
-    const { supabase, orgId } = access;
+    const { supabase, orgId, creds } = access;
 
     let body: SendTemplateBody;
     try {
@@ -61,7 +62,7 @@ export async function POST(request: Request) {
         // Verify the template is still APPROVED and resolve its body for
         // local storage. Refetching here is the safest path — admin might
         // have deleted/paused the template since the dialog opened.
-        const templates = await listApprovedTemplates();
+        const templates = await listApprovedTemplates(creds);
         const template = templates.find(
             (t) => t.name === templateName && t.language === language
         );
@@ -85,7 +86,7 @@ export async function POST(request: Request) {
         }
 
         // Send via Meta. Throws WhatsAppApiError on Meta rejection.
-        const sendResult = await sendTemplateMessage({
+        const sendResult = await sendTemplateMessage(creds, {
             to: phoneNumber,
             templateName,
             language,

@@ -242,7 +242,9 @@ async function drainNow(): Promise<void> {
 
 const pushesTo = (phone: string) =>
     vi.mocked(sendPushToOrg).mock.calls.filter((c) => c[1] === ORG && c[2].phone === phone).map((c) => c[2]);
-const sendsTo = (phone: string) => vi.mocked(sendWhatsAppMessage).mock.calls.filter((c) => c[0] === phone);
+// Every send is (credentials, to, text), from the receiving number (2.2b).
+const sendsTo = (phone: string) => vi.mocked(sendWhatsAppMessage).mock.calls.filter((c) => c[1] === phone);
+const SENT_FROM = () => expect.objectContaining({ phoneNumberId: PNID, accessToken: TOKEN });
 const batchLines = () => infoSpy.mock.calls.map((c) => c[0]).filter((line) => line.startsWith('Webhook batch:'));
 const ms = (value: string | null | undefined) => (value ? Date.parse(value) : null);
 
@@ -593,7 +595,7 @@ describe.skipIf(!ENABLED)('webhook against a local Supabase stack (PR-C2 end to 
         // The burst has settled: processQueue answers it once.
         await drainNow();
         expect(vi.mocked(generateRAGResponse).mock.calls).toEqual([['Halo, masih buka?', [], A, { orgId: ORG }]]);
-        expect(sendsTo(A)).toEqual([[A, AI_REPLY, { phoneNumberId: PNID, accessToken: TOKEN }]]);
+        expect(sendsTo(A)).toEqual([[SENT_FROM(), A, AI_REPLY]]);
         const after = await messagesOf(A);
         expect(after.map((m) => [m.role, m.content, m.wa_message_id, m.status])).toEqual([
             ['user', 'Halo, masih buka?', 'wamid.e2e.a1', null],
@@ -817,7 +819,7 @@ describe.skipIf(!ENABLED)('webhook against a local Supabase stack (PR-C2 end to 
         const units = await inboundUnits();
         const body = (k: number) =>
             delivery([change({ contacts: [contactOf(F)], messages: [textMsg(F, `wamid.e2e.f-${k}`, `Pesan cepat ${k}`, metaAgo(40_000 - k * 1000).ts)] })]);
-        const warnings = () => sendsTo(F).filter((c) => c[1] === WARNING);
+        const warnings = () => sendsTo(F).filter((c) => c[2] === WARNING);
 
         for (let k = 1; k <= 10; k++) expect(await deliver(body(k))).toBe(200);
         await settle();
@@ -828,7 +830,7 @@ describe.skipIf(!ENABLED)('webhook against a local Supabase stack (PR-C2 end to 
         expect(await deliver(body(11))).toBe(200);
         await settle();
         expect(await messagesOf(F, 'user')).toHaveLength(10);
-        expect(warnings()).toEqual([[F, WARNING, { phoneNumberId: PNID, accessToken: TOKEN }]]);
+        expect(warnings()).toEqual([[SENT_FROM(), F, WARNING]]);
         expect((await messagesOf(F, 'system')).map((m) => m.content)).toEqual([RATE_NOTE]);
 
         expect(await deliver(body(12))).toBe(200);
@@ -1438,7 +1440,7 @@ describe.skipIf(!ENABLED)('webhook against a local Supabase stack (PR-C2 end to 
             const after = await events('webhook_unconfigured');
             expect(after.count).toBe(unconfigured.count + 1);
             expect(after.details).toContain(
-                'WHATSAPP_ACCESS_TOKEN tidak diset di server: pesan masuk tetap disimpan, tetapi balasan AI dan peringatan tidak terkirim',
+                'WHATSAPP_ACCESS_TOKEN tidak diset atau tidak valid di server: pesan masuk tetap disimpan, tetapi balasan AI dan peringatan tidak terkirim',
             );
         } finally {
             vi.stubEnv('WHATSAPP_ACCESS_TOKEN', TOKEN);

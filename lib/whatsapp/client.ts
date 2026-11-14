@@ -1,4 +1,4 @@
-import { getWhatsAppAccessToken, getWhatsAppPhoneNumberId } from '@/lib/settings/app-settings';
+import { assertCanSend, type WaCreds } from './wa-creds';
 import { toWhatsAppText } from './format';
 import { buildRecipient } from './recipient';
 import { graphUrl } from './graph';
@@ -60,28 +60,24 @@ export interface SendWhatsAppResult {
     raw: unknown;                // Full Meta response for debugging
 }
 
+// Every call takes the credentials of the number it sends from (WaCreds,
+// resolved per org in lib/whatsapp/credentials.ts, Fase 2 task 2.2b): there is
+// no fallback to any other number.
+
 export async function sendWhatsAppMessage(
+    creds: WaCreds,
     to: string,
     text: string,
-    creds?: { phoneNumberId: string; accessToken: string },
     // When set, the message is sent as a reply to this wamid — the customer's
     // WhatsApp then shows it quoted (RFC: context.message_id).
     contextMessageId?: string | null,
 ): Promise<SendWhatsAppResult> {
-    // creds: the webhook and the queue pass the default org's env credentials
-    // (one Meta app until Fase 2 task 2.2b threads each org's own); manual
-    // callers omit them and fall back to env directly.
-    const phoneNumberId = creds?.phoneNumberId || (await getWhatsAppPhoneNumberId());
-    const accessToken = creds?.accessToken || (await getWhatsAppAccessToken());
+    assertCanSend(creds);
 
-    if (!phoneNumberId || !accessToken) {
-        throw new Error('WhatsApp not configured. Please configure in /dashboard/settings');
-    }
-
-    const response = await fetch(graphUrl(`${phoneNumberId}/messages`), {
+    const response = await fetch(graphUrl(`${creds.phoneNumberId}/messages`, creds.graphVersion), {
         method: 'POST',
         headers: {
-            'Authorization': `Bearer ${accessToken}`,
+            'Authorization': `Bearer ${creds.accessToken}`,
             'Content-Type': 'application/json',
         },
         body: JSON.stringify({
@@ -174,25 +170,21 @@ export function mediaMaxBytes(kind: WhatsAppMediaKind): number {
 // Upload a file to Meta's media endpoint → media_id (valid ~30 days). Multipart:
 // do NOT set Content-Type, fetch adds the boundary from the FormData.
 export async function uploadWhatsAppMedia(
+    creds: WaCreds,
     file: Blob,
     filename: string,
     mimeType: string,
-    creds?: { phoneNumberId: string; accessToken: string },
 ): Promise<string> {
-    const phoneNumberId = creds?.phoneNumberId || (await getWhatsAppPhoneNumberId());
-    const accessToken = creds?.accessToken || (await getWhatsAppAccessToken());
-    if (!phoneNumberId || !accessToken) {
-        throw new Error('WhatsApp not configured. Please configure in /dashboard/settings');
-    }
+    assertCanSend(creds);
 
     const form = new FormData();
     form.append('messaging_product', 'whatsapp');
     form.append('type', mimeType);
     form.append('file', file, filename);
 
-    const response = await fetch(graphUrl(`${phoneNumberId}/media`), {
+    const response = await fetch(graphUrl(`${creds.phoneNumberId}/media`, creds.graphVersion), {
         method: 'POST',
-        headers: { Authorization: `Bearer ${accessToken}` },
+        headers: { Authorization: `Bearer ${creds.accessToken}` },
         body: form,
     });
 
@@ -213,15 +205,11 @@ export async function uploadWhatsAppMedia(
 
 // Send an image or document message referencing an uploaded media_id.
 export async function sendWhatsAppMedia(
+    creds: WaCreds,
     to: string,
     media: { kind: WhatsAppMediaKind; mediaId: string; caption?: string; filename?: string },
-    creds?: { phoneNumberId: string; accessToken: string },
 ): Promise<SendWhatsAppResult> {
-    const phoneNumberId = creds?.phoneNumberId || (await getWhatsAppPhoneNumberId());
-    const accessToken = creds?.accessToken || (await getWhatsAppAccessToken());
-    if (!phoneNumberId || !accessToken) {
-        throw new Error('WhatsApp not configured. Please configure in /dashboard/settings');
-    }
+    assertCanSend(creds);
 
     const caption = media.caption?.trim() ? media.caption.trim() : undefined;
     const body: Record<string, unknown> = { messaging_product: 'whatsapp', ...buildRecipient(to), type: media.kind };
@@ -235,9 +223,9 @@ export async function sendWhatsAppMedia(
         };
     }
 
-    const response = await fetch(graphUrl(`${phoneNumberId}/messages`), {
+    const response = await fetch(graphUrl(`${creds.phoneNumberId}/messages`, creds.graphVersion), {
         method: 'POST',
-        headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${creds.accessToken}`, 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
     });
 
@@ -277,17 +265,15 @@ export interface DownloadedMedia {
 // BOTH calls require the Bearer token (the CDN 401s without it), and the
 // lookaside URL expires in ~5 minutes so we fetch it immediately. A User-Agent
 // is sent because Meta's CDN occasionally 400s header-less requests.
-export async function downloadWhatsAppMedia(
-    mediaId: string,
-    creds?: { phoneNumberId: string; accessToken: string },
-): Promise<DownloadedMedia> {
-    const accessToken = creds?.accessToken || (await getWhatsAppAccessToken());
-    if (!accessToken) {
-        throw new Error('WhatsApp not configured. Please configure in /dashboard/settings');
-    }
+// `creds` are the receiving number's. The lookup does not send Meta's optional
+// `phone_number_id` check: Meta documents it for media "uploaded on" a number
+// and does not say whether media a customer sent counts (tracker 2.2b).
+export async function downloadWhatsAppMedia(creds: WaCreds, mediaId: string): Promise<DownloadedMedia> {
+    assertCanSend(creds);
+    const accessToken = creds.accessToken;
 
     // Step 1 — resolve the media id to a temporary download URL.
-    const metaRes = await fetch(graphUrl(mediaId), {
+    const metaRes = await fetch(graphUrl(mediaId, creds.graphVersion), {
         headers: { Authorization: `Bearer ${accessToken}` },
     });
     if (!metaRes.ok) {

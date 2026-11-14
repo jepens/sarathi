@@ -83,11 +83,9 @@
 
 ### Helper Functions yang Dibuat:
 ```typescript
-// WhatsApp
-getWhatsAppAccessToken() - throws error jika tidak configured
-getWhatsAppPhoneNumberId() - throws error jika tidak configured
-getWhatsAppAppSecret() - returns null jika tidak configured (optional)
-isWhatsAppConfigured() - check semua required fields
+// WhatsApp (sejak 2.2b: lib/whatsapp/credentials.ts, bukan app-settings)
+getOrgWhatsAppCreds(orgId) - kredensial nomor milik org; WhatsAppNotConfiguredError bila org tidak punya
+envWhatsAppSendConfigured() - nomor env (org default) bisa mengirim
 
 // AI
 getOpenAIApiKey() - throws error jika tidak configured
