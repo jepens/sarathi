@@ -8,7 +8,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const DEFAULT_ORG = 'aaaaaaaa-0000-4000-8000-00000000000a';
 const OTHER_ORG = 'bbbbbbbb-0000-4000-8000-00000000000b';
 
-const h = vi.hoisted(() => ({ create: vi.fn() }));
+const h = vi.hoisted(() => ({ create: vi.fn(), persona: vi.fn(async () => 'PERSONA') }));
 
 vi.mock('openai', () => ({
     default: class {
@@ -24,7 +24,7 @@ vi.mock('@/lib/settings/business-profile', async (importOriginal) => {
     const actual = await importOriginal<typeof import('@/lib/settings/business-profile')>();
     return { ...actual, getBusinessProfile: async () => ({ ...actual.GENERIC_BUSINESS_PROFILE }) };
 });
-vi.mock('@/lib/ai/system-message', () => ({ getActiveSystemMessage: async () => 'PERSONA' }));
+vi.mock('@/lib/ai/system-message', () => ({ getActiveSystemMessage: h.persona }));
 vi.mock('@/lib/settings/app-settings', () => ({ getOpenAIApiKey: async () => 'sk-palsu' }));
 
 import { generateRAGResponse } from '@/lib/ai/rag';
@@ -42,6 +42,7 @@ async function firstCall(orgId: string): Promise<{ tools: string[]; system: stri
 
 beforeEach(() => {
     h.create.mockReset().mockResolvedValue({ choices: [{ message: { role: 'assistant', content: 'Halo kak' } }] });
+    h.persona.mockClear();
 });
 
 describe('meeting tools follow the org (D8, D26)', () => {
@@ -50,6 +51,8 @@ describe('meeting tools follow the org (D8, D26)', () => {
         expect(tools).toEqual(expect.arrayContaining(['check_meeting_availability', 'schedule_meeting']));
         expect(system).toContain('check_meeting_availability');
         expect(system).toContain('schedule_meeting');
+        // Its fallback persona keeps the meeting flow (F10).
+        expect(h.persona).toHaveBeenCalledWith(expect.anything(), DEFAULT_ORG, { meetings: true });
     });
 
     it('any other org gets neither the tools nor a word about them', async () => {
@@ -60,5 +63,7 @@ describe('meeting tools follow the org (D8, D26)', () => {
         expect(tools).toEqual(expect.arrayContaining(['save_lead_info', 'handoff_to_human', 'create_order']));
         expect(system).not.toContain('check_meeting_availability');
         expect(system).not.toContain('schedule_meeting');
+        // Its fallback persona promises no meeting or calendar invite (F10).
+        expect(h.persona).toHaveBeenCalledWith(expect.anything(), OTHER_ORG, { meetings: false });
     });
 });
