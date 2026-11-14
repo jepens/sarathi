@@ -39,9 +39,10 @@ import {
 // cache does not dedupe inside Route Handlers or Server Actions (they are not a
 // render pass) — there, call requireOrgContext() once and pass the context on.
 //
-// The follow-up digest (a service-role path without a user) still uses
-// getDefaultOrgId(); the WhatsApp webhook and the WhatsApp credential resolver
-// (lib/whatsapp/credentials.ts) use getDefaultOrgIdStrict().
+// Service-role paths without a user still use getDefaultOrgId(): the follow-up
+// digest, and the AI's meeting-tool gate (lib/ai/rag.ts, D26). The WhatsApp
+// webhook and the WhatsApp credential resolver (lib/whatsapp/credentials.ts)
+// use getDefaultOrgIdStrict().
 //
 // The default org (Sailendra) also owns every env-configured integration
 // (Zoom, Resend, and today the WhatsApp number). Routes that use those

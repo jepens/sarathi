@@ -11,8 +11,9 @@ import {
 } from '@/lib/settings/org-access';
 
 // The Fase 0 containment rules (KEA-2): a signed-in user operates only the org
-// they are a member of, and env-credential integrations (WhatsApp,
-// Zoom, Resend) are reserved for members of the default org.
+// they are a member of, and the env-credential integrations (Zoom, Resend)
+// and Sailendra's proposal documents are reserved for members of the default
+// org. WhatsApp has its own gate (lib/whatsapp/integration.ts, 2.2b).
 
 const DEFAULT_ORG = '5a11e024-0001-4000-8000-000000000001';
 const PILOT_ORG = '0b0e6c1e-1111-4222-8333-444455556666';
