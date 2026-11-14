@@ -43,6 +43,7 @@
 | D25 · Kiriman form Brief Acara (PR-C3, Q5) | Dijawab pemilik 2026-11-12: kiriman WhatsApp Flow Brief Acara menandai chat belum dibaca dan mengirim push ke operator; chat baru dianggap "sudah dibalas" setelah pesan konfirmasi benar-benar terkirim |
 | D26 · Bentuk saklar fitur Sailendra (2.4) | Dijawab pemilik 2026-11-12: **cek "org default" di kode, tanpa migrasi**. Fitur khusus Sailendra (proposal + FNA, alat meeting AI dengan Zoom/undangan/WA sales, tombol Portal) hanya jalan untuk org default; org lain mati. Saklar per tenant (tabel) baru dibuat di Fase 4 saat ada fitur yang benar-benar dibuka untuk tenant (sesuai D8). Prinsip pemilik: tanpa overengineering |
 | D27 · Sailendra Portal | Diputuskan pemilik 2026-11-12: **hubungan Sailendra Portal dan Sarathi diputus**; keduanya tidak akan terhubung lagi (pencarian klien Portal, handoff "Buat Proposal di Portal"). Berlaku sejak dicatat. Dilaksanakan 2026-11-12: kode Portal dihapus (rute pencarian klien, aksi dan dialog "Buat Proposal di Portal", `lib/portal`); kolom `whatsapp_chats.portal_client_id`/`portal_last_proposal_url` dibiarkan (tanpa migrasi); env `PORTAL_BASE_URL`/`PORTAL_INTAKE_TOKEN` dihapus pemilik dari Easypanel setelah deploy |
+| D28 · Domain produksi | Diputuskan pemilik 2026-11-14: **domain netral disiapkan sebelum tenant ke-2** (tim tenant tidak login di `nindra.sailendra.co.id`). Langkah: `docs/RUNBOOK_DOMAIN_NETRAL.md` (DNS/Easypanel, Turnstile, Supabase Auth URL, `NEXT_PUBLIC_APP_URL` + build ulang, webhook Meta, `TARGET_URL` cron); tanpa perubahan kode |
 
 ### Menunggu keputusan
 
@@ -110,6 +111,7 @@ Keputusan D6 (aplikasi Meta per klien) dan D8 (khusus Sailendra, sebagian dibuka
 | 2.8 | Pendaftaran Meta Tech Provider (paralel, non-kode) | — | ➡️ | Tidak dibutuhkan di model D6 (aplikasi per klien); dipindah ke 5.4 |
 | 2.9 | Runbook onboarding tenant + gladi (bagian gerbang tenant ke-2) | — | ⬜ | Setelah 2.1b/2.2c: langkah tim untuk tenant baru (aplikasi Meta di portofolio klien, URL webhook, rahasia lewat alat provisioning), lalu gladi dengan tenant uji |
 | 2.10 | Dokumen dan komentar yang sesuai kode | — | ⬜ | Bagian kecil dari tiap PR Fase 2 |
+| 2.11 | Domain netral (D28, gerbang tenant ke-2) | — | 👤 | Dikerjakan pemilik mengikuti `docs/RUNBOOK_DOMAIN_NETRAL.md`; tanpa perubahan kode. Cek juga template email Supabase Auth (undangan, reset password) agar tidak menyebut Sailendra |
 
 ## Fase 3 — Provisioning, operasi & kepatuhan pilot (±2–3 minggu)
 
@@ -220,3 +222,4 @@ Keputusan D6 (aplikasi Meta per klien) dan D8 (khusus Sailendra, sebagian dibuka
 | 2026-11-12 | D27 dilaksanakan: PR penghapusan integrasi Sailendra Portal (ditumpuk di atas PR 2.4). Kolom database Portal dibiarkan; vitest 1200 lulus, tsc dan eslint bersih |
 | 2026-11-14 | #61 dipantau 48 jam tanpa alarm (`ops_events` kosong). #63 (2.4) dan #64 (Portal diputus, D27) di-merge 2026-11-13 lalu dideploy pemilik dalam satu build; uji asap lolos. #62 (2.2b) disinkronkan dengan `main`: konflik dengan #63/#64 diselesaikan (7 file; 59 file lain patch-nya identik dengan yang di-review), review independen 3 lensa (semantik merge, isolasi tenant, uji/dokumen) dengan verifikasi skeptis tanpa temuan yang lolos; vitest 1241 lulus (21 uji DB dilewati), tsc dan eslint bersih; di-merge atas izin pemilik |
 | 2026-11-14 | F10 (sisa 2.4): pemetaan 5 agen atas 219 kemunculan identitas Sailendra (65 terjangkau org lain); PR menetralkan preset persona, template KB, persona fallback (tanpa janji meeting untuk org tanpa alat meeting), konfirmasi Brief Acara, hand-off Pipeline, intro proposal dan placeholder; persona org default tidak berubah (dibuktikan identik byte-per-byte); vitest 1253 lulus (21 uji DB dilewati), tsc dan eslint bersih |
+| 2026-11-14 | Keputusan D28: domain netral sebelum tenant ke-2 (runbook `docs/RUNBOOK_DOMAIN_NETRAL.md`, tugas 2.11 untuk pemilik). Review independen F10 (3 lensa, 19 agen): satu minor (uji flag `meetings`) diperbaiki; PR #65 di-merge setelah deploy #62 dikonfirmasi pemilik |
