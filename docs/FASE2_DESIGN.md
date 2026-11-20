@@ -450,6 +450,29 @@ Left out until a tenant needs it:
 
 Tests: `230_wa_apps_vault.test.sql`, plus 010, 050 and 070 (guard 13 gains the two app keys).
 
+**As built (2026-11-20, task 2.1c, trimmed): `scripts/wa-provision.mjs`.** The script has seven phases:
+- `status`;
+- `app`, which takes secrets;
+- `number`;
+- `verify`;
+- `subscribe`;
+- `rotate`, which takes secrets;
+- `offboard`.
+
+It follows the D17 conventions: a dry-run without `--confirm`, `--expect-ref`, and a service-role key check. Design-review fix (D17 exception): `app` and `rotate` refuse to run without an interactive terminal. The owner therefore types the secrets himself into a hidden prompt, and they never pass through an agent, an argument, a file or the environment.
+
+`app` and `rotate --kind=verify_token` generate the verify token and show it once.
+
+`verify` uses the Vault token and an `appsecret_proof`. It checks three things:
+- `GET /{phone_number_id}` answers, which also proves the stored app secret belongs to the token's app;
+- `GET /{waba_id}/phone_numbers` lists the number;
+- `GET /{waba_id}/subscribed_apps` lists the app.
+
+Left out for now:
+- plan, sync and settings (2.5a and 2.3 are deferred, D29);
+- the daily health job (a send reports a bad token);
+- the masked status view in Settings and onboarding, which comes with 2.2c, when tenants have numbers.
+
 ---
 
 **wa_legacy_contract (2.2d)**
