@@ -383,7 +383,7 @@ export async function generateRAGResponse(
         }
 
         // 4. Get system message from database
-        const baseSystemMessage = await getActiveSystemMessage(supabase, orgId);
+        const baseSystemMessage = await getActiveSystemMessage(supabase, orgId, { meetings: meetingsEnabled });
 
         // Prepare the system prompt with context
         const leadCaptureInstruction = `

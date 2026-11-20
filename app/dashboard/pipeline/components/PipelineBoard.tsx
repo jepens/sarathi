@@ -100,7 +100,15 @@ interface Lead {
     last_message_at: string | null;
 }
 
-export function PipelineBoard() {
+export function PipelineBoard({
+    handoffName,
+    businessName,
+}: {
+    /** The org's hand-off contact (business profile). */
+    handoffName: string;
+    /** The org's business name (business profile), for the proposal intro. */
+    businessName: string;
+}) {
     const [leads, setLeads] = useState<Lead[]>([]);
     const [loading, setLoading] = useState(true);
     const [draggedPhone, setDraggedPhone] = useState<string | null>(null);
@@ -132,21 +140,22 @@ export function PipelineBoard() {
         fetchLeads();
     }, [fetchLeads]);
 
-    const handoffToMJ = async (phone: string) => {
+    // Same value the AI's handoff_to_human tool writes (lib/ai/tools.ts).
+    const handoffToContact = async (phone: string) => {
         const lead = leads.find((l) => l.phone_number === phone);
         if (!lead) return;
-        const toastId = toast.loading('Handoff ke MJ...');
+        const toastId = toast.loading(`Handoff ke ${handoffName}...`);
         try {
             const res = await fetch(`/api/leads/${encodeURIComponent(phone)}`, {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ assigned_to: 'MJ' }),
+                body: JSON.stringify({ assigned_to: handoffName }),
             });
             if (!res.ok) {
                 const err = await res.json().catch(() => ({}));
                 throw new Error(err.error ?? `HTTP ${res.status}`);
             }
-            toast.success(`Lead ${lead.contact_name ?? phone} di-assign ke MJ`, {
+            toast.success(`Lead ${lead.contact_name ?? phone} di-assign ke ${handoffName}`, {
                 id: toastId,
             });
         } catch (err) {
@@ -424,7 +433,8 @@ export function PipelineBoard() {
                                             onDragEnd={handleDragEnd}
                                             onSendProposal={() => openProposalDialog(lead.phone_number)}
                                             onViewHistory={() => setHistoryLead(lead)}
-                                            onHandoff={() => handoffToMJ(lead.phone_number)}
+                                            onHandoff={() => handoffToContact(lead.phone_number)}
+                                            handoffName={handoffName}
                                             onMoveStage={(stage) => moveLead(lead.phone_number, stage)}
                                             onEdit={() => setEditLead(lead)}
                                             onDelete={() => setDeleteLead(lead)}
@@ -467,6 +477,7 @@ export function PipelineBoard() {
                     budgetRange={proposalDialogLead.budget_range}
                     notes={proposalDialogLead.notes}
                     source={proposalDialogLead.source}
+                    businessName={businessName}
                     onSent={handleProposalSent}
                 />
             )}
@@ -497,6 +508,7 @@ function LeadCard({
     onSendProposal,
     onViewHistory,
     onHandoff,
+    handoffName,
     onMoveStage,
     onEdit,
     onDelete,
@@ -509,6 +521,7 @@ function LeadCard({
     onSendProposal: () => void;
     onViewHistory: () => void;
     onHandoff: () => void;
+    handoffName: string;
     onMoveStage: (stage: StageId) => void;
     onEdit: () => void;
     onDelete: () => void;
@@ -563,7 +576,7 @@ function LeadCard({
                         </DropdownMenuItem>
                         <DropdownMenuItem onClick={onHandoff}>
                             <UserCheck className="mr-2 h-3.5 w-3.5" />
-                            Handoff to MJ
+                            Handoff ke {handoffName}
                         </DropdownMenuItem>
                         <DropdownMenuItem onClick={onMakeBooking}>
                             <CalendarPlus className="mr-2 h-3.5 w-3.5" />

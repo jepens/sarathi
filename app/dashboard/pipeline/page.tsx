@@ -1,6 +1,15 @@
 import { PipelineBoard } from './components/PipelineBoard';
+import { GENERIC_BUSINESS_PROFILE, getBusinessProfile } from '@/lib/settings/business-profile';
+import { requireOrgContext } from '@/lib/settings/org-context';
 
-export default function PipelinePage() {
+export default async function PipelinePage() {
+    // The org's own hand-off contact and name label the hand-off action and
+    // the proposal intro, never another business's (F10). Same cached org
+    // context the dashboard layout resolved.
+    const access = await requireOrgContext();
+    const profile = access.ok
+        ? await getBusinessProfile(access.supabase, access.orgId)
+        : { ...GENERIC_BUSINESS_PROFILE };
     return (
         // Bounded viewport height (main has p-8 → 4rem vertical padding) so the
         // board's flex chain resolves: columns scroll vertically inside their own
@@ -14,7 +23,7 @@ export default function PipelinePage() {
                 </p>
             </div>
             <div className="flex-1 min-h-0">
-                <PipelineBoard />
+                <PipelineBoard handoffName={profile.handoffName} businessName={profile.businessName} />
             </div>
         </div>
     );

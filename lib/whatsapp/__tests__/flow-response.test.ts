@@ -26,6 +26,7 @@ import { saveLeadInfo, updateLeadStage } from '@/lib/ai/tools';
 import { logSystemMessage } from '@/lib/whatsapp/history';
 import { whatsappLogger } from '@/lib/utils/logger';
 import { sendWhatsAppMessage } from '@/lib/whatsapp/client';
+import { getBusinessProfile } from '@/lib/settings/business-profile';
 
 const ORG = 'aaaaaaaa-0000-4000-8000-00000000000a';
 const PHONE = '620000000000';
@@ -153,6 +154,22 @@ describe('handleFlowReply: its insert of the submission is the redelivery gate',
 });
 
 describe('handleFlowReply: the answers', () => {
+    // F10: the confirmation speaks as the receiving org, never as Sailendra.
+    it("the confirmation names the receiving org's own business", async () => {
+        vi.mocked(getBusinessProfile).mockResolvedValueOnce({ businessName: 'Cahaya Event' } as never);
+        expect(await submit()).toEqual({ status: 'handled' });
+        const text = vi.mocked(sendWhatsAppMessage).mock.calls[0][2] as string;
+        expect(text).toContain('Tim Cahaya Event akan menyiapkan penawarannya');
+        expect(text).not.toMatch(/sailendra/i);
+    });
+
+    it('the confirmation says "Tim kami" when the profile has no name', async () => {
+        expect(await submit()).toEqual({ status: 'handled' });
+        const text = vi.mocked(sendWhatsAppMessage).mock.calls[0][2] as string;
+        expect(text).toContain('Tim kami akan menyiapkan penawarannya');
+        expect(text).not.toMatch(/sailendra/i);
+    });
+
     it('answers Meta escapes inside response_json (\\u0000, a lone \\udXXX) are cleaned after parsing, for the history row, the lead and the confirmation', async () => {
         // Escaped as a conforming serializer must (RFC 8259 §7): only
         // JSON.parse turns them into the code units Postgres refuses.

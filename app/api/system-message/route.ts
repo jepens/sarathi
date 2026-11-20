@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { buildSystemMessage } from '@/lib/ai/system-message';
 import { saveFirstPersona, SYNTHETIC_PERSONA_ID } from '@/lib/ai/persona-store';
 import { getBusinessProfile } from '@/lib/settings/business-profile';
-import { accessDeniedResponse, requireOrgContext } from '@/lib/settings/org-context';
+import { accessDeniedResponse, isDefaultOrg, requireOrgContext } from '@/lib/settings/org-context';
 
 export const dynamic = 'force-dynamic';
 
@@ -32,9 +32,12 @@ export async function GET(request: Request) {
 
         if (error) {
             // If no active message found, return a default built from this org's
-            // business profile.
+            // business profile (the same persona the AI falls back to; meetings
+            // only for the default org, D26).
             if (error.code === 'PGRST116') {
-                const content = buildSystemMessage(await getBusinessProfile(supabase, orgId));
+                const content = buildSystemMessage(await getBusinessProfile(supabase, orgId), {
+                    meetings: await isDefaultOrg(orgId),
+                });
                 return NextResponse.json({
                     id: SYNTHETIC_PERSONA_ID,
                     name: 'Default System Message',

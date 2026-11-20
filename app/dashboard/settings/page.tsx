@@ -88,7 +88,7 @@ export default async function SettingsPage() {
                         Shipping configuration is managed via environment variables (.env)
                     </div>
                 }
-                systemMessageTab={<SystemMessageEditor />}
+                systemMessageTab={<SystemMessageEditor profile={businessProfile} meetings={isDefault} />}
             />
 
             {/* Test Chat Preview */}

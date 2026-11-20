@@ -21,12 +21,12 @@ const FIELDS: {
     label: string;
     placeholder?: string;
 }[] = [
-    { key: 'businessName', label: 'Nama Bisnis', placeholder: 'Sailendra Organizer' },
-    { key: 'assistantName', label: 'Nama Asisten (persona AI)', placeholder: 'Nindra' },
-    { key: 'specialties', label: 'Spesialisasi', placeholder: 'Team Building, Company Gathering' },
-    { key: 'establishedYear', label: 'Tahun Berdiri', placeholder: '2016' },
-    { key: 'serviceAreas', label: 'Area Layanan', placeholder: 'Jabodetabek, Bandung, Bali' },
-    { key: 'handoffName', label: 'Nama Kontak Hand-off', placeholder: 'MJ (Lead Consultant)' },
+    { key: 'businessName', label: 'Nama Bisnis', placeholder: 'mis. Cahaya Event Organizer' },
+    { key: 'assistantName', label: 'Nama Asisten (persona AI)', placeholder: 'mis. Rina' },
+    { key: 'specialties', label: 'Spesialisasi', placeholder: 'mis. Pernikahan, Gathering Kantor' },
+    { key: 'establishedYear', label: 'Tahun Berdiri', placeholder: 'mis. 2020' },
+    { key: 'serviceAreas', label: 'Area Layanan', placeholder: 'mis. Surabaya dan sekitarnya' },
+    { key: 'handoffName', label: 'Nama Kontak Hand-off', placeholder: 'mis. Budi (Lead Consultant)' },
     { key: 'handoffPhone', label: 'No. Hand-off (WhatsApp)', placeholder: '+62 812-xxxx-xxxx' },
     { key: 'businessEmail', label: 'Email Bisnis', placeholder: 'info@bisnis.co.id' },
     { key: 'website', label: 'Website', placeholder: 'bisnis.co.id' },
