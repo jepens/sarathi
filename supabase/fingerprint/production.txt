@@ -178,6 +178,16 @@ col public.vendors.org_id type=uuid notnull=t default=- identity=- generated=-
 col public.vendors.phone type=text notnull=f default=- identity=- generated=-
 col public.vendors.updated_at type=timestamp with time zone notnull=t default=now() identity=- generated=-
 col public.vendors.verified type=boolean notnull=t default=false identity=- generated=-
+col public.whatsapp_apps.access_token_secret_id type=uuid notnull=t default=- identity=- generated=-
+col public.whatsapp_apps.app_secret_id type=uuid notnull=t default=- identity=- generated=-
+col public.whatsapp_apps.created_at type=timestamp with time zone notnull=t default=now() identity=- generated=-
+col public.whatsapp_apps.id type=uuid notnull=t default=gen_random_uuid() identity=- generated=-
+col public.whatsapp_apps.meta_app_id type=text notnull=t default=- identity=- generated=-
+col public.whatsapp_apps.org_id type=uuid notnull=t default=- identity=- generated=-
+col public.whatsapp_apps.status type=text notnull=t default='active'::text identity=- generated=-
+col public.whatsapp_apps.updated_at type=timestamp with time zone notnull=t default=now() identity=- generated=-
+col public.whatsapp_apps.verify_token_sha256 type=bytea notnull=t default=- identity=- generated=-
+col public.whatsapp_apps.webhook_key type=text notnull=t default=- identity=- generated=-
 col public.whatsapp_chats.ai_enabled type=boolean notnull=t default=true identity=- generated=-
 col public.whatsapp_chats.assigned_to type=text notnull=f default=- identity=- generated=-
 col public.whatsapp_chats.bsuid type=text notnull=f default=- identity=- generated=-
@@ -224,14 +234,15 @@ col public.whatsapp_inbound_work.payload type=jsonb notnull=t default='{}'::json
 col public.whatsapp_inbound_work.state type=text notnull=t default='pending'::text identity=- generated=-
 col public.whatsapp_inbound_work.steps type=jsonb notnull=t default='{}'::jsonb identity=- generated=-
 col public.whatsapp_inbound_work.updated_at type=timestamp with time zone notnull=t default=now() identity=- generated=-
-col public.whatsapp_integrations.access_token type=text notnull=t default=- identity=- generated=-
-col public.whatsapp_integrations.app_secret type=text notnull=f default=- identity=- generated=-
+col public.whatsapp_integrations.app_id type=uuid notnull=t default=- identity=- generated=-
 col public.whatsapp_integrations.created_at type=timestamp with time zone notnull=t default=now() identity=- generated=-
 col public.whatsapp_integrations.display_phone type=text notnull=f default=- identity=- generated=-
+col public.whatsapp_integrations.id type=uuid notnull=t default=gen_random_uuid() identity=- generated=-
 col public.whatsapp_integrations.org_id type=uuid notnull=t default=- identity=- generated=-
 col public.whatsapp_integrations.phone_number_id type=text notnull=t default=- identity=- generated=-
+col public.whatsapp_integrations.status type=text notnull=t default='active'::text identity=- generated=-
 col public.whatsapp_integrations.updated_at type=timestamp with time zone notnull=t default=now() identity=- generated=-
-col public.whatsapp_integrations.waba_id type=text notnull=f default=- identity=- generated=-
+col public.whatsapp_integrations.waba_id type=text notnull=t default=- identity=- generated=-
 col public.whatsapp_messages.content type=text notnull=t default=- identity=- generated=-
 col public.whatsapp_messages.created_at type=timestamp with time zone notnull=f default=now() identity=- generated=-
 col public.whatsapp_messages.error_code type=integer notnull=f default=- identity=- generated=-
@@ -318,6 +329,16 @@ con public.vendors vendors_category_check CHECK ((category = ANY (ARRAY['caterin
 con public.vendors vendors_org_chat_phone_fkey FOREIGN KEY (org_id, chat_phone) REFERENCES whatsapp_chats(org_id, phone_number) ON DELETE SET NULL (chat_phone)
 con public.vendors vendors_org_id_fkey FOREIGN KEY (org_id) REFERENCES organizations(id)
 con public.vendors vendors_pkey PRIMARY KEY (id)
+con public.whatsapp_apps whatsapp_apps_id_org_key UNIQUE (id, org_id)
+con public.whatsapp_apps whatsapp_apps_meta_app_id_check CHECK ((meta_app_id ~ '^[0-9]{5,25}$'::text))
+con public.whatsapp_apps whatsapp_apps_meta_app_id_key UNIQUE (meta_app_id)
+con public.whatsapp_apps whatsapp_apps_org_id_fkey FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE RESTRICT
+con public.whatsapp_apps whatsapp_apps_org_id_key UNIQUE (org_id)
+con public.whatsapp_apps whatsapp_apps_pkey PRIMARY KEY (id)
+con public.whatsapp_apps whatsapp_apps_status_check CHECK ((status = ANY (ARRAY['active'::text, 'suspended'::text])))
+con public.whatsapp_apps whatsapp_apps_verify_token_sha256_check CHECK ((octet_length(verify_token_sha256) = 32))
+con public.whatsapp_apps whatsapp_apps_webhook_key_check CHECK ((webhook_key ~ '^[A-Za-z0-9_-]{32}$'::text))
+con public.whatsapp_apps whatsapp_apps_webhook_key_key UNIQUE (webhook_key)
 con public.whatsapp_chats whatsapp_chats_contact_type_check CHECK ((contact_type = ANY (ARRAY['lead'::text, 'vendor'::text, 'other'::text])))
 con public.whatsapp_chats whatsapp_chats_lead_stage_check CHECK (((lead_stage IS NULL) OR (lead_stage = ANY (ARRAY['new'::text, 'qualifying'::text, 'quoted'::text, 'scheduled'::text, 'booked'::text, 'won'::text, 'lost'::text]))))
 con public.whatsapp_chats whatsapp_chats_org_id_fkey FOREIGN KEY (org_id) REFERENCES organizations(id)
@@ -331,9 +352,13 @@ con public.whatsapp_inbound_work whatsapp_inbound_work_org_id_fkey FOREIGN KEY (
 con public.whatsapp_inbound_work whatsapp_inbound_work_org_message_kind_key UNIQUE (org_id, message_id, kind)
 con public.whatsapp_inbound_work whatsapp_inbound_work_pkey PRIMARY KEY (id)
 con public.whatsapp_inbound_work whatsapp_inbound_work_state_check CHECK ((state = ANY (ARRAY['pending'::text, 'running'::text, 'done'::text, 'failed'::text])))
-con public.whatsapp_integrations whatsapp_integrations_org_id_fkey FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
+con public.whatsapp_integrations whatsapp_integrations_app_fkey FOREIGN KEY (app_id, org_id) REFERENCES whatsapp_apps(id, org_id) ON DELETE RESTRICT
+con public.whatsapp_integrations whatsapp_integrations_ids_check CHECK (((phone_number_id ~ '^[0-9]{5,25}$'::text) AND (waba_id ~ '^[0-9]{5,25}$'::text)))
+con public.whatsapp_integrations whatsapp_integrations_org_id_fkey FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE RESTRICT
+con public.whatsapp_integrations whatsapp_integrations_org_id_key UNIQUE (org_id)
 con public.whatsapp_integrations whatsapp_integrations_phone_number_id_key UNIQUE (phone_number_id)
-con public.whatsapp_integrations whatsapp_integrations_pkey PRIMARY KEY (org_id)
+con public.whatsapp_integrations whatsapp_integrations_pkey PRIMARY KEY (id)
+con public.whatsapp_integrations whatsapp_integrations_status_check CHECK ((status = ANY (ARRAY['active'::text, 'paused'::text])))
 con public.whatsapp_messages whatsapp_messages_media_type_check CHECK (((media_type IS NULL) OR (media_type = ANY (ARRAY['image'::text, 'document'::text, 'audio'::text, 'video'::text]))))
 con public.whatsapp_messages whatsapp_messages_org_id_fkey FOREIGN KEY (org_id) REFERENCES organizations(id)
 con public.whatsapp_messages whatsapp_messages_org_phone_fkey FOREIGN KEY (org_id, phone_number) REFERENCES whatsapp_chats(org_id, phone_number)
@@ -382,6 +407,12 @@ fn public.update_updated_at_column() returns=trigger lang=plpgsql volatile=v sec
 fn public.verify_webhook_token(input_token text) returns=boolean lang=plpgsql volatile=v secdef=t config=search_path=public owner=postgres body_md5=005b92d092eca6b499b70cad6952f3ef
 fn public.wa_apply_statuses(p_org uuid, p_statuses jsonb) returns=TABLE(applied integer, stale integer, unknown integer, unknown_ids text[], bsuid_filled integer, bsuid_conflicts integer) lang=plpgsql volatile=v secdef=f config=search_path="";lock_timeout=3s owner=postgres body_md5=33d3e219bc96157d3bd57f58fcede231
 fn public.wa_ingest_inbound(p_org uuid, p_from text, p_bsuid text, p_wamid text, p_wa_ts timestamp with time zone, p_content text, p_preview text, p_verified_phone text, p_reply_to_wamid text, p_media_type text, p_media_mime text, p_media_filename text, p_metadata jsonb, p_unread boolean, p_rate_scope text, p_rate_max integer, p_ai_eligible boolean, p_queue_text text, p_inbound_limit integer, p_work_kind text, p_work_payload jsonb) returns=TABLE(outcome text, contact_key text, message_id uuid, chat_created boolean, summary_applied boolean, contact_name text, ai_enabled boolean, queue_outcome text, quota_limit integer, quota_first_refusal boolean, quota_error text, rate_first boolean, rate_error text, bsuid_conflict boolean, work_id uuid, work_state text) lang=plpgsql volatile=v secdef=f config=search_path="";lock_timeout=3s owner=postgres body_md5=26065a5be85f43737ed91dc631c2362f
+fn public.wa_offboard_org(p_org uuid) returns=void lang=plpgsql volatile=v secdef=t config=search_path="" owner=postgres body_md5=2f1540c8b830676f5da8356310e1c548
+fn public.wa_org_send_credentials(p_org uuid) returns=TABLE(integration_id uuid, app_id uuid, phone_number_id text, waba_id text, access_token text, status text, app_status text) lang=sql volatile=s secdef=t config=search_path="" owner=postgres body_md5=c96ec11e0b2967a15f7872f32b5859ea
+fn public.wa_provision_app(p_org uuid, p_meta_app_id text, p_app_secret text, p_access_token text, p_verify_token text) returns=TABLE(app_id uuid, webhook_key text) lang=plpgsql volatile=v secdef=t config=search_path="" owner=postgres body_md5=0d3c249c498f020b0f49928aa57326b3
+fn public.wa_provision_number(p_app uuid, p_phone_number_id text, p_waba_id text, p_display_phone text) returns=uuid lang=plpgsql volatile=v secdef=t config=search_path="" owner=postgres body_md5=26a21312695a1f213072b8d7515d7575
+fn public.wa_rotate_secret(p_app uuid, p_kind text, p_secret text) returns=void lang=plpgsql volatile=v secdef=t config=search_path="" owner=postgres body_md5=e0cf35ece47535f47c9a032302bb8434
+fn public.wa_webhook_app(p_key text) returns=TABLE(app_id uuid, org_id uuid, status text, app_secret text, verify_token_sha256 text) lang=sql volatile=s secdef=t config=search_path="" owner=postgres body_md5=5e13a182819b1cf738ba8a1cf6514082
 fnexec private.broadcast_org_changes() anon=f
 fnexec private.broadcast_org_changes() authenticated=f
 fnexec private.broadcast_org_changes() service_role=f
@@ -484,6 +515,24 @@ fnexec public.wa_apply_statuses(p_org uuid, p_statuses jsonb) service_role=t
 fnexec public.wa_ingest_inbound(p_org uuid, p_from text, p_bsuid text, p_wamid text, p_wa_ts timestamp with time zone, p_content text, p_preview text, p_verified_phone text, p_reply_to_wamid text, p_media_type text, p_media_mime text, p_media_filename text, p_metadata jsonb, p_unread boolean, p_rate_scope text, p_rate_max integer, p_ai_eligible boolean, p_queue_text text, p_inbound_limit integer, p_work_kind text, p_work_payload jsonb) anon=f
 fnexec public.wa_ingest_inbound(p_org uuid, p_from text, p_bsuid text, p_wamid text, p_wa_ts timestamp with time zone, p_content text, p_preview text, p_verified_phone text, p_reply_to_wamid text, p_media_type text, p_media_mime text, p_media_filename text, p_metadata jsonb, p_unread boolean, p_rate_scope text, p_rate_max integer, p_ai_eligible boolean, p_queue_text text, p_inbound_limit integer, p_work_kind text, p_work_payload jsonb) authenticated=f
 fnexec public.wa_ingest_inbound(p_org uuid, p_from text, p_bsuid text, p_wamid text, p_wa_ts timestamp with time zone, p_content text, p_preview text, p_verified_phone text, p_reply_to_wamid text, p_media_type text, p_media_mime text, p_media_filename text, p_metadata jsonb, p_unread boolean, p_rate_scope text, p_rate_max integer, p_ai_eligible boolean, p_queue_text text, p_inbound_limit integer, p_work_kind text, p_work_payload jsonb) service_role=t
+fnexec public.wa_offboard_org(p_org uuid) anon=f
+fnexec public.wa_offboard_org(p_org uuid) authenticated=f
+fnexec public.wa_offboard_org(p_org uuid) service_role=t
+fnexec public.wa_org_send_credentials(p_org uuid) anon=f
+fnexec public.wa_org_send_credentials(p_org uuid) authenticated=f
+fnexec public.wa_org_send_credentials(p_org uuid) service_role=t
+fnexec public.wa_provision_app(p_org uuid, p_meta_app_id text, p_app_secret text, p_access_token text, p_verify_token text) anon=f
+fnexec public.wa_provision_app(p_org uuid, p_meta_app_id text, p_app_secret text, p_access_token text, p_verify_token text) authenticated=f
+fnexec public.wa_provision_app(p_org uuid, p_meta_app_id text, p_app_secret text, p_access_token text, p_verify_token text) service_role=t
+fnexec public.wa_provision_number(p_app uuid, p_phone_number_id text, p_waba_id text, p_display_phone text) anon=f
+fnexec public.wa_provision_number(p_app uuid, p_phone_number_id text, p_waba_id text, p_display_phone text) authenticated=f
+fnexec public.wa_provision_number(p_app uuid, p_phone_number_id text, p_waba_id text, p_display_phone text) service_role=t
+fnexec public.wa_rotate_secret(p_app uuid, p_kind text, p_secret text) anon=f
+fnexec public.wa_rotate_secret(p_app uuid, p_kind text, p_secret text) authenticated=f
+fnexec public.wa_rotate_secret(p_app uuid, p_kind text, p_secret text) service_role=t
+fnexec public.wa_webhook_app(p_key text) anon=f
+fnexec public.wa_webhook_app(p_key text) authenticated=f
+fnexec public.wa_webhook_app(p_key text) service_role=t
 idx public.app_settings CREATE INDEX app_settings_org_id_idx ON public.app_settings USING btree (org_id)
 idx public.app_settings CREATE INDEX idx_app_settings_key ON public.app_settings USING btree (key)
 idx public.app_settings CREATE UNIQUE INDEX app_settings_org_key_key ON public.app_settings USING btree (org_id, key)
@@ -556,6 +605,11 @@ idx public.vendors CREATE INDEX idx_vendors_org_chat_phone ON public.vendors USI
 idx public.vendors CREATE INDEX vendors_org_id_idx ON public.vendors USING btree (org_id)
 idx public.vendors CREATE UNIQUE INDEX uq_vendors_org_chat_phone ON public.vendors USING btree (org_id, chat_phone) WHERE (chat_phone IS NOT NULL)
 idx public.vendors CREATE UNIQUE INDEX vendors_pkey ON public.vendors USING btree (id)
+idx public.whatsapp_apps CREATE UNIQUE INDEX whatsapp_apps_id_org_key ON public.whatsapp_apps USING btree (id, org_id)
+idx public.whatsapp_apps CREATE UNIQUE INDEX whatsapp_apps_meta_app_id_key ON public.whatsapp_apps USING btree (meta_app_id)
+idx public.whatsapp_apps CREATE UNIQUE INDEX whatsapp_apps_org_id_key ON public.whatsapp_apps USING btree (org_id)
+idx public.whatsapp_apps CREATE UNIQUE INDEX whatsapp_apps_pkey ON public.whatsapp_apps USING btree (id)
+idx public.whatsapp_apps CREATE UNIQUE INDEX whatsapp_apps_webhook_key_key ON public.whatsapp_apps USING btree (webhook_key)
 idx public.whatsapp_chats CREATE INDEX idx_whatsapp_chats_assigned_to ON public.whatsapp_chats USING btree (assigned_to) WHERE (assigned_to IS NOT NULL)
 idx public.whatsapp_chats CREATE INDEX idx_whatsapp_chats_contact_type ON public.whatsapp_chats USING btree (contact_type) WHERE (contact_type <> 'lead'::text)
 idx public.whatsapp_chats CREATE INDEX idx_whatsapp_chats_lead_stage ON public.whatsapp_chats USING btree (lead_stage) WHERE (lead_stage IS NOT NULL)
@@ -566,9 +620,9 @@ idx public.whatsapp_inbound_work CREATE INDEX whatsapp_inbound_work_due_idx ON p
 idx public.whatsapp_inbound_work CREATE INDEX whatsapp_inbound_work_message_id_idx ON public.whatsapp_inbound_work USING btree (message_id)
 idx public.whatsapp_inbound_work CREATE UNIQUE INDEX whatsapp_inbound_work_org_message_kind_key ON public.whatsapp_inbound_work USING btree (org_id, message_id, kind)
 idx public.whatsapp_inbound_work CREATE UNIQUE INDEX whatsapp_inbound_work_pkey ON public.whatsapp_inbound_work USING btree (id)
-idx public.whatsapp_integrations CREATE INDEX whatsapp_integrations_phone_number_id_idx ON public.whatsapp_integrations USING btree (phone_number_id)
+idx public.whatsapp_integrations CREATE UNIQUE INDEX whatsapp_integrations_org_id_key ON public.whatsapp_integrations USING btree (org_id)
 idx public.whatsapp_integrations CREATE UNIQUE INDEX whatsapp_integrations_phone_number_id_key ON public.whatsapp_integrations USING btree (phone_number_id)
-idx public.whatsapp_integrations CREATE UNIQUE INDEX whatsapp_integrations_pkey ON public.whatsapp_integrations USING btree (org_id)
+idx public.whatsapp_integrations CREATE UNIQUE INDEX whatsapp_integrations_pkey ON public.whatsapp_integrations USING btree (id)
 idx public.whatsapp_messages CREATE INDEX idx_whatsapp_messages_created_at ON public.whatsapp_messages USING btree (created_at)
 idx public.whatsapp_messages CREATE INDEX idx_whatsapp_messages_org_phone ON public.whatsapp_messages USING btree (org_id, phone_number)
 idx public.whatsapp_messages CREATE INDEX idx_whatsapp_messages_phone ON public.whatsapp_messages USING btree (phone_number)
@@ -598,6 +652,7 @@ pol public.quick_replies "org members full access" PERMISSIVE cmd=ALL roles=auth
 pol public.rate_limits "service_role only" PERMISSIVE cmd=ALL roles=anon,authenticated using=false check=false
 pol public.system_message "org members full access" PERMISSIVE cmd=ALL roles=authenticated using=private.is_org_member(org_id) check=private.is_org_member(org_id)
 pol public.vendors "org members full access" PERMISSIVE cmd=ALL roles=authenticated using=private.is_org_member(org_id) check=private.is_org_member(org_id)
+pol public.whatsapp_apps "service_role only" PERMISSIVE cmd=ALL roles=anon,authenticated using=false check=false
 pol public.whatsapp_chats "org members full access" PERMISSIVE cmd=ALL roles=authenticated using=private.is_org_member(org_id) check=private.is_org_member(org_id)
 pol public.whatsapp_inbound_work "service_role only" PERMISSIVE cmd=ALL roles=anon,authenticated using=false check=false
 pol public.whatsapp_integrations "service_role only" PERMISSIVE cmd=ALL roles=anon,authenticated using=false check=false
@@ -630,6 +685,7 @@ rel public.quick_replies kind=r owner=postgres rls=t force_rls=f
 rel public.rate_limits kind=r owner=postgres rls=t force_rls=f
 rel public.system_message kind=r owner=postgres rls=t force_rls=f
 rel public.vendors kind=r owner=postgres rls=t force_rls=f
+rel public.whatsapp_apps kind=r owner=postgres rls=t force_rls=f
 rel public.whatsapp_chats kind=r owner=postgres rls=t force_rls=f
 rel public.whatsapp_inbound_work kind=r owner=postgres rls=t force_rls=f
 rel public.whatsapp_integrations kind=r owner=postgres rls=t force_rls=f
@@ -700,6 +756,9 @@ relpriv public.system_message service_role=rawdDxt
 relpriv public.vendors anon=
 relpriv public.vendors authenticated=rawdDxt
 relpriv public.vendors service_role=rawdDxt
+relpriv public.whatsapp_apps anon=
+relpriv public.whatsapp_apps authenticated=
+relpriv public.whatsapp_apps service_role=rawdDxt
 relpriv public.whatsapp_chats anon=
 relpriv public.whatsapp_chats authenticated=rawdDxt
 relpriv public.whatsapp_chats service_role=rawdDxt
@@ -738,6 +797,7 @@ trg public.platform_settings CREATE TRIGGER trg_platform_settings_updated_at BEF
 trg public.system_message CREATE TRIGGER trigger_single_active_system_message BEFORE INSERT OR UPDATE ON public.system_message FOR EACH ROW WHEN ((new.is_active = true)) EXECUTE FUNCTION ensure_single_active_system_message()
 trg public.system_message CREATE TRIGGER update_system_message_updated_at BEFORE UPDATE ON public.system_message FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()
 trg public.vendors CREATE TRIGGER trg_vendors_updated_at BEFORE UPDATE ON public.vendors FOR EACH ROW EXECUTE FUNCTION set_updated_at()
+trg public.whatsapp_apps CREATE TRIGGER trg_whatsapp_apps_updated_at BEFORE UPDATE ON public.whatsapp_apps FOR EACH ROW EXECUTE FUNCTION set_updated_at()
 trg public.whatsapp_chats CREATE TRIGGER trg_cleanup_vendor_on_untag AFTER UPDATE OF contact_type ON public.whatsapp_chats FOR EACH ROW WHEN (((old.contact_type = 'vendor'::text) AND (new.contact_type IS DISTINCT FROM old.contact_type))) EXECUTE FUNCTION cleanup_vendor_on_untag()
 trg public.whatsapp_chats CREATE TRIGGER trg_org_broadcast_del AFTER DELETE ON public.whatsapp_chats REFERENCING OLD TABLE AS old_rows FOR EACH STATEMENT EXECUTE FUNCTION private.broadcast_org_changes()
 trg public.whatsapp_chats CREATE TRIGGER trg_org_broadcast_ins AFTER INSERT ON public.whatsapp_chats REFERENCING NEW TABLE AS new_rows FOR EACH STATEMENT EXECUTE FUNCTION private.broadcast_org_changes()
@@ -745,6 +805,7 @@ trg public.whatsapp_chats CREATE TRIGGER trg_org_broadcast_upd AFTER UPDATE ON p
 trg public.whatsapp_chats CREATE TRIGGER trg_sync_vendor_on_insert AFTER INSERT ON public.whatsapp_chats FOR EACH ROW WHEN ((new.contact_type = 'vendor'::text)) EXECUTE FUNCTION sync_vendor_from_contact()
 trg public.whatsapp_chats CREATE TRIGGER trg_sync_vendor_on_tag AFTER UPDATE OF contact_type ON public.whatsapp_chats FOR EACH ROW WHEN (((new.contact_type = 'vendor'::text) AND (new.contact_type IS DISTINCT FROM old.contact_type))) EXECUTE FUNCTION sync_vendor_from_contact()
 trg public.whatsapp_inbound_work CREATE TRIGGER trg_whatsapp_inbound_work_updated_at BEFORE UPDATE ON public.whatsapp_inbound_work FOR EACH ROW EXECUTE FUNCTION set_updated_at()
+trg public.whatsapp_integrations CREATE TRIGGER trg_whatsapp_integrations_updated_at BEFORE UPDATE ON public.whatsapp_integrations FOR EACH ROW EXECUTE FUNCTION set_updated_at()
 trg public.whatsapp_messages CREATE TRIGGER trg_org_broadcast_del AFTER DELETE ON public.whatsapp_messages REFERENCING OLD TABLE AS old_rows FOR EACH STATEMENT EXECUTE FUNCTION private.broadcast_org_changes()
 trg public.whatsapp_messages CREATE TRIGGER trg_org_broadcast_ins AFTER INSERT ON public.whatsapp_messages REFERENCING NEW TABLE AS new_rows FOR EACH STATEMENT EXECUTE FUNCTION private.broadcast_org_changes()
 trg public.whatsapp_messages CREATE TRIGGER trg_org_broadcast_upd AFTER UPDATE ON public.whatsapp_messages REFERENCING NEW TABLE AS new_rows FOR EACH STATEMENT EXECUTE FUNCTION private.broadcast_org_changes()

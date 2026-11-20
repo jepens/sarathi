@@ -34,7 +34,10 @@ tenant data that means at least:
 **Service-role-only tables.** RLS on, the deny policy "service_role only" for
 `anon` and `authenticated`, no table privilege for either, and the functions
 that serve them executable by the service role only:
-`whatsapp_integrations` (0069, `190`), `ops_events` and `ops_alert_state`
+`whatsapp_integrations` (0069, `190`; one row per number of an app since 0073),
+`whatsapp_apps` (0073: per-client Meta apps whose app secret and System User
+token live in Supabase Vault, served by the `wa_*` RPCs; catalog and RPCs in
+`230_wa_apps_vault.test.sql`), `ops_events` and `ops_alert_state`
 (0070, `200`), `org_usage_counters` and `org_quota_overrides` (0071, `210`),
 `whatsapp_inbound_work` (0072: the webhook's durable follow-up work, whose
 payload can hold a Flow's answers; catalog, both orgs' members and anon
@@ -67,11 +70,17 @@ any privilege on a table, view or sequence in `public` (guard 11), a
 topic" (guard 12, see "Realtime org bus" below) or a unique key on an org_id
 table, primary keys included unless made only of surrogate columns, leaves
 `org_id` out of its key columns (guard 13), so a forgotten test is often caught
-anyway. Guard 13 has two reviewed global keys: `push_subscriptions_endpoint_key`
+anyway. Guard 13 has four reviewed global keys: `push_subscriptions_endpoint_key`
 (one row per browser endpoint: the device follows whoever is signed in on it
-now, owner decision D19; `register_push_subscription`, 0065, moves it) and
+now, owner decision D19; `register_push_subscription`, 0065, moves it),
 `whatsapp_integrations_phone_number_id_key` (a WhatsApp number belongs to one
-org).
+org), and `whatsapp_apps_meta_app_id_key` / `whatsapp_apps_webhook_key_key`
+(a Meta app, and the routing key of its webhook URL, belong to one org; 0073).
+
+**Vault secrets are never read by hand in production.** Verification of 0073
+and later reads non-secret columns only: never `vault.decrypted_secrets`,
+`wa_webhook_app` or `wa_org_send_credentials` through the MCP `execute_sql`
+tool (their output would land in a chat transcript).
 
 ## Run the stack and the tests locally
 

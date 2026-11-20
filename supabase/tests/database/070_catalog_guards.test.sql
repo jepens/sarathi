@@ -149,7 +149,10 @@ select is_empty(
 --         by whoever is signed in on it now (D19, register_push_subscription,
 --         0065);
 --       whatsapp_integrations_phone_number_id_key: a WhatsApp number belongs
---         to one org (inbound routing by phone_number_id).
+--         to one org (inbound routing by phone_number_id);
+--       whatsapp_apps_meta_app_id_key, whatsapp_apps_webhook_key_key: a Meta
+--         app, and the routing key of its webhook URL, belong to one org
+--         (0073, per-client apps, D6).
 --     A new global key must be reviewed and added here on purpose.
 select results_eq(
     $$ select ic.relname::text collate "default" from pg_index i
@@ -171,7 +174,8 @@ select results_eq(
                                     and a.attnum = any ((i.indkey::int2[])[0:i.indnkeyatts - 1])
                                     and not a.atthasdef and a.attidentity = ''))
        order by 1 $$,
-    array['push_subscriptions_endpoint_key', 'whatsapp_integrations_phone_number_id_key'],
+    array['push_subscriptions_endpoint_key', 'whatsapp_apps_meta_app_id_key',
+          'whatsapp_apps_webhook_key_key', 'whatsapp_integrations_phone_number_id_key'],
     'the only unique keys without org_id on org_id tables are the reviewed global ones');
 
 select * from finish();

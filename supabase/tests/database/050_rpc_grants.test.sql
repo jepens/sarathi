@@ -2,7 +2,7 @@
 -- vector-search functions stay inside the caller's org (tracker 1.2, audit
 -- KUA-13 / KEA-5 / KEA-25).
 begin;
-select plan(56);
+select plan(68);
 
 select tests.create_two_orgs();
 
@@ -64,7 +64,15 @@ from unnest(array['public.bump_unread(uuid, text)',
                       || 'text, text, text, jsonb, boolean, text, integer, boolean, text, integer, text, jsonb)',
                   'public.wa_apply_statuses(uuid, jsonb)',
                   'public.claim_inbound_work(integer, integer, uuid)',
-                  'public.cleanup_old_inbound_work()']) f,
+                  'public.cleanup_old_inbound_work()',
+                  -- per-client Meta apps and their Vault secrets (0073;
+                  -- behaviour in 230_wa_apps_vault)
+                  'public.wa_provision_app(uuid, text, text, text, text)',
+                  'public.wa_provision_number(uuid, text, text, text)',
+                  'public.wa_rotate_secret(uuid, text, text)',
+                  'public.wa_webhook_app(text)',
+                  'public.wa_org_send_credentials(uuid)',
+                  'public.wa_offboard_org(uuid)']) f,
      unnest(array['anon', 'authenticated']) r;
 
 -- ---------------------------------------------------------------------------
