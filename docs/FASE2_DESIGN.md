@@ -427,6 +427,29 @@ create table public.whatsapp_webhook_unrouted (
 - **010 fixtures:** use numeric ids under an app row created as postgres.
 - **Open check:** the supabase_vault version in production is unverified. Read `pg_extension` before applying.
 
+**As built (2026-11-20, migration 0073_wa_apps_vault, trimmed for the pilot; owner decision D29).** Production runs supabase_vault 0.3.1 and pgcrypto 1.3 in `extensions` (read 2026-11-20). Kept: `whatsapp_apps` (secrets in Vault, verify token as sha256, `webhook_key`, status), `whatsapp_integrations` reshaped to one row per number, and six service-role RPCs:
+- `wa_provision_app(org, meta_app_id, app_secret, access_token, verify_token)`;
+- `wa_provision_number(app, phone_number_id, waba_id, display_phone)`;
+- `wa_rotate_secret(app, kind, secret)`, which updates the same Vault row, so secret names never collide;
+- `wa_webhook_app(key)`;
+- `wa_org_send_credentials(org)`, by org, since there is one number per org;
+- `wa_offboard_org(org)`.
+
+The design review's points are fixed:
+- the org FKs are RESTRICT, so offboarding deletes the Vault secrets;
+- UNIQUE(org_id) on both tables gives one app and one number per org until chats carry the number;
+- the shape checks are length checks, because a Postgres regex bound cannot exceed 255.
+
+Left out until a tenant needs it:
+- `app_secret_next` and the `webhook_key_prev` grace period. A rotated app secret applies at once, and webhooks signed with the old one fail and are retried by Meta;
+- `token_status`, quality and error columns (the send reports a bad token);
+- a per-app Graph version;
+- the stored 2FA PIN;
+- `wa_set_status` / `wa_set_health` (the service role updates `status` directly);
+- `whatsapp_webhook_unrouted` (2.2c raises an ops event instead).
+
+Tests: `230_wa_apps_vault.test.sql`, plus 010, 050 and 070 (guard 13 gains the two app keys).
+
 ---
 
 **wa_legacy_contract (2.2d)**
