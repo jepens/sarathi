@@ -14,6 +14,7 @@ import {
     type StatusRow,
 } from '@/lib/whatsapp/webhook/ingest';
 import { RpcError, classify } from '@/lib/whatsapp/webhook/errors';
+import { vaultOrgCreds, vaultWebhookApp } from '@/lib/whatsapp/credentials';
 
 // The parity of the TypeScript and SQL halves of the webhook ingest (Fase 2
 // task 2.2a part 2, C2_SPEC sections 2 and 9). The code calls the database
@@ -187,6 +188,18 @@ const INGEST_RESULT_TYPES: Record<(typeof INGEST_RESULT_KEYS)[number], string> =
     work_state: 'text',
 };
 
+/** The result columns the Vault readers map (lib/whatsapp/credentials.ts), with their SQL types. */
+const WEBHOOK_APP_TYPES = { app_id: 'uuid', org_id: 'uuid', status: 'text', app_secret: 'text', verify_token_sha256: 'text' };
+const SEND_CREDS_TYPES = {
+    integration_id: 'uuid',
+    app_id: 'uuid',
+    phone_number_id: 'text',
+    waba_id: 'text',
+    access_token: 'text',
+    status: 'text',
+    app_status: 'text',
+};
+
 const STATUSES_PARAM_TYPES = { p_org: 'uuid', p_statuses: 'jsonb' };
 const STATUSES_RESULT_TYPES = {
     applied: 'integer',
@@ -248,6 +261,24 @@ describe('the recorded signatures of the four database functions (fingerprint)',
         const { signature } = recorded(name);
         expect(signature.lang).toBe('plpgsql');
         expect(signature.config.split(';')).toContain('lock_timeout=3s');
+    });
+
+    it('wa_webhook_app and wa_org_send_credentials (0073) take and return what the Vault readers send and read', () => {
+        const app = recorded('wa_webhook_app').signature;
+        expect(app.args).toEqual([{ name: 'p_key', type: 'text' }]);
+        expect(types(app.table)).toEqual(WEBHOOK_APP_TYPES);
+        expect(names(app.table)).toEqual(Object.keys(WEBHOOK_APP_TYPES));
+        const send = recorded('wa_org_send_credentials').signature;
+        expect(send.args).toEqual([{ name: 'p_org', type: 'uuid' }]);
+        expect(types(send.table)).toEqual(SEND_CREDS_TYPES);
+        expect(names(send.table)).toEqual(Object.keys(SEND_CREDS_TYPES));
+    });
+
+    it.each(['wa_webhook_app', 'wa_org_send_credentials'])('%s is SECURITY DEFINER with an empty search_path, executable by service_role only', (name) => {
+        const { signature, exec } = recorded(name);
+        expect(signature.secdef).toBe('t');
+        expect(signature.config.split(';')).toContain('search_path=""');
+        expect(exec).toEqual({ anon: false, authenticated: false, service_role: true });
     });
 
     it('the lookup fails loudly when neither file records the function, and prefers a pending line', () => {
@@ -374,6 +405,24 @@ describe('ingestInbound and applyStatuses speak exactly that contract', () => {
         expect(error).toMatchObject({ code: 'PGRST202', status: 404 });
         expect(String(error.message)).not.toContain('620000000001');
         expect(classify(error)).toBe('retryable');
+    });
+
+    it('the Vault readers send exactly the recorded arguments and map every recorded column they need', async () => {
+        const row = (cols: Record<string, string>) => Object.fromEntries(Object.keys(cols).map((c) => [c, `kolom-${c}`]));
+        const app = client({ data: [row(WEBHOOK_APP_TYPES)] });
+        const mappedApp = await vaultWebhookApp(app.client, 'A'.repeat(32));
+        expect(app.sent.map((s) => [s.name, Object.keys(s.args)])).toEqual([['wa_webhook_app', names(recorded('wa_webhook_app').signature.args)]]);
+        expect(Object.values(mappedApp ?? {}).sort()).toEqual(Object.values(row(WEBHOOK_APP_TYPES)).sort());
+
+        const send = client({ data: [row(SEND_CREDS_TYPES)] });
+        const mapped = await vaultOrgCreds(send.client, 'aaaaaaaa-0000-4000-8000-00000000000a');
+        expect(send.sent.map((s) => [s.name, Object.keys(s.args)])).toEqual([
+            ['wa_org_send_credentials', names(recorded('wa_org_send_credentials').signature.args)],
+        ]);
+        const read = mapped ? [...Object.values(mapped.creds), mapped.status, mapped.appStatus] : [];
+        // app_id is not needed: the number's app is its org's app (0073 foreign key).
+        const needed = Object.keys(SEND_CREDS_TYPES).filter((c) => c !== 'app_id');
+        expect(needed.filter((c) => !read.includes(`kolom-${c}`))).toEqual([]);
     });
 
     it('applyStatuses sends exactly STATUSES_PARAMS and reads exactly STATUSES_RESULT_KEYS', async () => {

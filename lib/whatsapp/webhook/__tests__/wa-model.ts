@@ -8,7 +8,9 @@ import { INGEST_PARAMS, STATUSES_PARAMS } from '@/lib/whatsapp/webhook/ingest';
 // and answers wa_ingest_inbound, wa_apply_statuses, claim_queue_jobs and
 // consume_org_quota the way C2_SPEC sections 3 and 4 say migration 0072 does
 // (what the SQL really does is pinned by pgTAP 220; the parity test pins the
-// names). Writes of one call commit together or not at all, and every call
+// names), and the Vault reads of 0073 (wa_webhook_app,
+// wa_org_send_credentials) from fixture maps. Writes of one call commit
+// together or not at all, and every call
 // settles only after a macrotask (setImmediate), so "committed before the
 // answer" is observable: work the pipeline forgot to await is not in the
 // model yet when POST returns. Failures are injected per call target.
@@ -319,6 +321,10 @@ export class WaModel {
     quotaError: string | null = null;
     /** The minute quota of the model's orgs (consume_org_quota's limit when given). */
     quotaLimit: Record<string, number> = {};
+    /** wa_webhook_app's rows (0073), by webhook key: the app's id, org, status, verify token hash and app secret. */
+    webhookApps = new Map<string, Row>();
+    /** wa_org_send_credentials' rows (0073), by org: integration_id, app_id, phone_number_id, waba_id, access_token, status, app_status. */
+    sendCreds = new Map<string, Row>();
     private seq = 0;
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -457,6 +463,14 @@ export class WaModel {
                     return this.claimJobs(call.args);
                 case 'consume_org_quota':
                     return this.consumeQuotaRpc(call.args);
+                case 'wa_webhook_app': {
+                    const app = this.webhookApps.get(String(call.args.p_key));
+                    return ok(app ? [{ ...app }] : []);
+                }
+                case 'wa_org_send_credentials': {
+                    const number = this.sendCreds.get(String(call.args.p_org));
+                    return ok(number ? [{ ...number }] : []);
+                }
                 case 'record_ops_event':
                     this.opsEvents.push({
                         kind: String(call.args.p_kind),

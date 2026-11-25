@@ -1,12 +1,20 @@
 import { NextResponse } from 'next/server';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { verifyWhatsAppSignature } from '@/lib/whatsapp/security';
-import { canSend, envWebhookApp, resolveWhatsAppContext, type WaCreds, type WebhookApp } from '@/lib/whatsapp/credentials';
+import {
+    canSend,
+    envWebhookApp,
+    resolveWhatsAppContext,
+    vaultOrgCreds,
+    vaultWebhookApp,
+    type WaCreds,
+    type WebhookApp,
+} from '@/lib/whatsapp/credentials';
 import { whatsappLogger } from '@/lib/utils/logger';
 import { webhookSummary } from '@/lib/whatsapp/webhook-summary';
 import { describeErrorForOps, recordOpsEvent } from '@/lib/ops/events';
 import { getDebounceSeconds, processQueue } from '@/lib/whatsapp/queue-db';
-import { readBodyCapped } from '@/lib/whatsapp/webhook/verify';
+import { readBodyCapped, SIGNATURE_HEADER, WEBHOOK_KEY } from '@/lib/whatsapp/webhook/verify';
 import { serviceRoleClient } from '@/lib/whatsapp/webhook/service-client';
 import { routeChanges, type RoutedChange } from '@/lib/whatsapp/webhook/router';
 import { errorCodes, isRecord, listChanges, messagesOf, statusesOf } from '@/lib/whatsapp/webhook/payload';
@@ -20,7 +28,15 @@ import { handleMessageItem, hasIdentity, planMessage, type MessagePlan } from '@
 
 // The webhook's POST, outside route.ts (Next.js limits what a route file
 // exports): the gate, then the walk over every entry, change, message and
-// status of the delivery, then one answer for the whole batch.
+// status of the delivery, then one answer for the whole batch. Two gates
+// share the walk: processWebhook (the bare URL, the env app) and
+// processAppWebhook (a per-app URL, Vault; Fase 2 task 2.2c).
+
+// The batch alert when the number has no usable access token, per source.
+const ENV_NO_TOKEN =
+    'WHATSAPP_ACCESS_TOKEN tidak diset atau tidak valid di server: pesan masuk tetap disimpan, tetapi balasan AI dan peringatan tidak terkirim';
+const VAULT_NO_TOKEN =
+    'token akses aplikasi ini tidak terbaca dari Vault atau tidak valid: pesan masuk tetap disimpan, tetapi balasan AI dan peringatan tidak terkirim';
 
 export async function processWebhook(request: Request): Promise<NextResponse> {
     const startedAt = Date.now();
@@ -100,7 +116,7 @@ export async function processWebhook(request: Request): Promise<NextResponse> {
                 return new NextResponse('Service Unavailable', { status: 503 });
             }
             outcome = new BatchOutcome(startedAt);
-            return await walkBatch(supabase, webhookApp, body, outcome);
+            return await walkBatch(supabase, webhookApp, body, outcome, () => resolveWhatsAppContext(supabase), ENV_NO_TOKEN);
         } else {
             // Signed by our app but not a WhatsApp Business Account event:
             // acknowledge it (a 404 would make Meta retry it for days).
@@ -117,6 +133,135 @@ export async function processWebhook(request: Request): Promise<NextResponse> {
         const alertClient = verified ? serviceRoleClient() : null;
         if (alertClient) {
             await recordOpsEvent(alertClient, 'webhook_error', { orgId: outcome?.orgId ?? null, detail: describeErrorForOps(error) });
+        }
+        return new NextResponse('Internal Server Error', { status: 500 });
+    }
+}
+
+/**
+ * The POST of a per-app URL (Fase 2 task 2.2c): the app comes from the URL
+ * key, its secret, number and token from Vault, its org from the app row
+ * (never the default org). The same walk as processWebhook after the gate.
+ * A suspended app or a paused number (only manual SQL sets them) is
+ * acknowledged and dropped; an app without a number answers 503.
+ */
+export async function processAppWebhook(request: Request, key: string): Promise<NextResponse> {
+    const startedAt = Date.now();
+    let supabase: SupabaseClient | null = null;
+    // The app's org once the signature has passed (see processWebhook).
+    let verifiedOrg: string | null = null;
+    let outcome: BatchOutcome | null = null;
+    try {
+        // No app has a key of another shape: nothing is read.
+        if (!WEBHOOK_KEY.test(key)) return new NextResponse('Not Found', { status: 404 });
+        const rawBody = await readBodyCapped(request);
+        if (!rawBody) {
+            whatsappLogger.warn('Webhook body over 3 MB — refused');
+            return new NextResponse('Payload Too Large', { status: 413 });
+        }
+        // Meta always signs: without a well-formed header it is internet
+        // noise, refused before any database call and logged only.
+        const signature = request.headers.get('x-hub-signature-256');
+        if (!signature || !SIGNATURE_HEADER.test(signature)) {
+            whatsappLogger.warn('Rejected webhook with invalid/missing signature');
+            return new NextResponse('Forbidden', { status: 403 });
+        }
+
+        supabase = serviceRoleClient();
+        if (!supabase) {
+            whatsappLogger.error('Webhook cannot store anything: NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is not set');
+            return new NextResponse('Service Unavailable', { status: 503 });
+        }
+
+        // An unknown key returns no row, so only a Vault or database failure
+        // gets here: alerted, and Meta retries.
+        let app;
+        try {
+            app = await vaultWebhookApp(supabase, key);
+        } catch (error) {
+            whatsappLogger.error(`Webhook app could not be read (${describeErrorForOps(error)})`);
+            await recordOpsEvent(supabase, 'webhook_error', {
+                detail: `aplikasi webhook tidak terbaca (${describeErrorForOps(error)}); webhook menjawab 503, Meta mengirim ulang`,
+            });
+            return new NextResponse('Service Unavailable', { status: 503 });
+        }
+        if (!app) {
+            whatsappLogger.warn('Webhook for an unknown app key — not found');
+            return new NextResponse('Not Found', { status: 404 });
+        }
+
+        if (!app.appSecret || !(await verifyWhatsAppSignature(rawBody, signature, app.appSecret))) {
+            whatsappLogger.warn(`Rejected webhook with invalid signature (app ${app.appId})`);
+            await recordOpsEvent(supabase, 'webhook_signature_invalid', {
+                orgId: app.orgId,
+                detail: !app.appSecret ? 'app secret aplikasi ini tidak terbaca dari Vault' : 'tanda tangan tidak cocok',
+            });
+            return new NextResponse('Forbidden', { status: 403 });
+        }
+        verifiedOrg = app.orgId;
+
+        let body;
+        try {
+            body = JSON.parse(rawBody.toString('utf8'));
+        } catch {
+            whatsappLogger.error('Signed webhook body is not valid JSON — acknowledged without processing');
+            return new NextResponse('EVENT_RECEIVED', { status: 200 });
+        }
+        if (!body || typeof body !== 'object') {
+            whatsappLogger.warn('Signed webhook body is not a JSON object — acknowledged without processing');
+            return new NextResponse('EVENT_RECEIVED', { status: 200 });
+        }
+        if (body.object !== 'whatsapp_business_account') {
+            whatsappLogger.warn('Received non-WhatsApp event — acknowledged without processing');
+            return new NextResponse('EVENT_RECEIVED', { status: 200 });
+        }
+        if (app.status !== 'active') {
+            whatsappLogger.warn(`Webhook for suspended app ${app.appId} — dropped`);
+            return new NextResponse('EVENT_RECEIVED', { status: 200 });
+        }
+
+        let number;
+        try {
+            number = await vaultOrgCreds(supabase, app.orgId);
+        } catch (error) {
+            whatsappLogger.error(`Webhook number could not be read (app ${app.appId}, ${describeErrorForOps(error)})`);
+            await recordOpsEvent(supabase, 'webhook_error', {
+                orgId: app.orgId,
+                detail: `nomor WhatsApp tidak terbaca (${describeErrorForOps(error)}); webhook menjawab 503, Meta mengirim ulang`,
+            });
+            return new NextResponse('Service Unavailable', { status: 503 });
+        }
+        if (!number) {
+            whatsappLogger.error(`Webhook cannot route: app ${app.appId} has no number`);
+            await recordOpsEvent(supabase, 'webhook_unconfigured', {
+                orgId: app.orgId,
+                detail: 'aplikasi tanpa nomor di Sarathi; webhook menjawab 503, Meta mengirim ulang',
+            });
+            return new NextResponse('Service Unavailable', { status: 503 });
+        }
+        if (number.status !== 'active') {
+            whatsappLogger.warn(`Webhook for a paused number (app ${app.appId}) — dropped`);
+            return new NextResponse('EVENT_RECEIVED', { status: 200 });
+        }
+
+        // What arrived, never the payload itself (see processWebhook).
+        whatsappLogger.info(`Webhook received (app ${app.appId}): ${webhookSummary(body)}`);
+        outcome = new BatchOutcome(startedAt);
+        outcome.orgId = app.orgId;
+        const creds = number.creds;
+        return await walkBatch(
+            supabase,
+            { appSecret: app.appSecret, phoneNumberId: creds.phoneNumberId },
+            body,
+            outcome,
+            () => Promise.resolve(creds),
+            VAULT_NO_TOKEN,
+        );
+    } catch (error) {
+        // Only a bug gets here (see processWebhook). Signed deliveries only.
+        whatsappLogger.error('Error processing webhook', error);
+        if (supabase && verifiedOrg) {
+            await recordOpsEvent(supabase, 'webhook_error', { orgId: outcome?.orgId ?? verifiedOrg, detail: describeErrorForOps(error) });
         }
         return new NextResponse('Internal Server Error', { status: 500 });
     }
@@ -181,20 +326,30 @@ function drainQueue(supabase: SupabaseClient): void {
  * then pass 1 (user_id_update entries), the pre-dedup, pass 2 (messages, in
  * Meta's time order) and pass 3 (statuses, one call per change). Each item
  * has its own guard, so one failure never stops the others; respond() turns
- * the result into the answer.
+ * the result into the answer. `resolveOrg` gives the org and credentials of
+ * the number the delivery arrived on; `noTokenDetail` is the alert when that
+ * number has no usable access token.
  */
-async function walkBatch(supabase: SupabaseClient, webhookApp: WebhookApp, body: unknown, outcome: BatchOutcome): Promise<NextResponse> {
+async function walkBatch(
+    supabase: SupabaseClient,
+    webhookApp: WebhookApp,
+    body: unknown,
+    outcome: BatchOutcome,
+    resolveOrg: () => Promise<WaCreds>,
+    noTokenDetail: string,
+): Promise<NextResponse> {
     const changes = await routeChanges(supabase, webhookApp, listChanges(body));
 
-    // Single-tenant: org + credentials come from env and the default org,
-    // read strictly (never the seed org), once, when an item first needs
-    // them. A read error makes each item that needs it retryable (503).
+    // The org and credentials, read once, when an item first needs them (the
+    // bare URL: env and the default org, read strictly, never the seed org;
+    // a per-app URL: already read from Vault). A read error makes each item
+    // that needs it retryable (503).
     let orgRead: Promise<WaCreds> | null = null;
     const run: BatchRun = {
         supabase,
         outcome,
         org: () =>
-            (orgRead ??= resolveWhatsAppContext(supabase).then((ctx) => {
+            (orgRead ??= resolveOrg().then((ctx) => {
                 outcome.orgId = ctx.orgId;
                 return ctx;
             })),
@@ -224,10 +379,7 @@ async function walkBatch(supabase: SupabaseClient, webhookApp: WebhookApp, body:
         try {
             const ctx = await run.org();
             if (!canSend(ctx)) {
-                await recordOpsEvent(supabase, 'webhook_unconfigured', {
-                    orgId: ctx.orgId,
-                    detail: 'WHATSAPP_ACCESS_TOKEN tidak diset atau tidak valid di server: pesan masuk tetap disimpan, tetapi balasan AI dan peringatan tidak terkirim',
-                });
+                await recordOpsEvent(supabase, 'webhook_unconfigured', { orgId: ctx.orgId, detail: noTokenDetail });
             }
         } catch {
             // Every item that needs the org reports the read error itself.

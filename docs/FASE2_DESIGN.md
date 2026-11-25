@@ -473,6 +473,37 @@ Left out for now:
 - the daily health job (a send reports a bad token);
 - the masked status view in Settings and onboarding, which comes with 2.2c, when tenants have numbers.
 
+**As built (2026-11-25, task 2.2c PR-1; owner decisions D32-D34).** A new per-app route `app/api/webhook/whatsapp/[key]/route.ts` runs next to the legacy URL. The legacy route and every send stay on env and do not change.
+
+GET is the handshake (`lib/whatsapp/webhook/handshake.ts`). It answers 403 unless all of these hold:
+- the key has the right shape;
+- `hub.mode=subscribe`, and a token and a challenge are present;
+- the app row exists and is active;
+- the sha256 of the token matches (constant-time compare).
+
+On success it echoes the challenge, as the legacy route does.
+
+POST goes through `processAppWebhook` in `pipeline.ts`, in this order:
+1. A malformed key gets 404, before the body is read.
+2. A body over the cap gets 413.
+3. A missing or malformed signature header gets 403, with no database call.
+4. `wa_webhook_app` fails: 503 plus `webhook_error`. An unknown key gets 404.
+5. The HMAC is checked against the Vault app secret. A mismatch gets 403 plus `webhook_signature_invalid` with the app's org.
+6. A suspended app gets 200 and the batch is dropped with a log line.
+7. `wa_org_send_credentials` fails: 503 plus `webhook_error`. No number gets 503 plus `webhook_unconfigured`. A paused number gets 200 and the batch is dropped.
+8. The shared `walkBatch` runs with the app's org and Vault credentials, which it now takes as an injected resolver.
+
+Routing stays inside the signing app's own number, so a payload signed by app A never writes into another org. `getDefaultOrgIdStrict` is never called on this path. The readers `vaultWebhookApp` / `vaultOrgCreds` (`lib/whatsapp/credentials.ts`) are pinned to the webhook modules by the env-shim test.
+
+Deviations from the original design:
+- no `wa_creds_source` switch or shadow mode (D32);
+- no `legacy_webhook_key`;
+- no caches, no unrouted table, no WABA-level check;
+- a bad signature gets 403, not 401;
+- no `appsecret_proof` on sends (D33).
+
+Next: the owner moves Sailendra's callback, then the 48 h soak, then PR-2 (2.2d) moves every send to Vault and deletes the legacy route and env.
+
 ---
 
 **wa_legacy_contract (2.2d)**

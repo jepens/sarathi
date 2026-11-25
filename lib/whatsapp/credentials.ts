@@ -3,6 +3,7 @@ import { getDefaultOrgIdStrict } from '@/lib/settings/org-context';
 import { createServiceOrServerClient } from '@/lib/supabase/service';
 import { GRAPH_API_VERSION } from '@/lib/whatsapp/graph';
 import { assertCanSend, canSend, WhatsAppNotConfiguredError, type WaCreds } from '@/lib/whatsapp/wa-creds';
+import { RpcError } from '@/lib/whatsapp/webhook/errors';
 
 export { assertCanSend, canSend, WhatsAppNotConfiguredError, type WaCreds } from '@/lib/whatsapp/wa-creds';
 
@@ -17,7 +18,8 @@ export { assertCanSend, canSend, WhatsAppNotConfiguredError, type WaCreds } from
 // (Sailendra) and serve no other org. With owner decision D6 (one Meta app per
 // client) they move to Supabase Vault and whatsapp_integrations (2.1b/2.2c,
 // docs/FASE2_DESIGN.md): this module stays, its env branch goes, and the call
-// sites keep this interface.
+// sites keep this interface. The per-app webhook URL (2.2c) already reads
+// Vault (vaultWebhookApp, vaultOrgCreds); sends move in 2.2d.
 
 // Trimmed: a newline or tab pasted along with a value would otherwise make
 // every event of the app's own number look like another number's (the Graph
@@ -82,6 +84,73 @@ export function envWebhookApp(): WebhookApp {
  */
 export async function resolveWhatsAppContext(client: SupabaseClient): Promise<WaCreds> {
     return envCreds(await getDefaultOrgIdStrict(client));
+}
+
+/** A client Meta app behind a per-app webhook URL (wa_webhook_app, migration 0073). */
+export interface VaultWebhookApp {
+    appId: string;
+    orgId: string;
+    /** 'active' or 'suspended'. */
+    status: string;
+    /** null when Vault could not decrypt it: no signature can be verified. */
+    appSecret: string | null;
+    /** sha256 of the verify token, hex. */
+    verifyTokenSha256: string;
+}
+
+/**
+ * The app whose webhook URL carries `key`, with its secret from Vault; null
+ * for an unknown key. Not cached: a rotated secret is used at once. A read
+ * error throws RpcError (code and HTTP status only). For the webhook only
+ * (pinned by __tests__/env-shim.test.ts): the caller checks the status.
+ */
+export async function vaultWebhookApp(supabase: SupabaseClient, key: string): Promise<VaultWebhookApp | null> {
+    const { data, error, status } = await supabase.rpc('wa_webhook_app', { p_key: key });
+    if (error) throw new RpcError('wa_webhook_app', error, status);
+    const row = Array.isArray(data) ? data[0] : null;
+    if (!row) return null;
+    return {
+        appId: row.app_id,
+        orgId: row.org_id,
+        status: row.status,
+        appSecret: typeof row.app_secret === 'string' && row.app_secret !== '' ? row.app_secret : null,
+        verifyTokenSha256: row.verify_token_sha256,
+    };
+}
+
+/** An org's number and its app's token from Vault (wa_org_send_credentials, migration 0073). */
+export interface VaultOrgCreds {
+    /** accessToken is '' when Vault could not decrypt it (canSend refuses it). */
+    creds: WaCreds;
+    /** The number's status: 'active' or 'paused'. */
+    status: string;
+    /** Its app's status: 'active' or 'suspended'. */
+    appStatus: string;
+}
+
+/**
+ * The org's number and token from Vault; null when the org has no number.
+ * Not cached; a read error throws RpcError. For the webhook only (pinned by
+ * __tests__/env-shim.test.ts) until sends move to Vault (2.2d): the caller
+ * checks both statuses.
+ */
+export async function vaultOrgCreds(supabase: SupabaseClient, orgId: string): Promise<VaultOrgCreds | null> {
+    const { data, error, status } = await supabase.rpc('wa_org_send_credentials', { p_org: orgId });
+    if (error) throw new RpcError('wa_org_send_credentials', error, status);
+    const row = Array.isArray(data) ? data[0] : null;
+    if (!row) return null;
+    return {
+        creds: {
+            orgId,
+            integrationId: row.integration_id,
+            phoneNumberId: row.phone_number_id,
+            wabaId: row.waba_id,
+            accessToken: row.access_token ?? '',
+            graphVersion: GRAPH_API_VERSION,
+        },
+        status: row.status,
+        appStatus: row.app_status,
+    };
 }
 
 /**

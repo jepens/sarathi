@@ -19,10 +19,13 @@ import ts from 'typescript';
 
 const SECRET_ENV = new Set(['WHATSAPP_ACCESS_TOKEN', 'WHATSAPP_PHONE_NUMBER_ID', 'WHATSAPP_APP_SECRET', 'WHATSAPP_BUSINESS_ACCOUNT_ID']);
 const SHIM = 'lib/whatsapp/credentials.ts';
-// The two helpers that hand out the default org's credentials without an org
-// check: the webhook's own (the number a delivery arrived on).
-const WEBHOOK_ONLY = new Set(['resolveWhatsAppContext', 'envWebhookApp']);
-const WEBHOOK_CALLERS = new Set(['lib/whatsapp/webhook/pipeline.ts']);
+// The helpers that hand out credentials without an org or status check: the
+// webhook's own (the number a delivery arrived on). The env two give the
+// default org's; the Vault two (Fase 2 task 2.2c) an app's secret and an
+// org's token, with the status checks left to the webhook. Their RPC names
+// count too, so a direct .rpc() call cannot skip those checks.
+const WEBHOOK_ONLY = new Set(['resolveWhatsAppContext', 'envWebhookApp', 'vaultWebhookApp', 'vaultOrgCreds', 'wa_webhook_app', 'wa_org_send_credentials']);
+const WEBHOOK_CALLERS = new Set(['lib/whatsapp/webhook/handshake.ts', 'lib/whatsapp/webhook/pipeline.ts']);
 const SOURCE = /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/;
 const TEST = /\.test\.(ts|tsx)$/;
 const SKIP_DIRS = new Set(['__tests__', 'node_modules', '.next', '.git', '.claude']);
@@ -103,6 +106,9 @@ describe('WhatsApp credentials are read only by the env shim', () => {
             "export { resolveWhatsAppContext } from '@/lib/whatsapp/credentials';",
             "const { resolveWhatsAppContext } = await import('@/lib/whatsapp/credentials');",
             "const wa = await import('@/lib/whatsapp/credentials'); wa['envWebhookApp']();",
+            "import { vaultOrgCreds } from '@/lib/whatsapp/credentials';",
+            "await supabase.rpc('wa_org_send_credentials', { p_org: orgId });",
+            'await supabase.rpc(`wa_webhook_app`, { p_key: key });',
         ];
         for (const use of uses) expect(namesWebhookOnlyHelper(use), use).toBe(true);
         expect(namesWebhookOnlyHelper('/** see resolveWhatsAppContext */ const x = 1; // envWebhookApp')).toBe(false);
