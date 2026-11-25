@@ -25,9 +25,12 @@ import {
     envWhatsAppSendConfigured,
     getOrgWhatsAppCreds,
     resolveWhatsAppContext,
+    vaultOrgCreds,
+    vaultWebhookApp,
     WhatsAppNotConfiguredError,
 } from '@/lib/whatsapp/credentials';
 import { GRAPH_API_VERSION } from '@/lib/whatsapp/graph';
+import { RpcError } from '@/lib/whatsapp/webhook/errors';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const client = { tag: 'caller-client' } as any;
@@ -164,5 +167,112 @@ describe('env checks', () => {
         expect(() => assertCanSend(creds)).not.toThrow();
         expect(() => assertCanSend({ ...creds, phoneNumberId: '' })).toThrow(WhatsAppNotConfiguredError);
         expect(() => assertCanSend({ ...creds, accessToken: '' })).toThrow(WhatsAppNotConfiguredError);
+    });
+});
+
+// The Vault readers of the per-app webhook (Fase 2 task 2.2c): one RPC each
+// on the caller's client, rows mapped as they are (the webhook checks the
+// statuses), null for no row, an RpcError with the code only on a failure.
+
+const KEY = 'A'.repeat(32);
+const APP_ID = 'cccccccc-0000-4000-8000-00000000000c';
+const INTEGRATION_ID = 'dddddddd-0000-4000-8000-00000000000d';
+
+/** A client whose rpc() records the call and answers `reply`. */
+function rpcClient(reply: { data?: unknown; error?: unknown; status?: number }) {
+    const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
+    const fake = {
+        rpc: async (name: string, args: Record<string, unknown>) => {
+            calls.push({ name, args });
+            return { data: null, error: null, status: 200, ...reply };
+        },
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return { calls, client: fake as any };
+}
+
+describe('vaultWebhookApp', () => {
+    it('maps the app row of the key', async () => {
+        const fake = rpcClient({
+            data: [{ app_id: APP_ID, org_id: OTHER_ORG, status: 'active', app_secret: 'rahasia-rahasia-rahasia', verify_token_sha256: 'ab'.repeat(32) }],
+        });
+        await expect(vaultWebhookApp(fake.client, KEY)).resolves.toEqual({
+            appId: APP_ID,
+            orgId: OTHER_ORG,
+            status: 'active',
+            appSecret: 'rahasia-rahasia-rahasia',
+            verifyTokenSha256: 'ab'.repeat(32),
+        });
+        expect(fake.calls).toEqual([{ name: 'wa_webhook_app', args: { p_key: KEY } }]);
+    });
+
+    it('an unknown key is null; a secret Vault could not decrypt is null', async () => {
+        await expect(vaultWebhookApp(rpcClient({ data: [] }).client, KEY)).resolves.toBeNull();
+        const undecrypted = rpcClient({ data: [{ app_id: APP_ID, org_id: OTHER_ORG, status: 'active', app_secret: null, verify_token_sha256: 'ab'.repeat(32) }] });
+        await expect(vaultWebhookApp(undecrypted.client, KEY)).resolves.toMatchObject({ appSecret: null });
+    });
+
+    it('an RPC error throws RpcError with the code only, never the message', async () => {
+        const error = await vaultWebhookApp(rpcClient({ error: { code: 'PGRST301', message: 'rahasia-rahasia-rahasia' }, status: 401 }).client, KEY).catch((e: unknown) => e);
+        expect(error).toBeInstanceOf(RpcError);
+        expect(error).toMatchObject({ code: 'PGRST301', status: 401 });
+        expect(String((error as Error).message)).not.toContain('rahasia');
+    });
+});
+
+describe('vaultOrgCreds', () => {
+    it("maps the org's number and its app's token", async () => {
+        const fake = rpcClient({
+            data: [
+                {
+                    integration_id: INTEGRATION_ID,
+                    app_id: APP_ID,
+                    phone_number_id: '100000000000003',
+                    waba_id: '200000000000003',
+                    access_token: 'token-token-token-token',
+                    status: 'active',
+                    app_status: 'active',
+                },
+            ],
+        });
+        await expect(vaultOrgCreds(fake.client, OTHER_ORG)).resolves.toEqual({
+            creds: {
+                orgId: OTHER_ORG,
+                integrationId: INTEGRATION_ID,
+                phoneNumberId: '100000000000003',
+                wabaId: '200000000000003',
+                accessToken: 'token-token-token-token',
+                graphVersion: GRAPH_API_VERSION,
+            },
+            status: 'active',
+            appStatus: 'active',
+        });
+        expect(fake.calls).toEqual([{ name: 'wa_org_send_credentials', args: { p_org: OTHER_ORG } }]);
+    });
+
+    it('an org without a number is null; a token Vault could not decrypt is empty (canSend refuses it)', async () => {
+        await expect(vaultOrgCreds(rpcClient({ data: [] }).client, OTHER_ORG)).resolves.toBeNull();
+        const undecrypted = rpcClient({
+            data: [{ integration_id: INTEGRATION_ID, app_id: APP_ID, phone_number_id: '100000000000003', waba_id: '200000000000003', access_token: null, status: 'paused', app_status: 'suspended' }],
+        });
+        const read = await vaultOrgCreds(undecrypted.client, OTHER_ORG);
+        expect(read).toMatchObject({ status: 'paused', appStatus: 'suspended' });
+        expect(read?.creds.accessToken).toBe('');
+        expect(canSend(read!.creds)).toBe(false);
+    });
+
+    it('an RPC error throws RpcError with the code only, never the message', async () => {
+        const error = await vaultOrgCreds(rpcClient({ error: { code: '57014', message: 'token-token-token-token' }, status: 500 }).client, OTHER_ORG).catch((e: unknown) => e);
+        expect(error).toBeInstanceOf(RpcError);
+        expect(String((error as Error).message)).toBe('wa_org_send_credentials failed (HTTP 500, 57014)');
+    });
+
+    it('neither reader reads the env or the default org', async () => {
+        vi.stubEnv('WHATSAPP_ACCESS_TOKEN', 'token-token-token-token');
+        const fake = rpcClient({ data: [] });
+        await vaultWebhookApp(fake.client, KEY);
+        await vaultOrgCreds(fake.client, OTHER_ORG);
+        expect(h.defaultOrg).not.toHaveBeenCalled();
+        expect(h.createService).not.toHaveBeenCalled();
     });
 });

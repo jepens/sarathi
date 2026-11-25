@@ -33,12 +33,14 @@ import ts from 'typescript';
 // gap silently.
 //
 // Routes with their OWN authentication are exempt:
-//   - webhook/whatsapp — Meta signature (X-Hub-Signature-256);
-//   - queue/process    — cron bearer secret.
+//   - webhook/whatsapp       — Meta signature (X-Hub-Signature-256);
+//   - webhook/whatsapp/[key] — the same, with the app's secret from Vault
+//                              (GET: the app's verify token hash);
+//   - queue/process          — cron bearer secret.
 // (/auth/confirm lives outside app/api.)
 
 const API_DIR = join(process.cwd(), 'app', 'api');
-const EXEMPT = new Set(['webhook/whatsapp/route.ts', 'queue/process/route.ts']);
+const EXEMPT = new Set(['webhook/whatsapp/route.ts', 'webhook/whatsapp/[key]/route.ts', 'queue/process/route.ts']);
 const METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS']);
 const GATES = new Set(['requireOrgContext', 'requireUserContext', 'requireEnvIntegration', 'requireWhatsAppIntegration']);
 

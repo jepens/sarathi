@@ -23,7 +23,8 @@ export interface BatchRun {
     outcome: BatchOutcome;
     /**
      * The org and the credentials of the number the delivery arrived on
-     * (resolveWhatsAppContext), read strictly once per delivery, the first
+     * (resolveWhatsAppContext on the bare URL; on a per-app URL the Vault
+     * row read before the walk), read strictly once per delivery, the first
      * time an item needs them; a read error rejects every later call too.
      * The access token may be '' (unset): storing works, sends fail.
      */
