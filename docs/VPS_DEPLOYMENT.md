@@ -20,8 +20,6 @@
 ## 📋 Pre-Deployment Checklist
 
 ### 1. Database Setup
-- [ ] Run `database/scalability-schema.sql` in Supabase SQL Editor
-- [ ] Run `database/whatsapp_monitoring.sql` in Supabase SQL Editor
 - [ ] Verify tables created: `message_queue`, `rate_limits`, `whatsapp_chats`, `whatsapp_messages`
 - [ ] Test connection from local
 - [ ] **Apply ALL pending `supabase/migrations/*.sql` BEFORE deploying app code** (see ⚠️ below)
@@ -88,13 +86,13 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
 # OpenAI
 OPENAI_API_KEY=sk-your-key
 
-# WhatsApp
-WHATSAPP_ACCESS_TOKEN=your-token
-WHATSAPP_PHONE_NUMBER_ID=668003893055590
-WHATSAPP_VERIFY_TOKEN=123456
+# WhatsApp: no credentials here. Each org's app secret and token live in
+# Supabase Vault (docs/WHATSAPP_SETUP.md); only these two optional switches
+# are env (see .env.example).
+# WHATSAPP_OTHER_NUMBER_EVENTS=
+# WHATSAPP_DEBOUNCE_SECONDS=
 
 # Production (Optional but Recommended)
-WHATSAPP_APP_SECRET=your-app-secret
 CRON_SECRET=your-random-secret
 NODE_ENV=production
 ```
@@ -102,7 +100,7 @@ NODE_ENV=production
 **How to get values:**
 - Supabase: Dashboard → Settings → API
 - OpenAI: https://platform.openai.com/api-keys
-- WhatsApp: Meta for Developers → Your App → WhatsApp
+- WhatsApp: provisioned into Vault with `scripts/wa-provision.mjs` (docs/WHATSAPP_SETUP.md)
 - CRON_SECRET: Generate random string (e.g., `openssl rand -hex 32`)
 
 ### Step 4: Deploy!
@@ -215,8 +213,8 @@ Use free services:
 2. Navigate to: Your App → WhatsApp → Configuration
 3. Click **Edit** on Webhook
 4. Enter:
-   - **Callback URL**: `https://your-domain.com/api/webhook/whatsapp`
-   - **Verify Token**: (same as `WHATSAPP_VERIFY_TOKEN` in env)
+   - **Callback URL**: `https://your-domain.com/api/webhook/whatsapp/<webhook_key>` (printed by `scripts/wa-provision.mjs --phase=app`)
+   - **Verify Token**: the token the same phase printed (shown once)
 5. Click **Verify and Save**
 6. Subscribe to **messages** field
 
@@ -224,7 +222,7 @@ Use free services:
 
 ```bash
 # Test webhook verification
-curl "https://your-domain.com/api/webhook/whatsapp?hub.mode=subscribe&hub.verify_token=YOUR_TOKEN&hub.challenge=test123"
+curl "https://your-domain.com/api/webhook/whatsapp/<webhook_key>?hub.mode=subscribe&hub.verify_token=YOUR_TOKEN&hub.challenge=test123"
 
 # Should return: test123
 ```

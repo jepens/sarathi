@@ -524,9 +524,13 @@ line to `production.txt`.
   (`<` only in production, `>` only in the replay), each with a reason:
   permanent ones, or *pending* lines of a migration not yet applied to
   production (see above). Entries that no longer differ fail as stale. It
-  currently holds no pending block: the replay matches production exactly
-  (re-checked 2026-10-30 after applying 0072, against a fresh read-only
-  production query: 750 lines, md5 `25ceb46d87114b88472d3b264248d4a2`).
+  currently holds one pending block: the contract 0074 (the 4 `<` lines
+  `fn`/`fnexec public.verify_webhook_token(input_token text)`; applied with
+  the owner's approval after the D31 rotation, 2026-12-03 at the earliest).
+  The block is deleted when production.txt is refreshed after its apply.
+  Apart from it the replay matches production exactly (re-checked
+  2026-11-20 after applying 0073: 811 lines, md5
+  `8ccec27ec0377304267a4bb62b7c3804`).
 - Not fingerprinted: sequence privileges, column-level privileges, MAINTAIN,
   foreign-table privileges and default privileges (`pg_default_acl`); the
   `relpriv` lines cover only `arwdDxt` on tables and views. Whenever

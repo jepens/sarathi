@@ -6,8 +6,9 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 // public.platform_settings holds the configuration of the single Sarathi
 // deployment: the default org of the service-role paths. It has RLS on and
 // NO policies, so only the service role can read or write it. (The legacy
-// WhatsApp verify token / URL rows are dead since task 2.2d: every Meta app
-// has its own URL and verify token, migration 0073.)
+// WhatsApp verify token / URL rows and verify_webhook_token() were dropped by
+// the contract 0074, task 2.2d: every Meta app has its own URL and verify
+// token, migration 0073.)
 // Tenant settings stay in app_settings, keyed by (org_id, key).
 //
 // Rollout: migration 0061 copied these keys from app_settings (expand), the
