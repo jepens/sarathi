@@ -4,7 +4,8 @@ import { processAppWebhook } from '@/lib/whatsapp/webhook/pipeline';
 // The webhook URL of one client Meta app (Fase 2 task 2.2c):
 // /api/webhook/whatsapp/<whatsapp_apps.webhook_key>. The key only routes;
 // trust comes from the app's own signature (POST) and verify token (GET),
-// both read from Vault. The bare URL (../route.ts) still serves the env app.
+// both read from Vault. This is the only WhatsApp webhook URL; the bare
+// /api/webhook/whatsapp was removed in 2.2d.
 
 export async function GET(request: Request, { params }: { params: Promise<{ key: string }> }) {
     const { key } = await params;

@@ -4,10 +4,10 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 // KEA-9).
 //
 // public.platform_settings holds the configuration of the single Sarathi
-// deployment: the default org of the service-role paths and the WhatsApp
-// webhook verify token / URL. It has RLS on and NO policies, so only the
-// service role can read or write it — a tenant member can neither read the
-// verify token nor redirect the webhook to another org.
+// deployment: the default org of the service-role paths. It has RLS on and
+// NO policies, so only the service role can read or write it. (The legacy
+// WhatsApp verify token / URL rows are dead since task 2.2d: every Meta app
+// has its own URL and verify token, migration 0073.)
 // Tenant settings stay in app_settings, keyed by (org_id, key).
 //
 // Rollout: migration 0061 copied these keys from app_settings (expand), the
@@ -18,11 +18,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 /** The seed org (Sailendra, tenant #1), created by migration 0026. */
 export const SEED_ORG_ID = '5a11e024-0001-4000-8000-000000000001';
 
-export const PLATFORM_SETTING_KEYS = [
-    'default_org_id',
-    'whatsapp_verify_token',
-    'whatsapp_webhook_url',
-] as const;
+export const PLATFORM_SETTING_KEYS = ['default_org_id'] as const;
 
 export type PlatformSettingKey = (typeof PLATFORM_SETTING_KEYS)[number];
 

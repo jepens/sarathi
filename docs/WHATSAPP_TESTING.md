@@ -15,7 +15,7 @@ This document provides comprehensive testing procedures for the WhatsApp integra
 
 **How to Test Locally**:
 ```bash
-curl "http://localhost:3000/api/webhook/whatsapp?hub.mode=subscribe&hub.verify_token=YOUR_VERIFY_TOKEN&hub.challenge=test123"
+curl "http://localhost:3000/api/webhook/whatsapp/<webhook_key>?hub.mode=subscribe&hub.verify_token=YOUR_VERIFY_TOKEN&hub.challenge=test123"
 ```
 
 **Expected Response**: `test123`
@@ -52,7 +52,7 @@ now gets 403. Use the signed script, which reads `.env.local`. The server
 uses its own credentials, so the test message is stored in its database and its
 AI really tries to answer `TEST_PHONE`: use a number you own.
 ```bash
-TEST_PHONE=<your-number> node --env-file=.env.local scripts/test-webhook.js
+WEBHOOK_URL=http://localhost:3000/api/webhook/whatsapp/<webhook_key> TEST_PHONE=<your-number> node --env-file=.env.local scripts/test-webhook.js
 ```
 
 **Expected Result**:

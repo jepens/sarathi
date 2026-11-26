@@ -13,14 +13,17 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 // Opt-in: skipped unless LOCAL_SUPABASE_URL and LOCAL_SUPABASE_SERVICE_KEY are
 // set (CI runs vitest without a database). The scenarios that change the
 // database for a few seconds (a failing or slow trigger on message_queue,
-// wa_ingest_inbound renamed or without its grant, platform_settings
-// unreadable) also need LOCAL_SUPABASE_DB_CONTAINER, the stack's Postgres
+// wa_ingest_inbound renamed or without its grant, wa_org_send_credentials
+// not executable) also need LOCAL_SUPABASE_DB_CONTAINER, the stack's Postgres
 // container, for psql; without it they are skipped. Local stacks only: the
 // run refuses a URL that is not local, a container of another stack and a
 // queue holding another org's pending or processing jobs; it creates and
 // deletes its own org and makes it the default org (platform_settings) until
-// it ends. How to run it, and what an interrupted run leaves behind:
-// supabase/README.md. Fake phones, wamids and texts only.
+// it ends. The org gets its own Meta app and number in Vault (wa_provision_app,
+// wa_provision_number; removed with wa_offboard_org), and every delivery goes
+// to that app's URL (Fase 2 task 2.2d). How to run it, and what an
+// interrupted run leaves behind: supabase/README.md. Fake phones, wamids,
+// secrets and texts only.
 
 const API_URL = process.env.LOCAL_SUPABASE_URL ?? '';
 const SERVICE_KEY = process.env.LOCAL_SUPABASE_SERVICE_KEY ?? '';
@@ -35,7 +38,7 @@ vi.mock('@/lib/whatsapp/client', () => ({ sendWhatsAppMessage: vi.fn(), download
 vi.mock('@/lib/notifications/web-push', () => ({ sendPushToOrg: vi.fn() }));
 vi.mock('@/lib/ai/rag', () => ({ generateRAGResponse: vi.fn() }));
 
-import { POST } from '@/app/api/webhook/whatsapp/route';
+import { POST as keyPost } from '@/app/api/webhook/whatsapp/[key]/route';
 import { processQueue } from '@/lib/whatsapp/queue-db';
 import { downloadWhatsAppMedia, sendWhatsAppMessage } from '@/lib/whatsapp/client';
 import { sendPushToOrg } from '@/lib/notifications/web-push';
@@ -49,7 +52,7 @@ import { whatsappLogger } from '@/lib/utils/logger';
 
 const SECRET = 'e2e-rahasia-aplikasi-palsu';
 const PNID = '100000000000901';
-const TOKEN = 'token-palsu-e2e';
+const TOKEN = 'token-palsu-lokal-panjang'; // wa_provision_app wants 20+ characters
 const AI_REPLY = 'Balasan AI palsu (e2e)';
 const ORG_PREFIX = 'e2e local-db webhook';
 // Another number of the WABA, new on every run: its first event is "new".
@@ -104,7 +107,7 @@ const PHONE = {
 } as const;
 
 // The run's alerts that carry no org (deleted with the run's org).
-const ORGLESS_DETAILS = ['perubahan "messages" tanpa isi terbaca; dilewati', 'database 42501 — org default tidak terbaca: izin database (grant) hilang (1 dari 1 item)'];
+const ORGLESS_DETAILS = ['perubahan "messages" tanpa isi terbaca; dilewati'];
 
 type Json = Record<string, unknown>;
 
@@ -157,6 +160,8 @@ let db: SupabaseClient;
 /** Set once the container is known to be this stack's: only then does any psql run, also in the cleanup. */
 let containerVerified = false;
 let ORG = '';
+/** The webhook key of the run's app (its URL /api/webhook/whatsapp/<KEY>). */
+let KEY = '';
 let previousDefault: string | null = null;
 let runStartedAt = '';
 let infoSpy: MockInstance<typeof whatsappLogger.info>;
@@ -213,7 +218,7 @@ const bytesOf = (body: Json): Buffer => Buffer.from(JSON.stringify(body), 'utf8'
 
 function signedRequest(bytes: Buffer): Request {
     const signature = `sha256=${crypto.createHmac('sha256', SECRET).update(bytes).digest('hex')}`;
-    return new Request('http://localhost/api/webhook/whatsapp', {
+    return new Request(`http://localhost/api/webhook/whatsapp/${KEY}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-hub-signature-256': signature },
         body: new Uint8Array(bytes),
@@ -222,7 +227,7 @@ function signedRequest(bytes: Buffer): Request {
 
 /** The real route's answer to a signed delivery (the background work may still run). */
 async function deliver(body: Json | Buffer): Promise<number> {
-    const res = await POST(signedRequest(Buffer.isBuffer(body) ? body : bytesOf(body)));
+    const res = await keyPost(signedRequest(Buffer.isBuffer(body) ? body : bytesOf(body)), { params: Promise.resolve({ key: KEY }) });
     return res.status;
 }
 
@@ -355,6 +360,7 @@ async function seedReply(phone: string, wamid: string, status: string | null): P
 
 /** Deletes an org of this test and everything it wrote (the org foreign keys of these tables do not cascade). */
 async function purgeOrg(orgId: string): Promise<void> {
+    await write(db.rpc('wa_offboard_org', { p_org: orgId })); // its number, app and Vault secrets
     await write(db.from('whatsapp_messages').delete().eq('org_id', orgId));
     await write(db.from('message_queue').delete().eq('org_id', orgId));
     await write(db.from('whatsapp_chats').delete().eq('org_id', orgId));
@@ -428,6 +434,9 @@ function restoreSchema(): void {
             if not has_table_privilege('service_role', 'public.platform_settings', 'select') then
                 grant select on table public.platform_settings to service_role;
             end if;
+            if not has_function_privilege('service_role', 'public.wa_org_send_credentials(uuid)', 'execute') then
+                grant execute on function public.wa_org_send_credentials(uuid) to service_role;
+            end if;
         end;
         $$;
     `);
@@ -484,12 +493,21 @@ describe.skipIf(!ENABLED)('webhook against a local Supabase stack (PR-C2 end to 
         );
         ORG = created[0].id;
         await write(db.from('platform_settings').upsert({ key: 'default_org_id', value: ORG }, { onConflict: 'key' }));
+        // The org's Meta app and number, in Vault like production's.
+        const app = await read<{ app_id: string; webhook_key: string }>(
+            db.rpc('wa_provision_app', {
+                p_org: ORG,
+                p_meta_app_id: '100000000000900',
+                p_app_secret: SECRET,
+                p_access_token: TOKEN,
+                p_verify_token: 'verifikasi-palsu-lokal',
+            }),
+        );
+        KEY = app[0].webhook_key;
+        await write(db.rpc('wa_provision_number', { p_app: app[0].app_id, p_phone_number_id: PNID, p_waba_id: '200000000000901' }));
 
         vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', API_URL);
         vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', SERVICE_KEY);
-        vi.stubEnv('WHATSAPP_APP_SECRET', SECRET);
-        vi.stubEnv('WHATSAPP_PHONE_NUMBER_ID', PNID);
-        vi.stubEnv('WHATSAPP_ACCESS_TOKEN', TOKEN);
         vi.stubEnv('WHATSAPP_OTHER_NUMBER_EVENTS', '');
         // The webhook's own drains find nothing settled, so a test sees the
         // jobs as the ingest left them; drainNow() answers on demand.
@@ -520,8 +538,8 @@ describe.skipIf(!ENABLED)('webhook against a local Supabase stack (PR-C2 end to 
             );
             if (!KEEP_ROWS) {
                 await attempt(() => purgeOrg(ORG));
-                // The org-less alerts of this run: the other number's (j, r),
-                // the unreadable change (l) and the unreadable org (t).
+                // The org-less alerts of this run: the other number's (j, r)
+                // and the unreadable change (l).
                 const ref = otherNumberOf(OTHER_PNID, OTHER_DISPLAY).ref;
                 await attempt(() => write(db.from('ops_events').delete().is('org_id', null).like('detail', `phone_number_id ${ref};%`)));
                 await attempt(() =>
@@ -1413,38 +1431,28 @@ describe.skipIf(!ENABLED)('webhook against a local Supabase stack (PR-C2 end to 
         );
     });
 
-    it.skipIf(!DB_CONTAINER)('t. the default org cannot be read: 503 and a webhook_error without an org, nothing stored; without an access token a message is stored and webhook_unconfigured says so', { timeout: 60_000 }, async () => {
-        const { t1: T1, t2: T2 } = PHONE;
+    it.skipIf(!DB_CONTAINER)("t. the org's number cannot be read from Vault: 503 and a webhook_error for the org, nothing stored; the resend after the fix is stored", { timeout: 60_000 }, async () => {
+        const { t1: T1 } = PHONE;
         const bytes = bytesOf(delivery([change({ contacts: [contactOf(T1)], messages: [textMsg(T1, 'wamid.e2e.t1', 'Halo?', metaAgo(20_000).ts)] })]));
-        const orgless = await events('webhook_error', null);
-        psql('revoke select on table public.platform_settings from service_role;');
+        const before = await events('webhook_error');
+        psql('revoke execute on function public.wa_org_send_credentials(uuid) from service_role;');
         try {
             expect(await deliver(bytes)).toBe(503);
-            const after = await events('webhook_error', null);
-            expect(after.count).toBe(orgless.count + 1);
-            expect(after.details).toContain('database 42501 — org default tidak terbaca: izin database (grant) hilang (1 dari 1 item)');
+            const after = await events('webhook_error');
+            expect(after.count).toBe(before.count + 1);
+            // An earlier case may already hold this minute's webhook_error row of
+            // the org, which keeps its first detail: the cause is checked in the
+            // log line (the unit suites pin the alert text).
+            expect(errorSpy.mock.calls.map((c) => c[0])).toContainEqual(
+                expect.stringMatching(/^Webhook number could not be read \(app [0-9a-f-]{36}, database 42501\)$/),
+            );
             expect(await chatOf(T1)).toBeNull();
             expect(await mainRate(T1)).toBeNull();
         } finally {
-            psql('grant select on table public.platform_settings to service_role;');
+            psql('grant execute on function public.wa_org_send_credentials(uuid) to service_role;');
         }
         expect(await deliver(bytes)).toBe(200);
         expect((await messagesOf(T1)).map((m) => m.wa_message_id)).toEqual(['wamid.e2e.t1']);
-
-        vi.stubEnv('WHATSAPP_ACCESS_TOKEN', '');
-        try {
-            const unconfigured = await events('webhook_unconfigured');
-            expect(await deliver(delivery([change({ contacts: [contactOf(T2)], messages: [textMsg(T2, 'wamid.e2e.t2', 'Halo lagi', metaAgo(20_000).ts)] })]))).toBe(200);
-            expect((await messagesOf(T2)).map((m) => m.wa_message_id)).toEqual(['wamid.e2e.t2']);
-            expect((await jobsOf(T2)).map((j) => j.status)).toEqual(['pending']);
-            const after = await events('webhook_unconfigured');
-            expect(after.count).toBe(unconfigured.count + 1);
-            expect(after.details).toContain(
-                'WHATSAPP_ACCESS_TOKEN tidak diset atau tidak valid di server: pesan masuk tetap disimpan, tetapi balasan AI dan peringatan tidak terkirim',
-            );
-        } finally {
-            vi.stubEnv('WHATSAPP_ACCESS_TOKEN', TOKEN);
-        }
         await settle();
     });
 

@@ -60,7 +60,7 @@ Open [http://localhost:3000](http://localhost:3000).
 See [.env.example](./.env.example) for the full list with inline docs. Key groups:
 - **Supabase**: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`
 - **OpenAI**: `OPENAI_API_KEY`
-- **WhatsApp**: `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_BUSINESS_ACCOUNT_ID` (for templates), `WHATSAPP_VERIFY_TOKEN`, `WHATSAPP_APP_SECRET`
+- **WhatsApp**: credentials live in Supabase Vault (set up with `scripts/wa-provision.mjs`); each Meta app calls `/api/webhook/whatsapp/<webhook_key>`. Only `WHATSAPP_OTHER_NUMBER_EVENTS` and `WHATSAPP_DEBOUNCE_SECONDS` are env.
 - **Email (proposals)**: `RESEND_API_KEY`, `SAILENDRA_FROM_EMAIL`
 
 ### Database migrations
@@ -74,7 +74,7 @@ Idempotent SQL lives in [`supabase/migrations/`](./supabase/migrations) and is a
 
 - Never commit `.env.local`.
 - `whatsapp_chats` / `whatsapp_messages` are authenticated-only (RLS); the webhook writes via the service role. Anon clients have no access.
-- Webhook enforces `X-Hub-Signature-256` over the raw body before reading it (set `WHATSAPP_APP_SECRET`); there is no switch to skip it.
+- Webhook enforces `X-Hub-Signature-256` over the raw body before reading it (the app's secret from Vault); there is no switch to skip it.
 - Use a Meta System User token in production.
 
 ## 🚀 Deployment

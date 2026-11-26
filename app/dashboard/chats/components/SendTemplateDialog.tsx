@@ -214,7 +214,7 @@ export function SendTemplateDialog({
                                 <div className="font-medium">Gagal memuat template</div>
                                 <div className="text-xs opacity-90">{listError}</div>
                                 <div className="mt-2 text-xs opacity-80">
-                                    Pastikan <code>WHATSAPP_BUSINESS_ACCOUNT_ID</code> sudah di-set di <code>.env.local</code> dan access token punya scope <code>whatsapp_business_management</code>.
+                                    Bila berulang, hubungi tim Sarathi: nomor WhatsApp organisasi Anda perlu dicek (WABA dan scope token <code>whatsapp_business_management</code>).
                                 </div>
                             </div>
                         </div>

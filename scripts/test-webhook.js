@@ -4,9 +4,13 @@
  * Script untuk test webhook WhatsApp secara manual
  * Mensimulasikan pesan dari WhatsApp API ke webhook lokal.
  *
- * Webhook hanya menerima kiriman bertanda tangan (X-Hub-Signature-256, HMAC
- * dengan WHATSAPP_APP_SECRET) untuk nomor WHATSAPP_PHONE_NUMBER_ID, jadi
- * jalankan dengan env aplikasi:
+ * Setiap aplikasi Meta punya URL webhook sendiri,
+ * /api/webhook/whatsapp/<webhook_key> (URL tanpa key sudah dihapus, 2.2d).
+ * URL itu hanya menerima kiriman bertanda tangan (X-Hub-Signature-256, HMAC
+ * dengan app secret aplikasi itu) untuk nomor org aplikasi itu. Secret dan ID
+ * nomor aplikasi uji diambil dari env Anda sendiri (WHATSAPP_APP_SECRET,
+ * WHATSAPP_PHONE_NUMBER_ID); server membaca miliknya dari Vault:
+ *   WEBHOOK_URL=http://localhost:3000/api/webhook/whatsapp/<webhook_key> \
  *   TEST_PHONE=<nomor milik Anda> node --env-file=.env.local scripts/test-webhook.js
  *
  * Server yang dituju memakai kredensialnya sendiri: pesan uji tersimpan di
@@ -19,8 +23,8 @@
  * balasan (kiriman kedua dikenali sebagai duplikat).
  *
  * Replay di produksi setelah deploy (runbook di deskripsi PR #61, PR-C2) butuh:
- * - WEBHOOK_URL ke URL produksi, ditambah --allow-remote;
- * - WHATSAPP_APP_SECRET dan WHATSAPP_PHONE_NUMBER_ID milik produksi di env
+ * - WEBHOOK_URL ke URL per aplikasi di produksi, ditambah --allow-remote;
+ * - WHATSAPP_APP_SECRET dan WHATSAPP_PHONE_NUMBER_ID aplikasi itu di env
  *   (secret yang salah = 403 dan email webhook_signature_invalid ke tim; ID
  *   nomor yang salah = event dianggap nomor lain WABA: dibuang, atau disimpan
  *   tanpa AI bila WHATSAPP_OTHER_NUMBER_EVENTS=process, dan email
@@ -32,7 +36,8 @@
 
 const crypto = require('crypto');
 
-const WEBHOOK_URL = process.env.WEBHOOK_URL || 'http://localhost:3000/api/webhook/whatsapp';
+// Required: a per-app URL, /api/webhook/whatsapp/<webhook_key>.
+const WEBHOOK_URL = process.env.WEBHOOK_URL || '';
 // Signed with the real app secret, this script injects a message any webhook
 // accepts, so it only talks to this machine unless --allow-remote is given.
 const ALLOW_REMOTE = process.argv.includes('--allow-remote');
@@ -48,7 +53,7 @@ const webhookPayload = {
     object: 'whatsapp_business_account',
     entry: [
         {
-            id: 'WHATSAPP_BUSINESS_ACCOUNT_ID',
+            id: 'WABA_ID',
             changes: [
                 {
                     value: {
@@ -89,7 +94,18 @@ async function testWebhook() {
     console.log(`📍 Webhook URL: ${WEBHOOK_URL}`);
     console.log(`📱 Test Phone: ${TEST_PHONE || '(belum diisi)'}\n`);
 
-    const host = new URL(WEBHOOK_URL).hostname;
+    let url = null;
+    try {
+        url = new URL(WEBHOOK_URL);
+    } catch {
+        // checked below
+    }
+    if (!url || !/^\/api\/webhook\/whatsapp\/[^/]+$/.test(url.pathname)) {
+        console.error('❌ WEBHOOK_URL wajib diisi dengan URL per aplikasi, mis. http://localhost:3000/api/webhook/whatsapp/<webhook_key>');
+        process.exitCode = 1;
+        return;
+    }
+    const host = url.hostname;
     if (!ALLOW_REMOTE && !['localhost', '127.0.0.1', '::1', '[::1]'].includes(host)) {
         console.error(`❌ ${host} is not this machine. A signed test message would really be stored (and answered) there.`);
         console.error('   Pass --allow-remote only if that is what you want.');
@@ -98,7 +114,7 @@ async function testWebhook() {
     }
     if (!APP_SECRET || !PHONE_NUMBER_ID) {
         console.error('❌ WHATSAPP_APP_SECRET dan WHATSAPP_PHONE_NUMBER_ID wajib ada.');
-        console.error('   Jalankan: TEST_PHONE=<nomor milik Anda> node --env-file=.env.local scripts/test-webhook.js');
+        console.error('   Jalankan: WEBHOOK_URL=<URL per aplikasi> TEST_PHONE=<nomor milik Anda> node --env-file=.env.local scripts/test-webhook.js');
         process.exitCode = 1;
         return;
     }

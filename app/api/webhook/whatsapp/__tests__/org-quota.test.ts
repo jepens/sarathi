@@ -66,15 +66,27 @@ function serviceClient() {
 
 vi.mock('@supabase/supabase-js', () => ({ createClient: vi.fn(() => serviceClient()) }));
 vi.mock('@/lib/whatsapp/security', () => ({ verifyWhatsAppSignature: vi.fn(async () => true) }));
-vi.mock('@/lib/whatsapp/credentials', () => ({
-    envWebhookApp: () => ({ appSecret: 'app-secret', phoneNumberId: 'phone-number-id' }),
-    resolveWhatsAppContext: vi.fn(async () => ({
+// The per-app URL's two Vault reads (2.2c): the app of KEY and its org's number.
+vi.mock('@/lib/whatsapp/credentials', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('@/lib/whatsapp/credentials')>()),
+    vaultWebhookApp: vi.fn(async () => ({
+        appId: 'cccccccc-0000-4000-8000-00000000000c',
         orgId: ORG,
-        integrationId: null,
-        phoneNumberId: 'phone-number-id',
-        wabaId: null,
-        accessToken: 'access-token',
-        graphVersion: 'v25.0',
+        status: 'active',
+        appSecret: 'app-secret',
+        verifyTokenSha256: '0'.repeat(64),
+    })),
+    vaultOrgCreds: vi.fn(async () => ({
+        creds: {
+            orgId: ORG,
+            integrationId: 'eeeeeeee-0000-4000-8000-00000000000e',
+            phoneNumberId: 'phone-number-id',
+            wabaId: null,
+            accessToken: 'access-token',
+            graphVersion: 'v25.0',
+        },
+        status: 'active',
+        appStatus: 'active',
     })),
 }));
 vi.mock('@/lib/whatsapp/client', () => ({ downloadWhatsAppMedia: vi.fn(), sendWhatsAppMessage: vi.fn() }));
@@ -90,14 +102,18 @@ vi.mock('@/lib/quota/org-quota', async (importOriginal) => ({
 vi.mock('@/lib/whatsapp/recipient', () => ({ resolveSendTarget: vi.fn() }));
 vi.mock('@/lib/whatsapp/history', () => ({ logSystemMessage: h.logSystem }));
 vi.mock('@/lib/whatsapp/flow-response', () => ({ handleFlowReply: vi.fn(async () => ({ status: 'handled' })) }));
-vi.mock('@/lib/settings/app-settings', () => ({ checkVerifyToken: vi.fn() }));
 vi.mock('@/lib/utils/logger', async (importOriginal) => ({
     // Keep redactPII (the ops event writer uses it).
     ...(await importOriginal<typeof import('@/lib/utils/logger')>()),
     whatsappLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
-import { POST } from '@/app/api/webhook/whatsapp/route';
+import { POST as keyPost } from '@/app/api/webhook/whatsapp/[key]/route';
+
+const KEY = 'A'.repeat(32);
+const POST = (request: Request) => keyPost(request, { params: Promise.resolve({ key: KEY }) });
+// A well-formed signature header (the verifier is stubbed to accept it).
+const SIGNED = { 'x-hub-signature-256': `sha256=${'0'.repeat(64)}` };
 import { inboundQuotaNotice, QUOTA_DEFAULTS } from '@/lib/quota/org-quota';
 import { processQueue } from '@/lib/whatsapp/queue-db';
 import { sendWhatsAppMessage } from '@/lib/whatsapp/client';
@@ -119,7 +135,7 @@ function inboundText(phone: string): { req: Request; wamid: string } {
             messages: [{ from: phone, id: wamid, type: 'text', text: { body: 'halo, masih buka?' } }],
         } }] }],
     };
-    return { req: new Request('http://localhost/api/webhook/whatsapp', { method: 'POST', body: JSON.stringify(body) }), wamid };
+    return { req: new Request(`http://localhost/api/webhook/whatsapp/${KEY}`, { method: 'POST', headers: SIGNED, body: JSON.stringify(body) }), wamid };
 }
 
 const ingests = () => h.rpcs.filter((c) => c.fn === 'wa_ingest_inbound').map((c) => c.args);
@@ -261,7 +277,7 @@ describe('webhook text message: the org inbound quota', () => {
                     contacts: [{ name: { formatted_name: 'Pelanggan Palsu' }, phones: [{ wa_id: '620000000007' }] }] }],
             } }] }],
         };
-        const res = await POST(new Request('http://localhost/api/webhook/whatsapp', { method: 'POST', body: JSON.stringify(body) }));
+        const res = await POST(new Request(`http://localhost/api/webhook/whatsapp/${KEY}`, { method: 'POST', headers: SIGNED, body: JSON.stringify(body) }));
         expect(res.status).toBe(200);
         // Keyed by the card's wamid: a resend writes no second note (D23-3).
         expect(h.logSystem).toHaveBeenCalledWith(expect.anything(), '620000000007', expect.stringContaining('Customer shared contact info'), {

@@ -1,10 +1,12 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-// Platform settings (tracker 1.7, audit KEA-9): getDefaultOrgId and the
-// verify-token helpers read public.platform_settings (service role only) and
-// nothing else: the legacy app_settings fallback was removed with the contract
-// migration 0062, so a row a tenant creates in app_settings is never read.
+// Platform settings (tracker 1.7, audit KEA-9): getDefaultOrgId reads
+// public.platform_settings (service role only) and nothing else: the legacy
+// app_settings fallback was removed with the contract migration 0062, so a row
+// a tenant creates in app_settings is never read. Since 2.2d the default org
+// is the only platform setting: the legacy webhook verify token and URL went
+// with the bare webhook URL (every Meta app has its own, in Vault).
 
 const SEED = '5a11e024-0001-4000-8000-000000000001';
 
@@ -38,16 +40,15 @@ function fakeClient(answers: Record<string, Answer>) {
 vi.mock('@/lib/supabase/server', () => ({ createClient: vi.fn() }));
 vi.mock('@/lib/supabase/service', () => ({ createServiceOrServerClient: vi.fn() }));
 
-import { getPlatformSetting } from '@/lib/settings/platform-settings';
+import { getPlatformSetting, PLATFORM_SETTING_KEYS } from '@/lib/settings/platform-settings';
 import { getDefaultOrgId, getDefaultOrgIdStrict } from '@/lib/settings/org-context';
 import { describeErrorForOps } from '@/lib/ops/events';
-import { checkVerifyToken, getVerifyToken, getWebhookUrl } from '@/lib/settings/app-settings';
-
-beforeEach(() => {
-    delete process.env.WHATSAPP_VERIFY_TOKEN;
-});
 
 describe('getPlatformSetting', () => {
+    it('knows one key: the default org', () => {
+        expect(PLATFORM_SETTING_KEYS).toEqual(['default_org_id']);
+    });
+
     it('reads platform_settings first and stops there', async () => {
         const { client, calls } = fakeClient({
             platform_settings: { data: { value: 'org-x' }, error: null },
@@ -60,7 +61,7 @@ describe('getPlatformSetting', () => {
         const { client, calls } = fakeClient({
             app_settings: { data: { value: 'legacy' }, error: null },
         });
-        expect(await getPlatformSetting(client, 'whatsapp_verify_token')).toBeNull();
+        expect(await getPlatformSetting(client, 'default_org_id')).toBeNull();
         expect(calls.map((c) => c.table)).toEqual(['platform_settings']);
     });
 
@@ -69,7 +70,7 @@ describe('getPlatformSetting', () => {
             platform_settings: { data: null, error: { code: '42501', message: 'permission denied' } },
             app_settings: { data: { value: 'legacy' }, error: null },
         });
-        expect(await getPlatformSetting(client, 'whatsapp_webhook_url')).toBeNull();
+        expect(await getPlatformSetting(client, 'default_org_id')).toBeNull();
         expect(calls.map((c) => c.table)).toEqual(['platform_settings']);
     });
 
@@ -77,7 +78,7 @@ describe('getPlatformSetting', () => {
         const { client } = fakeClient({
             platform_settings: { data: { value: '' }, error: null },
         });
-        expect(await getPlatformSetting(client, 'whatsapp_verify_token')).toBeNull();
+        expect(await getPlatformSetting(client, 'default_org_id')).toBeNull();
     });
 });
 
@@ -93,7 +94,7 @@ describe('getDefaultOrgId', () => {
     });
 });
 
-describe('getDefaultOrgIdStrict (the WhatsApp webhook, Fase 2 task 2.2a)', () => {
+describe('getDefaultOrgIdStrict (a read error throws, Fase 2 task 2.2a)', () => {
     it('returns the platform default org, and the seed org only when no row exists', async () => {
         expect(await getDefaultOrgIdStrict(fakeClient({ platform_settings: { data: { value: 'org-x' }, error: null } }).client)).toBe('org-x');
         expect(await getDefaultOrgIdStrict(fakeClient({}).client)).toBe(SEED);
@@ -120,39 +121,5 @@ describe('getDefaultOrgIdStrict (the WhatsApp webhook, Fase 2 task 2.2a)', () =>
         const err = await getDefaultOrgIdStrict(client).catch((e: unknown) => e);
         expect(err).toMatchObject({ name: 'PlatformSettingReadError', status: 401 });
         expect((err as { code?: unknown }).code).toBeUndefined();
-    });
-});
-
-describe('verify token + webhook URL helpers', () => {
-    it('getVerifyToken reads the platform token, then env, then fails closed', async () => {
-        const withRow = fakeClient({ platform_settings: { data: { value: 'tok' }, error: null } });
-        expect(await getVerifyToken(withRow.client)).toBe('tok');
-
-        process.env.WHATSAPP_VERIFY_TOKEN = 'env-tok';
-        expect(await getVerifyToken(fakeClient({}).client)).toBe('env-tok');
-
-        delete process.env.WHATSAPP_VERIFY_TOKEN;
-        expect(await getVerifyToken(fakeClient({}).client)).toBe('');
-    });
-
-    it('getWebhookUrl reads the platform URL with a localhost default', async () => {
-        const withRow = fakeClient({ platform_settings: { data: { value: 'https://x/api' }, error: null } });
-        expect(await getWebhookUrl(withRow.client)).toBe('https://x/api');
-        expect(await getWebhookUrl(fakeClient({}).client)).toBe('http://localhost:3000/api/webhook/whatsapp');
-    });
-
-    it('checkVerifyToken uses the RPC answer when available', async () => {
-        const { client, calls } = fakeClient({});
-        client.rpc.mockResolvedValueOnce({ data: true, error: null } as never);
-        expect(await checkVerifyToken('abc', client)).toBe(true);
-        expect(client.rpc).toHaveBeenCalledWith('verify_webhook_token', { input_token: 'abc' });
-        expect(calls).toEqual([]);
-    });
-
-    it('checkVerifyToken falls back to the platform token and never accepts an empty one', async () => {
-        const { client } = fakeClient({ platform_settings: { data: { value: 'tok' }, error: null } });
-        expect(await checkVerifyToken('tok', client)).toBe(true);
-        expect(await checkVerifyToken('nope', client)).toBe(false);
-        expect(await checkVerifyToken('', fakeClient({}).client)).toBe(false);
     });
 });

@@ -91,13 +91,12 @@ export function describeItemError(error: unknown): string {
 // internal error (classes 58 and XX, PostgREST's PGRSTX00). Counted toward an
 // item's poison bound they would turn an outage, a slow database or a
 // deploy-order slip into placeholders and skipped statuses once it is fixed.
-// A wrong API key or URL never gets as far as an item: the delivery's org
-// read on the same client fails first (PlatformSettingReadError, never
-// counted; getPlatformSettingStrict also refuses an answer that is not
-// PostgREST's 200, such as the empty 204 of a server that does not know the
-// path), so an HTTP 401/403/404 without a code on one item's own call is
-// about that request, and counts like any other answer specific to the item
-// (e.g. 23503, a contact deleted meanwhile).
+// A wrong API key or URL never gets as far as an item: the delivery's app
+// and number reads on the same client (wa_webhook_app,
+// wa_org_send_credentials) fail first and answer 503 before the walk, so an
+// HTTP 401/403/404 without a code on one item's own call is about that
+// request, and counts like any other answer specific to the item (e.g.
+// 23503, a contact deleted meanwhile).
 const SYSTEMIC_CODES = new Set(['25006', '40001', '40P01', '55P03', '57014']);
 const SYSTEMIC_HTTP = new Set([0, 408, 429]);
 

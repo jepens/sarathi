@@ -48,7 +48,7 @@ interface TemplateListResponse {
 function requireWaba(creds: WaCreds): string {
     assertCanSend(creds);
     if (!creds.wabaId) {
-        throw new Error('WhatsApp Business Account ID not configured (WHATSAPP_BUSINESS_ACCOUNT_ID)');
+        throw new Error('WhatsApp Business Account ID not configured for this org');
     }
     return creds.wabaId;
 }

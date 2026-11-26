@@ -85,7 +85,7 @@ Deploy to Vercel, Netlify, or your VPS. Get your production URL (e.g., `https://
 ### Local Test (Simulated)
 
 ```bash
-node scripts/test-whatsapp-local.mjs
+node scripts/test-whatsapp-local.mjs <webhook_key>
 ```
 
 ### Live Test (Real WhatsApp)

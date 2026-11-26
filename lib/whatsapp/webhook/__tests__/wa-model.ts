@@ -9,7 +9,8 @@ import { INGEST_PARAMS, STATUSES_PARAMS } from '@/lib/whatsapp/webhook/ingest';
 // consume_org_quota the way C2_SPEC sections 3 and 4 say migration 0072 does
 // (what the SQL really does is pinned by pgTAP 220; the parity test pins the
 // names), and the Vault reads of 0073 (wa_webhook_app,
-// wa_org_send_credentials) from fixture maps. Writes of one call commit
+// wa_org_send_credentials) from fixture maps, seeded with app KEY of ORG
+// (SECRET) and ORG's number PNID with TOKEN. Writes of one call commit
 // together or not at all, and every call
 // settles only after a macrotask (setImmediate), so "committed before the
 // answer" is observable: work the pipeline forgot to await is not in the
@@ -18,9 +19,13 @@ import { INGEST_PARAMS, STATUSES_PARAMS } from '@/lib/whatsapp/webhook/ingest';
 
 export const ORG = 'aaaaaaaa-0000-4000-8000-00000000000a';
 export const OTHER_ORG = 'bbbbbbbb-0000-4000-8000-00000000000b';
-export const PNID = '100000000000001'; // the env number
+export const PNID = '100000000000001'; // ORG's own number (its Vault row)
 export const OTHER_PNID = '100000000000002'; // another number of the WABA
 export const SECRET = 'rahasia-aplikasi-palsu';
+/** The webhook key of ORG's app (its URL /api/webhook/whatsapp/<KEY>). */
+export const KEY = 'A'.repeat(32);
+export const APP_ID = 'cccccccc-0000-4000-8000-00000000000c';
+export const TOKEN = 'token-palsu';
 
 export interface ChatRow {
     org_id: string;
@@ -322,9 +327,24 @@ export class WaModel {
     /** The minute quota of the model's orgs (consume_org_quota's limit when given). */
     quotaLimit: Record<string, number> = {};
     /** wa_webhook_app's rows (0073), by webhook key: the app's id, org, status, verify token hash and app secret. */
-    webhookApps = new Map<string, Row>();
+    webhookApps = new Map<string, Row>([
+        [KEY, { app_id: APP_ID, org_id: ORG, status: 'active', app_secret: SECRET, verify_token_sha256: '0'.repeat(64) }],
+    ]);
     /** wa_org_send_credentials' rows (0073), by org: integration_id, app_id, phone_number_id, waba_id, access_token, status, app_status. */
-    sendCreds = new Map<string, Row>();
+    sendCreds = new Map<string, Row>([
+        [
+            ORG,
+            {
+                integration_id: 'eeeeeeee-0000-4000-8000-00000000000e',
+                app_id: APP_ID,
+                phone_number_id: PNID,
+                waba_id: '200000000000001',
+                access_token: TOKEN,
+                status: 'active',
+                app_status: 'active',
+            },
+        ],
+    ]);
     private seq = 0;
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -988,7 +1008,7 @@ export function signatureOf(bytes: Buffer, secret = SECRET): string {
 export function signedPost(body: unknown, secret = SECRET): Request {
     const bytes = Buffer.isBuffer(body) ? body : Buffer.from(typeof body === 'string' ? body : JSON.stringify(body), 'utf8');
     const signature = signatureOf(bytes, secret);
-    return new Request('http://localhost/api/webhook/whatsapp', {
+    return new Request(`http://localhost/api/webhook/whatsapp/${KEY}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-hub-signature-256': signature },
         body: new Uint8Array(bytes),
@@ -1000,7 +1020,7 @@ export function delivery(...entries: unknown[][]): Row {
     return { object: 'whatsapp_business_account', entry: entries.map((changes, i) => ({ id: `waba-palsu-${i}`, changes })) };
 }
 
-/** A 'messages' change of a number (the env number by default). */
+/** A 'messages' change of a number (ORG's own number by default). */
 export function change(
     value: { messages?: unknown[]; statuses?: unknown[]; contacts?: unknown[]; errors?: unknown[] },
     phoneNumberId: string | null = PNID,
