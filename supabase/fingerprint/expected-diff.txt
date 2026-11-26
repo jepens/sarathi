@@ -14,3 +14,10 @@
 #    migration is applied to production with apply_migration, refresh
 #    production.txt and delete these lines in the same commit.
 #
+
+# pending production apply: 0074_wa_legacy_contract
+# CONTRACT (task 2.2d, PR-3): applied only with the owner's approval (D1), after 7 days with the #70 build live (2026-12-03 at the earliest), the D31 rotation and the removal of the WhatsApp credential env vars from Easypanel; delete this block when production.txt is refreshed after 0074.
+< fn public.verify_webhook_token(input_token text) returns=boolean lang=plpgsql volatile=v secdef=t config=search_path=public owner=postgres body_md5=005b92d092eca6b499b70cad6952f3ef
+< fnexec public.verify_webhook_token(input_token text) anon=f
+< fnexec public.verify_webhook_token(input_token text) authenticated=f
+< fnexec public.verify_webhook_token(input_token text) service_role=t

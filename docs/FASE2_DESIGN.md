@@ -547,6 +547,16 @@ where key in ('whatsapp_verify_token','whatsapp_webhook_url','legacy_webhook_key
 - 110 and 050 are updated.
 - `PLATFORM_SETTING_KEYS` (lib/settings/platform-settings.ts:21-25) shrinks to `default_org_id`.
 
+**As built (2026-11-26, PR-3): `0074_wa_legacy_contract`.**
+- The migration drops `verify_webhook_token(text)` and deletes only `whatsapp_verify_token` and `whatsapp_webhook_url`. A read-only check of production on 2026-11-26 found only these two keys next to `default_org_id`. `legacy_webhook_key` and `wa_creds_source` were never created, because D32 has no switch.
+- The table comment of `platform_settings` no longer names the webhook keys.
+- `PLATFORM_SETTING_KEYS` was already `default_org_id` since PR-2.
+- Test 050 loses the function from its server-only list (plan 66). Test 110 keeps the RLS and privilege checks with a neutral test key, and asserts that the function is gone (plan 16).
+- The fingerprint carries the four `verify_webhook_token` lines as a pending block until production is refreshed.
+- Timing: 7 days with the #70 build live, as above (2026-12-03 at the earliest). It also waits for the D31 rotation and the removal of the WhatsApp credential env vars from Easypanel (`WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_APP_SECRET`, `WHATSAPP_BUSINESS_ACCOUNT_ID`, `WHATSAPP_VERIFY_TOKEN`; `WHATSAPP_OTHER_NUMBER_EVENTS` and `WHATSAPP_DEBOUNCE_SECONDS` stay), and it needs the owner's approval (D1).
+- The env-based setup docs now describe the Vault flow: `docs/WHATSAPP_SETUP.md`, `docs/VPS_DEPLOYMENT.md` and `docs/WHATSAPP_TESTING.md`.
+- Left out on purpose: the dead `getDefaultOrgIdStrict` / `getPlatformSettingStrict` and their `PlatformSettingReadError` handling in `lib/whatsapp/webhook/errors.ts`. Deleting them touches about ten test files for no behaviour change.
+
 ---
 
 **Deferred:** a nullable `wa_integration_id` on whatsapp_chats and message_queue. It is only needed when an org gets a second number, so that replies leave from the number the customer wrote to.

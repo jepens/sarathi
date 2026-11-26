@@ -273,7 +273,6 @@ async function phaseApp(db, opts) {
     const base = (process.env.NEXT_PUBLIC_APP_URL ?? '').replace(/\/+$/, '');
     console.log(`\nProvisioned app ${row.app_id}.`);
     console.log(`Webhook callback URL: ${base || 'https://<app domain>'}/api/webhook/whatsapp/${row.webhook_key}`);
-    console.log('  (the per-app route arrives with task 2.2c; configure it in Meta only after that deploy)');
     console.log(`Verify token, shown ONCE, for the same Meta screen: ${verifyToken}`);
     console.log('Next: --phase=number, then --phase=verify.');
 }
@@ -369,7 +368,7 @@ async function phaseRotate(db, opts) {
     console.log(`Org: ${org.name}; app ${app.id}; rotate ${opts.kind}`);
     if (opts.kind === 'app_secret') {
         console.log('Order: reset the secret in the Meta App Dashboard first, then store it here at once.');
-        console.log('Webhooks signed with the old secret fail until then; Meta retries them.');
+        console.log('Webhooks signed with the new secret fail until then; Meta retries them.');
     }
     if (!opts.confirm) {
         console.log('Dry-run: re-run with --confirm to enter the new value.');

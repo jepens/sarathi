@@ -2,7 +2,7 @@
 -- vector-search functions stay inside the caller's org (tracker 1.2, audit
 -- KUA-13 / KEA-5 / KEA-25).
 begin;
-select plan(68);
+select plan(66);
 
 select tests.create_two_orgs();
 
@@ -56,7 +56,6 @@ select ok(not has_function_privilege(r, f, 'execute'),
           format('%s: not executable by %s', f, r))
 from unnest(array['public.bump_unread(uuid, text)',
                   'public.claim_queue_jobs(integer, integer, integer)',
-                  'public.verify_webhook_token(text)',
                   'public.handle_new_user()',
                   'public.sync_vendor_from_contact()',
                   'public.cleanup_vendor_on_untag()',

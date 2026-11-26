@@ -1,9 +1,9 @@
 -- platform_settings: deployment-level config readable/writable by the service
--- role only (migrations 0061 / 0062; tracker 1.7, audit KEA-9).
--- verify_webhook_token() reads it only: the legacy seed-org app_settings
--- fallback was removed by the contract migration 0062.
+-- role only (migrations 0061 / 0062; tracker 1.7, audit KEA-9). Its only key
+-- is default_org_id: the contract 0074 (2.2d) dropped verify_webhook_token()
+-- and the webhook verify token / URL rows (every Meta app has its own, 0073).
 begin;
-select plan(20);
+select plan(16);
 
 select tests.create_two_orgs();
 
@@ -27,7 +27,7 @@ select is((select value from public.platform_settings where key = 'default_org_i
           tests.seed_org()::text,
           'default_org_id (the seed org) lives in platform_settings');
 
-insert into public.platform_settings (key, value) values ('whatsapp_verify_token', 'rahasia-platform')
+insert into public.platform_settings (key, value) values ('kunci_uji', 'nilai-uji')
 on conflict (key) do update set value = excluded.value;
 
 -- ---------------------------------------------------------------------------
@@ -44,31 +44,15 @@ select throws_ok($$ select * from public.platform_settings $$, '42501', null,
                  'anon cannot read platform_settings');
 
 select tests.authenticate_as_service_role();
-select is((select value from public.platform_settings where key = 'whatsapp_verify_token'),
-          'rahasia-platform', 'service_role reads platform_settings');
-select is(public.verify_webhook_token('rahasia-platform'), true,
-          'verify_webhook_token: accepts the platform token');
-select is(public.verify_webhook_token('salah'), false,
-          'verify_webhook_token: rejects another token');
+select is((select value from public.platform_settings where key = 'kunci_uji'),
+          'nilai-uji', 'service_role reads platform_settings');
 
 -- ---------------------------------------------------------------------------
--- 4. No app_settings fallback + fail closed
+-- 4. The legacy webhook verify token reader is gone (contract 0074)
 -- ---------------------------------------------------------------------------
 select tests.clear_authentication();
-delete from public.platform_settings where key = 'whatsapp_verify_token';
--- Neither the seed org's (legacy) row nor a tenant's row is read any more.
-insert into public.app_settings (org_id, key, value) values
-    (tests.seed_org(), 'whatsapp_verify_token', 'rahasia-lama'),
-    (tests.org_a(), 'whatsapp_verify_token', 'token-tenant');
-
-select tests.authenticate_as_service_role();
-select is(public.verify_webhook_token('rahasia-lama'), false,
-          'verify_webhook_token: ignores the legacy seed-org app_settings row');
-select tests.authenticate_as_service_role();
-select is(public.verify_webhook_token('token-tenant'), false,
-          'verify_webhook_token: ignores a tenant''s app_settings row');
-select is(public.verify_webhook_token(''), false,
-          'verify_webhook_token: no token configured fails closed');
+select hasnt_function('public', 'verify_webhook_token', array['text'],
+                      'verify_webhook_token(text) no longer exists');
 
 select * from finish();
 rollback;

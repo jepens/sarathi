@@ -90,14 +90,14 @@ WEBHOOK_URL=http://localhost:3000/api/webhook/whatsapp/<webhook_key> TEST_PHONE=
 
 **Manual Test Script**:
 
-Create `scripts/test-send-message.ts` and run it with a TypeScript runner that resolves the tsconfig `@/` paths. Put NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY and the WHATSAPP_* values in the environment, and set TEST_ORG_ID to platform_settings.default_org_id (the only org with a number since Fase 2 task 2.2b):
+Create `scripts/test-send-message.ts` and run it with a TypeScript runner that resolves the tsconfig `@/` paths. Put NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in the environment, and set TEST_ORG_ID to an org whose number is in Vault (`scripts/wa-provision.mjs --phase=status` lists them; the credentials are read from Vault since Fase 2 task 2.2d):
 
 ```javascript
 import { sendWhatsAppMessage } from '../lib/whatsapp/client.ts';
 import { getOrgWhatsAppCreds } from '../lib/whatsapp/credentials.ts';
 
-const orgId = process.env.TEST_ORG_ID; // the default org (the only one with a number)
-if (!orgId) throw new Error('Set TEST_ORG_ID to the default org id (platform_settings.default_org_id)');
+const orgId = process.env.TEST_ORG_ID; // an org whose number is in Vault
+if (!orgId) throw new Error('Set TEST_ORG_ID to an org with a number in Vault (wa-provision.mjs --phase=status)');
 const testNumber = '6281234567890'; // Replace with your test number
 const testMessage = 'Halo! Ini adalah pesan test dari Sahabat UMKM.';
 
@@ -160,7 +160,7 @@ try {
 Run the complete local test suite:
 
 ```bash
-node scripts/test-whatsapp-local.mjs
+node scripts/test-whatsapp-local.mjs <webhook_key>
 ```
 
 **This tests**:
@@ -189,13 +189,13 @@ Before going live:
 
 ### Issue: Webhook verification fails
 **Solution**: 
-- Check WHATSAPP_VERIFY_TOKEN matches in both .env and Meta Dashboard
+- The Callback URL must be the per-app URL `/api/webhook/whatsapp/<webhook_key>` (the bare URL answers 404)
+- The Verify Token in Meta must be the one `scripts/wa-provision.mjs --phase=app` printed; if it is lost, run `--phase=rotate --kind=verify_token`
 - Ensure URL is publicly accessible
 
 ### Issue: Messages received but no reply
 **Solution**:
-- Check WHATSAPP_ACCESS_TOKEN is valid
-- Check WHATSAPP_PHONE_NUMBER_ID is correct
+- Run `scripts/wa-provision.mjs --phase=verify --org=<org uuid>` (Vault token valid, number listed, app subscribed)
 - Review server logs for API errors
 
 ### Issue: AI responses are irrelevant
