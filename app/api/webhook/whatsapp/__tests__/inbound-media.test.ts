@@ -65,15 +65,27 @@ function serviceClient() {
 
 vi.mock('@supabase/supabase-js', () => ({ createClient: vi.fn(() => serviceClient()) }));
 vi.mock('@/lib/whatsapp/security', () => ({ verifyWhatsAppSignature: vi.fn(async () => true) }));
-vi.mock('@/lib/whatsapp/credentials', () => ({
-    envWebhookApp: () => ({ appSecret: 'app-secret', phoneNumberId: 'phone-number-id' }),
-    resolveWhatsAppContext: vi.fn(async () => ({
+// The per-app URL's two Vault reads (2.2c): the app of KEY and its org's number.
+vi.mock('@/lib/whatsapp/credentials', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('@/lib/whatsapp/credentials')>()),
+    vaultWebhookApp: vi.fn(async () => ({
+        appId: 'cccccccc-0000-4000-8000-00000000000c',
         orgId: ORG,
-        integrationId: null,
-        phoneNumberId: 'phone-number-id',
-        wabaId: null,
-        accessToken: 'access-token',
-        graphVersion: 'v25.0',
+        status: 'active',
+        appSecret: 'app-secret',
+        verifyTokenSha256: '0'.repeat(64),
+    })),
+    vaultOrgCreds: vi.fn(async () => ({
+        creds: {
+            orgId: ORG,
+            integrationId: 'eeeeeeee-0000-4000-8000-00000000000e',
+            phoneNumberId: 'phone-number-id',
+            wabaId: null,
+            accessToken: 'access-token',
+            graphVersion: 'v25.0',
+        },
+        status: 'active',
+        appStatus: 'active',
     })),
 }));
 vi.mock('@/lib/whatsapp/client', () => ({
@@ -88,13 +100,17 @@ vi.mock('@/lib/whatsapp/queue-db', () => ({
 vi.mock('@/lib/whatsapp/recipient', () => ({ resolveSendTarget: vi.fn() }));
 vi.mock('@/lib/whatsapp/history', () => ({ logSystemMessage: vi.fn() }));
 vi.mock('@/lib/whatsapp/flow-response', () => ({ handleFlowReply: vi.fn(async () => ({ status: 'handled' })) }));
-vi.mock('@/lib/settings/app-settings', () => ({ checkVerifyToken: vi.fn() }));
 vi.mock('@/lib/utils/logger', () => {
     const record = (...args: unknown[]) => void h.logs.push(args);
     return { whatsappLogger: { info: record, warn: record, error: record, debug: record } };
 });
 
-import { POST } from '@/app/api/webhook/whatsapp/route';
+import { POST as keyPost } from '@/app/api/webhook/whatsapp/[key]/route';
+
+const KEY = 'A'.repeat(32);
+const POST = (request: Request) => keyPost(request, { params: Promise.resolve({ key: KEY }) });
+// A well-formed signature header (the verifier is stubbed to accept it).
+const SIGNED = { 'x-hub-signature-256': `sha256=${'0'.repeat(64)}` };
 import { CHAT_MEDIA_MAX_BYTES } from '@/lib/storage/chat-media';
 import { logSystemMessage } from '@/lib/whatsapp/history';
 import { resetOtherNumberState } from '@/lib/whatsapp/other-number';
@@ -121,7 +137,7 @@ function inbound(type: 'image' | 'document' | 'audio' | 'video', media: Record<s
             },
         ],
     };
-    return new Request('http://localhost/api/webhook/whatsapp', { method: 'POST', body: JSON.stringify(body) });
+    return new Request(`http://localhost/api/webhook/whatsapp/${KEY}`, { method: 'POST', headers: SIGNED, body: JSON.stringify(body) });
 }
 
 /** POST, check the fast 200, then wait for the fire-and-forget media handler. */

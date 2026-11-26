@@ -18,7 +18,7 @@ import { whatsappLogger } from '@/lib/utils/logger';
  * @param signature Value of the `X-Hub-Signature-256` header (with or without
  *                  the `sha256=` prefix).
  * @param appSecret The secret of the Meta app the request claims to come from
- *                  (today the env app's, lib/whatsapp/credentials.ts); null
+ *                  (read from Vault, lib/whatsapp/credentials.ts); null
  *                  when none is configured, which rejects every request.
  */
 export async function verifyWhatsAppSignature(
@@ -31,13 +31,10 @@ export async function verifyWhatsAppSignature(
         return false;
     }
 
-    // No secret resolved (today: WHATSAPP_APP_SECRET unset): nothing can be
-    // verified, so reject. Per-app secrets come with Fase 2 task 2.2c.
+    // No secret resolved (Vault could not read the app's secret): nothing can
+    // be verified, so reject.
     if (!appSecret) {
-        whatsappLogger.warn(
-            'WHATSAPP_APP_SECRET env var is not set — cannot verify webhook. ' +
-                'Set it (from Meta App Settings → Basic → App Secret).'
-        );
+        whatsappLogger.warn('No app secret for this webhook app — cannot verify webhook');
         return false;
     }
 

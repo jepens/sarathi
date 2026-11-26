@@ -1,89 +1,24 @@
 import { SupabaseClient } from '@supabase/supabase-js';
-import { getDefaultOrgIdStrict } from '@/lib/settings/org-context';
-import { createServiceOrServerClient } from '@/lib/supabase/service';
 import { GRAPH_API_VERSION } from '@/lib/whatsapp/graph';
-import { assertCanSend, canSend, WhatsAppNotConfiguredError, type WaCreds } from '@/lib/whatsapp/wa-creds';
+import { assertCanSend, WhatsAppNotConfiguredError, type WaCreds } from '@/lib/whatsapp/wa-creds';
 import { RpcError } from '@/lib/whatsapp/webhook/errors';
+import { serviceRoleClient } from '@/lib/whatsapp/webhook/service-client';
 
 export { assertCanSend, canSend, WhatsAppNotConfiguredError, type WaCreds } from '@/lib/whatsapp/wa-creds';
 
-// WhatsApp credential resolution (Fase 2 task 2.2b). Every Cloud API call
-// takes a WaCreds, resolved for one org: getOrgWhatsAppCreds() for sends the
-// org starts (dashboard, queue, notifications), resolveWhatsAppContext() for
-// the number a webhook delivery arrived on. Nothing else in the app reads the
-// WhatsApp credentials: in Phase 0 this resolver is an env shim, the only app
-// file that reads WHATSAPP_PHONE_NUMBER_ID / WHATSAPP_ACCESS_TOKEN /
-// WHATSAPP_APP_SECRET / WHATSAPP_BUSINESS_ACCOUNT_ID (pinned by
-// __tests__/env-shim.test.ts). The env credentials are the default org's
-// (Sailendra) and serve no other org. With owner decision D6 (one Meta app per
-// client) they move to Supabase Vault and whatsapp_integrations (2.1b/2.2c,
-// docs/FASE2_DESIGN.md): this module stays, its env branch goes, and the call
-// sites keep this interface. The per-app webhook URL (2.2c) already reads
-// Vault (vaultWebhookApp, vaultOrgCreds); sends move in 2.2d.
+// WhatsApp credential resolution (Fase 2 tasks 2.2b-2.2d). Every Cloud API
+// call takes a WaCreds, resolved for one org from Supabase Vault (migration
+// 0073, owner decision D6: one Meta app per client): getOrgWhatsAppCreds() for
+// the sends an org starts (dashboard, queue, notifications), vaultWebhookApp()
+// and vaultOrgCreds() for the per-app webhook URL. No app file reads WhatsApp
+// credentials from env (pinned by __tests__/env-shim.test.ts).
 
-// Trimmed: a newline or tab pasted along with a value would otherwise make
-// every event of the app's own number look like another number's (the Graph
-// URL parser strips them, so sends would keep working and hide it) and every
-// signature fail.
-function envValue(name: string): string {
-    return (process.env[name] ?? '').trim();
-}
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** The env credentials of the default org's number; '' / null where unset. */
-function envCreds(orgId: string): WaCreds {
-    return {
-        orgId,
-        integrationId: null,
-        phoneNumberId: envValue('WHATSAPP_PHONE_NUMBER_ID'),
-        wabaId: envValue('WHATSAPP_BUSINESS_ACCOUNT_ID') || null,
-        accessToken: envValue('WHATSAPP_ACCESS_TOKEN'),
-        graphVersion: GRAPH_API_VERSION,
-    };
-}
-
-/**
- * Whether the env number can send (a phone number id and a usable token).
- * Only the default org uses it: callers check that themselves (the settings
- * page and the onboarding checklist, which already know the default org).
- */
-export function envWhatsAppSendConfigured(): boolean {
-    return canSend({ phoneNumberId: envValue('WHATSAPP_PHONE_NUMBER_ID'), accessToken: envValue('WHATSAPP_ACCESS_TOKEN') });
-}
-
+/** What the webhook routes a delivery with: the signing app's secret and its one number. */
 export interface WebhookApp {
     appSecret: string | null;
-    /** The one number the webhook routes; '' when not set or not a number id. */
     phoneNumberId: string;
-    /** Why phoneNumberId is '' (for the alert). */
-    phoneNumberIdProblem?: 'unset' | 'not_digits';
-}
-
-/**
- * The Meta app the webhook URL serves today (Fase 2 task 2.2a, phase 0: one
- * app, from env): the secret its signatures are checked with, and the one
- * number it routes (a phone number id is digits only). Needs no database, so
- * the signature is checked before anything else happens. For the webhook only
- * (pinned like resolveWhatsAppContext).
- */
-export function envWebhookApp(): WebhookApp {
-    const appSecret = envValue('WHATSAPP_APP_SECRET') || null;
-    const phoneNumberId = envValue('WHATSAPP_PHONE_NUMBER_ID');
-    if (!phoneNumberId) return { appSecret, phoneNumberId: '', phoneNumberIdProblem: 'unset' };
-    if (!/^\d+$/.test(phoneNumberId)) return { appSecret, phoneNumberId: '', phoneNumberIdProblem: 'not_digits' };
-    return { appSecret, phoneNumberId };
-}
-
-/**
- * The org and credentials of the number a webhook delivery arrived on: the
- * env number, so the default org, read strictly (a read error throws, never
- * the seed org). Unlike getOrgWhatsAppCreds it does not refuse a missing
- * token: storing a message needs none, and each send checks (assertCanSend).
- * For the webhook only (lib/whatsapp/webhook/pipeline.ts, pinned by
- * __tests__/env-shim.test.ts): every other path resolves its org's credentials
- * with getOrgWhatsAppCreds.
- */
-export async function resolveWhatsAppContext(client: SupabaseClient): Promise<WaCreds> {
-    return envCreds(await getDefaultOrgIdStrict(client));
 }
 
 /** A client Meta app behind a per-app webhook URL (wa_webhook_app, migration 0073). */
@@ -130,8 +65,8 @@ export interface VaultOrgCreds {
 
 /**
  * The org's number and token from Vault; null when the org has no number.
- * Not cached; a read error throws RpcError. For the webhook only (pinned by
- * __tests__/env-shim.test.ts) until sends move to Vault (2.2d): the caller
+ * Not cached; a read error throws RpcError. Called by the webhook and by
+ * getOrgWhatsAppCreds only (pinned by __tests__/env-shim.test.ts): the caller
  * checks both statuses.
  */
 export async function vaultOrgCreds(supabase: SupabaseClient, orgId: string): Promise<VaultOrgCreds | null> {
@@ -154,17 +89,39 @@ export async function vaultOrgCreds(supabase: SupabaseClient, orgId: string): Pr
 }
 
 /**
- * The credentials an org sends with. Phase 0: the env credentials, for the
- * default org only (read strictly, with a service-role client: a read error
- * throws, never answering for the seed org). Any other org, or the default
- * org without a number or a usable token (canSend), gets
+ * The credentials an org sends with, from Vault. An org without a number, a
+ * paused number, a suspended app or no usable token (canSend) gets
  * WhatsAppNotConfiguredError, so no org can ever send from another org's
- * number. Without `client` a service-role client is created.
+ * number; an orgId that is not a UUID gets it without a read. A read error
+ * (RpcError, or no service-role client) is thrown as it is: retryable, never
+ * "not configured". Without `client` a service-role client is created
+ * (wa_org_send_credentials is the service role's only).
  */
 export async function getOrgWhatsAppCreds(orgId: string, client?: SupabaseClient): Promise<WaCreds> {
-    const supabase = client ?? (await createServiceOrServerClient());
-    if (orgId !== (await getDefaultOrgIdStrict(supabase))) throw new WhatsAppNotConfiguredError();
-    const creds = envCreds(orgId);
-    assertCanSend(creds);
-    return creds;
+    if (!UUID_RE.test(orgId)) throw new WhatsAppNotConfiguredError();
+    const supabase = client ?? serviceRoleClient();
+    if (!supabase) {
+        throw new Error('WhatsApp credentials cannot be read: NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is not set');
+    }
+    const number = await vaultOrgCreds(supabase, orgId);
+    if (!number || number.status !== 'active' || number.appStatus !== 'active') throw new WhatsAppNotConfiguredError();
+    assertCanSend(number.creds);
+    return number.creds;
+}
+
+/**
+ * Whether the org's number is active (Settings, onboarding). Reads
+ * whatsapp_integrations.status only (one row per org, service role only), no
+ * secret; a read error counts as not connected.
+ */
+export async function orgWhatsAppConnected(orgId: string): Promise<boolean> {
+    if (!UUID_RE.test(orgId)) return false;
+    const supabase = serviceRoleClient();
+    if (!supabase) return false;
+    try {
+        const { data, error } = await supabase.from('whatsapp_integrations').select('status').eq('org_id', orgId).maybeSingle();
+        return !error && data?.status === 'active';
+    } catch {
+        return false;
+    }
 }

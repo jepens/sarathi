@@ -100,7 +100,7 @@ export function decideOrgContext(input: {
 
 /**
  * Env-credential gate: membership first, then the caller's org must be the
- * default org (the one that owns the env credentials).
+ * default org.
  */
 export function decideEnvIntegrationAccess(input: {
     signedIn: boolean;

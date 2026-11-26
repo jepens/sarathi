@@ -71,7 +71,7 @@ async function orderNotifyCreds(orgId: string): Promise<WaCreds | null> {
  *     that update really changed a row (no phantom notifications for a
  *     foreign/unknown id, and no double send on concurrent clicks);
  *   - WhatsApp notifications only from the org's own number (Fase 2 task
- *     2.2b; today the default org's env credentials).
+ *     2.2b; read from Vault since 2.2d).
  */
 export async function updateOrderStatus(
     orderId: string,

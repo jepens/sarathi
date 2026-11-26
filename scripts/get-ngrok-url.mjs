@@ -9,13 +9,13 @@ async function getNgrokUrl() {
 
             console.log('\n🚀 ngrok Tunnel Information\n');
             console.log('Public URL:', publicUrl);
-            console.log('Webhook URL:', `${publicUrl}/api/webhook/whatsapp`);
+            console.log('Webhook URL:', `${publicUrl}/api/webhook/whatsapp/<webhook_key>`);
             console.log('\n📋 Next Steps:\n');
-            console.log('1. Copy the Webhook URL above');
+            console.log("1. Copy the Webhook URL above, with the app's webhook_key (scripts/wa-provision.mjs)");
             console.log('2. Go to Meta for Developers: https://developers.facebook.com/apps/');
             console.log('3. Navigate to: WhatsApp → Configuration → Webhook');
             console.log('4. Click "Edit" and paste the Webhook URL');
-            console.log('5. Enter your WHATSAPP_VERIFY_TOKEN from .env.local');
+            console.log("5. Enter that app's verify token (set with scripts/wa-provision.mjs)");
             console.log('6. Click "Verify and Save"');
             console.log('7. Subscribe to "messages" webhook field');
             console.log('\n✅ Your server is now publicly accessible!\n');

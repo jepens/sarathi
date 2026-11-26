@@ -1,15 +1,7 @@
 import { NextResponse } from 'next/server';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { verifyWhatsAppSignature } from '@/lib/whatsapp/security';
-import {
-    canSend,
-    envWebhookApp,
-    resolveWhatsAppContext,
-    vaultOrgCreds,
-    vaultWebhookApp,
-    type WaCreds,
-    type WebhookApp,
-} from '@/lib/whatsapp/credentials';
+import { canSend, vaultOrgCreds, vaultWebhookApp, type WaCreds, type WebhookApp } from '@/lib/whatsapp/credentials';
 import { whatsappLogger } from '@/lib/utils/logger';
 import { webhookSummary } from '@/lib/whatsapp/webhook-summary';
 import { describeErrorForOps, recordOpsEvent } from '@/lib/ops/events';
@@ -27,133 +19,36 @@ import { handleChangeStatuses } from '@/lib/whatsapp/webhook/handlers/statuses';
 import { handleMessageItem, hasIdentity, planMessage, type MessagePlan } from '@/lib/whatsapp/webhook/handlers/messages';
 
 // The webhook's POST, outside route.ts (Next.js limits what a route file
-// exports): the gate, then the walk over every entry, change, message and
-// status of the delivery, then one answer for the whole batch. Two gates
-// share the walk: processWebhook (the bare URL, the env app) and
-// processAppWebhook (a per-app URL, Vault; Fase 2 task 2.2c).
+// exports): the gate of a per-app URL (Fase 2 task 2.2c; the app, its secret,
+// number and token from Vault), then the walk over every entry, change,
+// message and status of the delivery, then one answer for the whole batch.
 
-// The batch alert when the number has no usable access token, per source.
-const ENV_NO_TOKEN =
-    'WHATSAPP_ACCESS_TOKEN tidak diset atau tidak valid di server: pesan masuk tetap disimpan, tetapi balasan AI dan peringatan tidak terkirim';
-const VAULT_NO_TOKEN =
+// The batch alert when the number has no usable access token.
+const NO_TOKEN =
     'token akses aplikasi ini tidak terbaca dari Vault atau tidak valid: pesan masuk tetap disimpan, tetapi balasan AI dan peringatan tidak terkirim';
-
-export async function processWebhook(request: Request): Promise<NextResponse> {
-    const startedAt = Date.now();
-    // Set once the signature has passed: only then is a failure a Meta delivery
-    // the team must hear about (anyone can POST junk to this URL).
-    let verified = false;
-    let outcome: BatchOutcome | null = null;
-    try {
-        // The exact bytes Meta signed, at most Meta's 3 MB: a larger body is
-        // refused before it is read in full (anyone can POST here). The
-        // signature is checked over these bytes before anything reads the
-        // payload (Fase 2 task 2.2a). request.text() would decode them first,
-        // and a re-encoded string is not guaranteed to be the same bytes.
-        const rawBody = await readBodyCapped(request);
-        if (!rawBody) {
-            whatsappLogger.warn('Webhook body over 3 MB — refused');
-            return new NextResponse('Payload Too Large', { status: 413 });
-        }
-        const signature = request.headers.get('x-hub-signature-256');
-
-        // One Meta app (env) serves this URL today: its secret and its number.
-        const webhookApp = envWebhookApp();
-        if (!(await verifyWhatsAppSignature(rawBody, signature, webhookApp.appSecret))) {
-            whatsappLogger.warn('Rejected webhook with invalid/missing signature');
-            // Team alert (3.5) for what points at our side: no secret set, or a
-            // signature that does not match (a wrong or rotated secret makes
-            // every real delivery fail). A request without the header is
-            // internet noise, since Meta always signs: logged only. A flood is
-            // throttled inside recordOpsEvent.
-            const alertClient = !webhookApp.appSecret || signature ? serviceRoleClient() : null;
-            if (alertClient) {
-                await recordOpsEvent(alertClient, 'webhook_signature_invalid', {
-                    detail: !webhookApp.appSecret ? 'WHATSAPP_APP_SECRET tidak diset di server' : 'tanda tangan tidak cocok',
-                });
-            }
-            return new NextResponse('Forbidden', { status: 403 });
-        }
-        verified = true;
-
-        // Signed by our app, so a body that does not parse now will not parse on
-        // a retry either: acknowledge it instead of making Meta retry for days.
-        let body;
-        try {
-            body = JSON.parse(rawBody.toString('utf8'));
-        } catch {
-            whatsappLogger.error('Signed webhook body is not valid JSON — acknowledged without processing');
-            return new NextResponse('EVENT_RECEIVED', { status: 200 });
-        }
-        if (!body || typeof body !== 'object') {
-            whatsappLogger.warn('Signed webhook body is not a JSON object — acknowledged without processing');
-            return new NextResponse('EVENT_RECEIVED', { status: 200 });
-        }
-
-        // What arrived, never the payload itself: it holds customers' phone
-        // numbers, names and message text (audit KEA-21, UU PDP).
-        whatsappLogger.info(`Webhook received: ${webhookSummary(body)}`);
-
-        // The service-role client (RLS bypassed: the webhook has no user). With
-        // any other key RLS would silently drop every write, so without it the
-        // answer is 503 and Meta retries once it is configured.
-        const supabase = serviceRoleClient();
-        if (!supabase) {
-            whatsappLogger.error('Webhook cannot store anything: NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is not set');
-            return new NextResponse('Service Unavailable', { status: 503 });
-        }
-
-        // Check if this is an event from a WhatsApp Business Account
-        if (body.object === 'whatsapp_business_account') {
-            // Without a usable number id nothing can be routed: 503 (Meta
-            // retries once it is fixed) and an alert.
-            if (!webhookApp.phoneNumberId) {
-                const notDigits = webhookApp.phoneNumberIdProblem === 'not_digits';
-                whatsappLogger.error(`Webhook cannot route: WHATSAPP_PHONE_NUMBER_ID is ${notDigits ? 'not a phone number id (digits only)' : 'not set'}`);
-                await recordOpsEvent(supabase, 'webhook_unconfigured', {
-                    detail: `${notDigits ? 'WHATSAPP_PHONE_NUMBER_ID bukan ID nomor (harus angka saja)' : 'WHATSAPP_PHONE_NUMBER_ID tidak diset di server'}; webhook menjawab 503, Meta mengirim ulang`,
-                });
-                return new NextResponse('Service Unavailable', { status: 503 });
-            }
-            outcome = new BatchOutcome(startedAt);
-            return await walkBatch(supabase, webhookApp, body, outcome, () => resolveWhatsAppContext(supabase), ENV_NO_TOKEN);
-        } else {
-            // Signed by our app but not a WhatsApp Business Account event:
-            // acknowledge it (a 404 would make Meta retry it for days).
-            whatsappLogger.warn('Received non-WhatsApp event — acknowledged without processing');
-            return new NextResponse('EVENT_RECEIVED', { status: 200 });
-        }
-
-    } catch (error) {
-        // Only a bug gets here: every item has its own guard, and its failure
-        // decides the answer through respond(). Meta retries the delivery.
-        whatsappLogger.error('Error processing webhook', error);
-        // Team alert (3.5): a webhook that keeps failing loses messages once
-        // Meta gives up. Signed deliveries only.
-        const alertClient = verified ? serviceRoleClient() : null;
-        if (alertClient) {
-            await recordOpsEvent(alertClient, 'webhook_error', { orgId: outcome?.orgId ?? null, detail: describeErrorForOps(error) });
-        }
-        return new NextResponse('Internal Server Error', { status: 500 });
-    }
-}
 
 /**
  * The POST of a per-app URL (Fase 2 task 2.2c): the app comes from the URL
  * key, its secret, number and token from Vault, its org from the app row
- * (never the default org). The same walk as processWebhook after the gate.
- * A suspended app or a paused number (only manual SQL sets them) is
- * acknowledged and dropped; an app without a number answers 503.
+ * (never the default org). A suspended app or a paused number (only manual
+ * SQL sets them) is acknowledged and dropped; an app without a number
+ * answers 503.
  */
 export async function processAppWebhook(request: Request, key: string): Promise<NextResponse> {
     const startedAt = Date.now();
     let supabase: SupabaseClient | null = null;
-    // The app's org once the signature has passed (see processWebhook).
+    // The app's org once the signature has passed: only then is a failure a
+    // Meta delivery the team must hear about (anyone can POST junk here).
     let verifiedOrg: string | null = null;
     let outcome: BatchOutcome | null = null;
     try {
         // No app has a key of another shape: nothing is read.
         if (!WEBHOOK_KEY.test(key)) return new NextResponse('Not Found', { status: 404 });
+        // The exact bytes Meta signed, at most Meta's 3 MB: a larger body is
+        // refused before it is read in full. The signature is checked over
+        // these bytes before anything reads the payload (Fase 2 task 2.2a).
+        // request.text() would decode them first, and a re-encoded string is
+        // not guaranteed to be the same bytes.
         const rawBody = await readBodyCapped(request);
         if (!rawBody) {
             whatsappLogger.warn('Webhook body over 3 MB — refused');
@@ -167,6 +62,9 @@ export async function processAppWebhook(request: Request, key: string): Promise<
             return new NextResponse('Forbidden', { status: 403 });
         }
 
+        // The service-role client (RLS bypassed: the webhook has no user). With
+        // any other key RLS would silently drop every write, so without it the
+        // answer is 503 and Meta retries once it is configured.
         supabase = serviceRoleClient();
         if (!supabase) {
             whatsappLogger.error('Webhook cannot store anything: NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is not set');
@@ -200,6 +98,8 @@ export async function processAppWebhook(request: Request, key: string): Promise<
         }
         verifiedOrg = app.orgId;
 
+        // Signed by our app, so a body that does not parse now will not parse on
+        // a retry either: acknowledge it instead of making Meta retry for days.
         let body;
         try {
             body = JSON.parse(rawBody.toString('utf8'));
@@ -244,7 +144,8 @@ export async function processAppWebhook(request: Request, key: string): Promise<
             return new NextResponse('EVENT_RECEIVED', { status: 200 });
         }
 
-        // What arrived, never the payload itself (see processWebhook).
+        // What arrived, never the payload itself: it holds customers' phone
+        // numbers, names and message text (audit KEA-21, UU PDP).
         whatsappLogger.info(`Webhook received (app ${app.appId}): ${webhookSummary(body)}`);
         outcome = new BatchOutcome(startedAt);
         outcome.orgId = app.orgId;
@@ -255,10 +156,11 @@ export async function processAppWebhook(request: Request, key: string): Promise<
             body,
             outcome,
             () => Promise.resolve(creds),
-            VAULT_NO_TOKEN,
         );
     } catch (error) {
-        // Only a bug gets here (see processWebhook). Signed deliveries only.
+        // Only a bug gets here: every item has its own guard, and its failure
+        // decides the answer through respond(). Meta retries the delivery;
+        // the team alert (3.5) is for signed deliveries only.
         whatsappLogger.error('Error processing webhook', error);
         if (supabase && verifiedOrg) {
             await recordOpsEvent(supabase, 'webhook_error', { orgId: outcome?.orgId ?? verifiedOrg, detail: describeErrorForOps(error) });
@@ -327,8 +229,7 @@ function drainQueue(supabase: SupabaseClient): void {
  * Meta's time order) and pass 3 (statuses, one call per change). Each item
  * has its own guard, so one failure never stops the others; respond() turns
  * the result into the answer. `resolveOrg` gives the org and credentials of
- * the number the delivery arrived on; `noTokenDetail` is the alert when that
- * number has no usable access token.
+ * the number the delivery arrived on (already read from Vault).
  */
 async function walkBatch(
     supabase: SupabaseClient,
@@ -336,14 +237,11 @@ async function walkBatch(
     body: unknown,
     outcome: BatchOutcome,
     resolveOrg: () => Promise<WaCreds>,
-    noTokenDetail: string,
 ): Promise<NextResponse> {
     const changes = await routeChanges(supabase, webhookApp, listChanges(body));
 
-    // The org and credentials, read once, when an item first needs them (the
-    // bare URL: env and the default org, read strictly, never the seed org;
-    // a per-app URL: already read from Vault). A read error makes each item
-    // that needs it retryable (503).
+    // The org and credentials, once, when an item first needs them. A
+    // rejection would make each item that needs them retryable (503).
     let orgRead: Promise<WaCreds> | null = null;
     const run: BatchRun = {
         supabase,
@@ -379,7 +277,7 @@ async function walkBatch(
         try {
             const ctx = await run.org();
             if (!canSend(ctx)) {
-                await recordOpsEvent(supabase, 'webhook_unconfigured', { orgId: ctx.orgId, detail: noTokenDetail });
+                await recordOpsEvent(supabase, 'webhook_unconfigured', { orgId: ctx.orgId, detail: NO_TOKEN });
             }
         } catch {
             // Every item that needs the org reports the read error itself.

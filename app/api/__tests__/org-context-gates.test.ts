@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Route-level guard for the central org context (KEA-2, KUA-14). Representative
 // API routes and server actions run against the REAL requireOrgContext() with a
@@ -101,6 +101,30 @@ vi.mock('@/lib/supabase/service', () => ({
                 return q;
             },
         };
+    }),
+}));
+// The credential resolver's own service-role client (Fase 2 task 2.2d): it
+// answers wa_org_send_credentials with the default org's number (fake) only.
+vi.mock('@/lib/whatsapp/webhook/service-client', () => ({
+    serviceRoleClient: () => ({
+        rpc: async (name: string, args: { p_org?: string }) => {
+            h.serviceCalls.push(`rpc(${JSON.stringify(name)})`);
+            if (h.serviceReadFails) return { data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' }, status: 500 };
+            if (name !== 'wa_org_send_credentials' || args.p_org !== DEFAULT_ORG) return { data: [], error: null, status: 200 };
+            return {
+                data: [{
+                    integration_id: 'eeeeeeee-0000-4000-8000-00000000000e',
+                    app_id: 'cccccccc-0000-4000-8000-00000000000c',
+                    phone_number_id: '100000000000001',
+                    waba_id: '200000000000001',
+                    access_token: 'token-palsu',
+                    status: 'active',
+                    app_status: 'active',
+                }],
+                error: null,
+                status: 200,
+            };
+        },
     }),
 }));
 vi.mock('@/lib/ai/embedding', () => ({ generateEmbedding: h.generateEmbedding }));
@@ -412,15 +436,8 @@ describe('server actions', () => {
 describe("updateOrderStatus (customer WhatsApp from the org's own number)", () => {
     const ORDER_ID = '0b0e6c1e-1111-4222-8333-444455556666';
 
-    // The default org's env number (fake), the only org with one today.
-    beforeEach(() => {
-        vi.stubEnv('WHATSAPP_PHONE_NUMBER_ID', '100000000000001');
-        vi.stubEnv('WHATSAPP_ACCESS_TOKEN', 'token-palsu');
-    });
-    afterEach(() => {
-        vi.unstubAllEnvs();
-    });
-
+    // Only the default org has a number (its Vault row, answered by the
+    // service-client stub above).
     // A member of `orgId` (default: the default org) and a pending order with a
     // customer phone, so a pending → cancelled change would notify the customer.
     function seedDefaultOrgOrder(orgId = DEFAULT_ORG) {

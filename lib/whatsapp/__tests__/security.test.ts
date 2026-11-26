@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import crypto from 'node:crypto';
 
-// security.ts takes the app secret from its caller (the webhook passes the env
-// app's, lib/whatsapp/credentials.ts) and reads no env itself (Fase 2 task
-// 2.2b). The logger is mocked to keep the output quiet.
+// security.ts takes the app secret from its caller (the webhook passes the
+// signing app's secret, read from Vault by lib/whatsapp/credentials.ts) and
+// reads no env itself (Fase 2 task 2.2b). The logger is mocked to keep the output quiet.
 vi.mock('@/lib/utils/logger', () => ({
     whatsappLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));

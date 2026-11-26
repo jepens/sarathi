@@ -26,7 +26,6 @@ export async function updateBusinessProfile(
     }
 }
 
-// WhatsApp credentials are managed via server environment variables in this
-// single-tenant build (WHATSAPP_PHONE_NUMBER_ID / WHATSAPP_ACCESS_TOKEN /
-// WHATSAPP_APP_SECRET). There is no in-app save action anymore — the Settings
-// WhatsApp card is read-only.
+// WhatsApp credentials are kept in Supabase Vault and set up by the Sarathi
+// team (scripts/wa-provision.mjs). There is no in-app save action — the
+// Settings WhatsApp card is read-only.

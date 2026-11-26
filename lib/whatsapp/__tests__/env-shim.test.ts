@@ -3,28 +3,34 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import ts from 'typescript';
 
-// Static guard (Fase 2 task 2.2b): the WhatsApp credentials are read in ONE
-// place, the Phase-0 env shim lib/whatsapp/credentials.ts. Every send gets
-// them from there for one org (WaCreds), so no code path can pick up the
-// default org's number for another org by reading the env itself. At the
-// contract (2.2d) the shim goes and this allowlist becomes empty.
+// Static guard (Fase 2 tasks 2.2b and 2.2d): no app file reads a WhatsApp
+// credential from env. Since 2.2d every org's credentials come from Vault
+// through lib/whatsapp/credentials.ts (WaCreds for one org), so no code path
+// can pick up one org's number for another by reading the env; the old env
+// shim is gone and the allowlist of readers is empty.
 //
 // The sources are parsed (TypeScript compiler API), so every way of naming one
-// of the four variables in code counts as a read: a property access on any
+// of the five variables in code counts as a read: a property access on any
 // object (process.env.X, process.env?.X, env.X after `const env =
 // process.env`), an element access or a destructuring binding with that name,
 // and a string literal that is exactly the name (process.env[name] with the
 // name in a variable). A name inside a longer message, a comment or JSX text
 // is not a read.
 
-const SECRET_ENV = new Set(['WHATSAPP_ACCESS_TOKEN', 'WHATSAPP_PHONE_NUMBER_ID', 'WHATSAPP_APP_SECRET', 'WHATSAPP_BUSINESS_ACCOUNT_ID']);
+const SECRET_ENV = new Set([
+    'WHATSAPP_ACCESS_TOKEN',
+    'WHATSAPP_PHONE_NUMBER_ID',
+    'WHATSAPP_APP_SECRET',
+    'WHATSAPP_BUSINESS_ACCOUNT_ID',
+    'WHATSAPP_VERIFY_TOKEN',
+]);
 const SHIM = 'lib/whatsapp/credentials.ts';
-// The helpers that hand out credentials without an org or status check: the
-// webhook's own (the number a delivery arrived on). The env two give the
-// default org's; the Vault two (Fase 2 task 2.2c) an app's secret and an
-// org's token, with the status checks left to the webhook. Their RPC names
-// count too, so a direct .rpc() call cannot skip those checks.
-const WEBHOOK_ONLY = new Set(['resolveWhatsAppContext', 'envWebhookApp', 'vaultWebhookApp', 'vaultOrgCreds', 'wa_webhook_app', 'wa_org_send_credentials']);
+// The helpers that hand out credentials without a status check: the Vault
+// readers (Fase 2 task 2.2c) of an app's secret and an org's token, for the
+// webhook (which checks the statuses itself) and getOrgWhatsAppCreds in
+// credentials.ts (which every send uses). Their RPC names count too, so a
+// direct .rpc() call cannot skip those checks.
+const WEBHOOK_ONLY = new Set(['vaultWebhookApp', 'vaultOrgCreds', 'wa_webhook_app', 'wa_org_send_credentials']);
 const WEBHOOK_CALLERS = new Set(['lib/whatsapp/webhook/handshake.ts', 'lib/whatsapp/webhook/pipeline.ts']);
 const SOURCE = /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/;
 const TEST = /\.test\.(ts|tsx)$/;
@@ -81,18 +87,18 @@ function namesWebhookOnlyHelper(text: string, fileName = 'x.ts'): boolean {
 
 const read = (rel: string) => readFileSync(join(root, rel), 'utf8');
 
-describe('WhatsApp credentials are read only by the env shim', () => {
+describe('WhatsApp credentials are never read from env', () => {
     it('scans the app sources and every source file at the root', () => {
         expect(files.length).toBeGreaterThan(100);
         expect(files).toEqual(expect.arrayContaining([SHIM, 'proxy.ts', 'instrumentation.ts', 'next.config.ts']));
     });
 
-    it('no other file reads WHATSAPP_ACCESS_TOKEN / _PHONE_NUMBER_ID / _APP_SECRET / _BUSINESS_ACCOUNT_ID', () => {
+    it('no file reads WHATSAPP_ACCESS_TOKEN / _PHONE_NUMBER_ID / _APP_SECRET / _BUSINESS_ACCOUNT_ID / _VERIFY_TOKEN', () => {
         const readers = files.filter((rel) => credentialReads(read(rel), rel).length > 0);
-        expect(readers).toEqual([SHIM]);
+        expect(readers).toEqual([]);
     });
 
-    it("only the webhook uses the helpers that hand out the default org's credentials without an org check", () => {
+    it('only the webhook (and credentials.ts itself) uses the Vault readers that skip the status checks', () => {
         const users = files.filter((rel) => rel !== SHIM && namesWebhookOnlyHelper(read(rel), rel));
         expect(users.filter((rel) => !WEBHOOK_CALLERS.has(rel))).toEqual([]);
         expect(users).toEqual([...WEBHOOK_CALLERS]);
@@ -100,18 +106,17 @@ describe('WhatsApp credentials are read only by the env shim', () => {
 
     it('catches each way of using a webhook-only helper, and not a mention in a comment', () => {
         const uses = [
-            "import { resolveWhatsAppContext } from '@/lib/whatsapp/credentials';",
-            "import { resolveWhatsAppContext as ctx } from '../credentials';",
-            "import * as wa from '@/lib/whatsapp/credentials'; wa.envWebhookApp();",
-            "export { resolveWhatsAppContext } from '@/lib/whatsapp/credentials';",
-            "const { resolveWhatsAppContext } = await import('@/lib/whatsapp/credentials');",
-            "const wa = await import('@/lib/whatsapp/credentials'); wa['envWebhookApp']();",
             "import { vaultOrgCreds } from '@/lib/whatsapp/credentials';",
+            "import { vaultOrgCreds as creds } from '../credentials';",
+            "import * as wa from '@/lib/whatsapp/credentials'; wa.vaultWebhookApp();",
+            "export { vaultOrgCreds } from '@/lib/whatsapp/credentials';",
+            "const { vaultOrgCreds } = await import('@/lib/whatsapp/credentials');",
+            "const wa = await import('@/lib/whatsapp/credentials'); wa['vaultWebhookApp']();",
             "await supabase.rpc('wa_org_send_credentials', { p_org: orgId });",
             'await supabase.rpc(`wa_webhook_app`, { p_key: key });',
         ];
         for (const use of uses) expect(namesWebhookOnlyHelper(use), use).toBe(true);
-        expect(namesWebhookOnlyHelper('/** see resolveWhatsAppContext */ const x = 1; // envWebhookApp')).toBe(false);
+        expect(namesWebhookOnlyHelper('/** see vaultOrgCreds */ const x = 1; // vaultWebhookApp')).toBe(false);
         expect(namesWebhookOnlyHelper("import { getOrgWhatsAppCreds } from '@/lib/whatsapp/credentials';")).toBe(false);
     });
 
@@ -125,6 +130,7 @@ describe('WhatsApp credentials are read only by the env shim', () => {
             'const { WHATSAPP_ACCESS_TOKEN: token } = process.env',
             "const { 'WHATSAPP_BUSINESS_ACCOUNT_ID': waba } = process.env",
             "envValue('WHATSAPP_PHONE_NUMBER_ID')",
+            "process.env.WHATSAPP_VERIFY_TOKEN || ''",
             'const name = `WHATSAPP_APP_SECRET`; process.env[name]',
         ];
         for (const form of forms) expect(credentialReads(form), form).not.toEqual([]);

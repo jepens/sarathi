@@ -23,10 +23,10 @@ export interface BatchRun {
     outcome: BatchOutcome;
     /**
      * The org and the credentials of the number the delivery arrived on
-     * (resolveWhatsAppContext on the bare URL; on a per-app URL the Vault
-     * row read before the walk), read strictly once per delivery, the first
-     * time an item needs them; a read error rejects every later call too.
-     * The access token may be '' (unset): storing works, sends fail.
+     * (the Vault row of the signing app's org, read before the walk), once
+     * per delivery; a rejection rejects every later call too. The access
+     * token may be '' (Vault could not decrypt it): storing works, sends
+     * fail.
      */
     org(): Promise<WaCreds>;
     /** A message was queued or joined a waiting burst: drain the queue after the walk. */

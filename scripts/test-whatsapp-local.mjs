@@ -19,13 +19,18 @@ envContent.split('\n').forEach(line => {
     }
 });
 
+// The per-app webhook URL (/api/webhook/whatsapp/<webhook_key>; the bare URL
+// is gone since task 2.2d). The test app's verify token, secret and number
+// come from your own .env.local; the server reads its own from Vault.
 const BASE_URL = 'http://localhost:3000';
+const KEY = process.argv[2] || '';
+const WEBHOOK_URL = `${BASE_URL}/api/webhook/whatsapp/${encodeURIComponent(KEY)}`;
 const VERIFY_TOKEN = env.WHATSAPP_VERIFY_TOKEN;
 
 async function testWebhookVerification() {
     console.log('\n--- Testing Webhook Verification ---');
     const challenge = '11223344';
-    const url = `${BASE_URL}/api/webhook/whatsapp?hub.mode=subscribe&hub.verify_token=${VERIFY_TOKEN}&hub.challenge=${challenge}`;
+    const url = `${WEBHOOK_URL}?hub.mode=subscribe&hub.verify_token=${encodeURIComponent(VERIFY_TOKEN)}&hub.challenge=${challenge}`;
 
     try {
         const response = await fetch(url);
@@ -75,7 +80,7 @@ async function testIncomingMessage() {
     try {
         const raw = JSON.stringify(payload);
         const signature = 'sha256=' + crypto.createHmac('sha256', env.WHATSAPP_APP_SECRET).update(raw).digest('hex');
-        const response = await fetch(`${BASE_URL}/api/webhook/whatsapp`, {
+        const response = await fetch(WEBHOOK_URL, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -97,6 +102,10 @@ async function testIncomingMessage() {
 }
 
 async function runTests() {
+    if (!KEY) {
+        console.error('❌ Usage: node scripts/test-whatsapp-local.mjs <webhook_key>');
+        return;
+    }
     if (!VERIFY_TOKEN) {
         console.error('❌ WHATSAPP_VERIFY_TOKEN not found in .env.local');
         return;

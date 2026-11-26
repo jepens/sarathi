@@ -54,34 +54,33 @@ Nomor pelanggan selalu disamarkan (4 digit awal + 3 digit akhir) dan wamid tampi
 
 ### 3. 🧪 Test Webhook Script (`scripts/test-webhook.js`)
 
-**Fungsi**: Simulasi pesan WhatsApp ke webhook lokal. Webhook hanya menerima
-kiriman bertanda tangan untuk nomor aplikasi, jadi skrip menandatangani payload
-dengan `WHATSAPP_APP_SECRET` dan memakai `WHATSAPP_PHONE_NUMBER_ID`: jalankan
-dengan `--env-file=.env.local`. Skrip hanya mengirim ke mesin ini kecuali diberi
-`--allow-remote`.
+**Fungsi**: Simulasi pesan WhatsApp ke webhook lokal. Setiap aplikasi Meta punya
+URL sendiri, `/api/webhook/whatsapp/<webhook_key>` (URL tanpa key sudah dihapus,
+2.2d), jadi `WEBHOOK_URL` wajib diisi. URL itu hanya menerima kiriman bertanda
+tangan untuk nomor aplikasi itu, jadi skrip menandatangani payload dengan
+`WHATSAPP_APP_SECRET` dan memakai `WHATSAPP_PHONE_NUMBER_ID` aplikasi uji dari env
+Anda sendiri: jalankan dengan `--env-file=.env.local`. Skrip hanya mengirim ke
+mesin ini kecuali diberi `--allow-remote`.
 
-**Penting**: server yang dituju memakai kredensialnya sendiri (`.env.local`
-server itu). Pesan uji tersimpan di database yang dipakai server itu, dan AI-nya
+**Penting**: server yang dituju memakai kredensial aplikasi itu dari Vault
+database server itu. Pesan uji tersimpan di database yang dipakai server itu, dan AI-nya
 benar-benar mencoba membalas `TEST_PHONE` dari nomor WhatsApp di kredensial itu.
 Karena itu `TEST_PHONE` wajib diisi dengan nomor milik Anda, dan sebaiknya server
 lokal memakai database lokal, bukan produksi.
 
 **Cara Menggunakan**:
 ```bash
-# Basic test (TEST_PHONE wajib: nomor milik Anda)
-TEST_PHONE=<nomor-anda> node --env-file=.env.local scripts/test-webhook.js
-
-# Custom webhook URL (tetap mesin ini)
-WEBHOOK_URL=http://localhost:3000/api/webhook/whatsapp TEST_PHONE=<nomor-anda> node --env-file=.env.local scripts/test-webhook.js
+# WEBHOOK_URL dan TEST_PHONE wajib (TEST_PHONE: nomor milik Anda)
+WEBHOOK_URL=http://localhost:3000/api/webhook/whatsapp/<webhook_key> TEST_PHONE=<nomor-anda> node --env-file=.env.local scripts/test-webhook.js
 ```
-Skrip keluar dengan kode 1 bila ditolak (bukan mesin ini, env kurang, `TEST_PHONE`
-kosong) atau bila webhook tidak menjawab 2xx.
+Skrip keluar dengan kode 1 bila ditolak (`WEBHOOK_URL` bukan URL per aplikasi,
+bukan mesin ini, env kurang, `TEST_PHONE` kosong) atau bila webhook tidak menjawab 2xx.
 
 **Output**:
 ```
 🧪 Testing WhatsApp Webhook...
 
-📍 Webhook URL: http://localhost:3000/api/webhook/whatsapp
+📍 Webhook URL: http://localhost:3000/api/webhook/whatsapp/<webhook_key>
 📱 Test Phone: 6281234567890
 
 ✅ Response Status: 200 OK
@@ -152,7 +151,7 @@ http://localhost:3000/dashboard/debug-chats
 **Step 3: Test dengan Script**
 ```bash
 # Test webhook lokal
-TEST_PHONE=<nomor-anda> node --env-file=.env.local scripts/test-webhook.js
+WEBHOOK_URL=http://localhost:3000/api/webhook/whatsapp/<webhook_key> TEST_PHONE=<nomor-anda> node --env-file=.env.local scripts/test-webhook.js
 
 # Cek debug dashboard
 http://localhost:3000/dashboard/debug-chats
@@ -190,10 +189,10 @@ http://localhost:3000/dashboard/debug-chats
 ngrok http 3000
 
 # Copy URL: https://xxxx.ngrok.io
-# Update di Meta: https://xxxx.ngrok.io/api/webhook/whatsapp
+# Update di Meta: https://xxxx.ngrok.io/api/webhook/whatsapp/<webhook_key>
 
-# Test dari luar
-curl https://xxxx.ngrok.io/api/webhook/whatsapp
+# Test dari luar (403 tanpa verify token = route terjangkau)
+curl https://xxxx.ngrok.io/api/webhook/whatsapp/<webhook_key>
 ```
 
 **Solution**: 
@@ -222,7 +221,7 @@ Sebelum mulai debug, pastikan:
 npm run dev
 
 # Test webhook lokal (TEST_PHONE wajib: nomor milik Anda)
-TEST_PHONE=<nomor-anda> node --env-file=.env.local scripts/test-webhook.js
+WEBHOOK_URL=http://localhost:3000/api/webhook/whatsapp/<webhook_key> TEST_PHONE=<nomor-anda> node --env-file=.env.local scripts/test-webhook.js
 
 # Expose lokal ke internet (development)
 ngrok http 3000

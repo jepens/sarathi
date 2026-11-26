@@ -42,12 +42,12 @@ import {
 // Service-role paths without a user still use getDefaultOrgId(): the follow-up
 // digest, and the AI's meeting-tool gate (lib/ai/rag.ts, D26). The WhatsApp
 // webhook and the WhatsApp credential resolver (lib/whatsapp/credentials.ts)
-// use getDefaultOrgIdStrict().
+// no longer read the default org: each org's number comes from Vault (2.2d).
 //
 // The default org (Sailendra) also owns every env-configured integration
-// (Zoom, Resend, and today the WhatsApp number). Routes that use those
-// credentials must gate on requireEnvIntegration() so another tenant can never
-// act as Sailendra; WhatsApp routes gate on requireWhatsAppIntegration()
+// (Zoom, Resend). Routes that use those credentials must gate on
+// requireEnvIntegration() so another tenant can never act as Sailendra;
+// WhatsApp routes gate on requireWhatsAppIntegration()
 // (lib/whatsapp/integration.ts), which also resolves the org's credentials.
 
 /** The signed-in member's context. `supabase` is the cookie-bound (RLS) client. */

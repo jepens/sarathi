@@ -4,7 +4,7 @@ import {
     OTHER_ORG,
     OTHER_PNID,
     PNID,
-    SECRET,
+    KEY,
     WaModel,
     change,
     contactOf,
@@ -24,16 +24,17 @@ import {
 // are injected per call; claim_queue_jobs hands out the queued jobs. Every
 // model call settles after a macrotask, so what must be committed before the
 // answer is checked right when POST returns (C1 verification MUT-1/MUT-2).
-// Only Meta (send, download), the AI, Web Push and the default org are
-// stubbed. Timers and Date are faked (setImmediate is not), so the delayed
-// queue drain and the status re-apply run only when a test moves the clock.
+// Only Meta (send, download), the AI and Web Push are stubbed; the route is
+// the per-app URL of ORG's app (its secret and number from the model's Vault
+// rows), and the default org is never read. Timers and Date are faked
+// (setImmediate is not), so the delayed queue drain and the status re-apply
+// run only when a test moves the clock.
 // Fake ids, phones and texts only.
 
 const h = vi.hoisted(() => ({
     db: null as unknown as WaModel,
     logs: [] as unknown[][],
     orgReads: 0,
-    orgError: null as unknown,
     outSeq: 0,
 }));
 
@@ -42,11 +43,9 @@ vi.mock('@/lib/supabase/server', () => ({ createClient: vi.fn() }));
 vi.mock('@/lib/settings/org-context', () => ({
     getDefaultOrgIdStrict: vi.fn(async () => {
         h.orgReads += 1;
-        if (h.orgError) throw h.orgError;
         return 'aaaaaaaa-0000-4000-8000-00000000000a';
     }),
 }));
-vi.mock('@/lib/settings/app-settings', () => ({ checkVerifyToken: vi.fn() }));
 vi.mock('@/lib/whatsapp/client', () => ({ sendWhatsAppMessage: vi.fn(), downloadWhatsAppMedia: vi.fn() }));
 vi.mock('@/lib/notifications/web-push', () => ({ sendPushToOrg: vi.fn() }));
 vi.mock('@/lib/ai/rag', () => ({ generateRAGResponse: vi.fn() }));
@@ -59,7 +58,7 @@ vi.mock('@/lib/utils/logger', async (importOriginal) => {
     };
 });
 
-import { POST } from '@/app/api/webhook/whatsapp/route';
+import { POST as keyPost } from '@/app/api/webhook/whatsapp/[key]/route';
 import { sendWhatsAppMessage, downloadWhatsAppMedia } from '@/lib/whatsapp/client';
 import { sendPushToOrg } from '@/lib/notifications/web-push';
 import { generateRAGResponse } from '@/lib/ai/rag';
@@ -76,7 +75,9 @@ import {
 } from '@/lib/whatsapp/webhook/after-ingest';
 import { resetOpsEventThrottle } from '@/lib/ops/events';
 import { resetOtherNumberState } from '@/lib/whatsapp/other-number';
-import { getDefaultOrgIdStrict } from '@/lib/settings/org-context';
+
+// The per-app URL of ORG's app (Fase 2 task 2.2d: the only webhook URL).
+const POST = (request: Request) => keyPost(request, { params: Promise.resolve({ key: KEY }) });
 
 const A = '620000000001';
 const B = '620000000002';
@@ -150,7 +151,6 @@ beforeEach(() => {
     h.db = new WaModel();
     h.logs = [];
     h.orgReads = 0;
-    h.orgError = null;
     h.outSeq = 0;
     resetOpsEventThrottle();
     resetOtherNumberState();
@@ -174,9 +174,6 @@ beforeEach(() => {
         if (error) return error.code === '23505' ? { status: 'duplicate' } : { status: 'gate_failed', error, httpStatus: status };
         return { status: 'handled' };
     });
-    vi.stubEnv('WHATSAPP_APP_SECRET', SECRET);
-    vi.stubEnv('WHATSAPP_PHONE_NUMBER_ID', PNID);
-    vi.stubEnv('WHATSAPP_ACCESS_TOKEN', 'token-palsu');
     vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'http://localhost:54321');
     vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', 'service-role-key');
     vi.stubEnv('WHATSAPP_DEBOUNCE_SECONDS', '0');
@@ -276,7 +273,8 @@ describe('contract harness (synthesis section 8, items 10-20)', () => {
             ['wamid.keluar-b'],
         ]);
         expect(['wamid.keluar-a', 'wamid.keluar-b'].map((id) => h.db.messages.find((m) => m.wa_message_id === id)?.status)).toEqual(['delivered', 'read']);
-        expect(h.orgReads).toBe(1);
+        expect(h.db.rpcCalls('wa_org_send_credentials')).toHaveLength(1); // the one org read, from Vault
+        expect(h.orgReads).toBe(0);
         await settle();
         expect(h.db.rpcCalls('claim_queue_jobs')).toHaveLength(1);
         expect(replies()).toHaveLength(4); // one per conversation
@@ -500,18 +498,20 @@ describe('contract harness (synthesis section 8, items 10-20)', () => {
         ['empty', ''],
         ['with a line break inside (unusable: fetch would quote it in its error)', 'token\npalsu'],
     ])('18b. an access token that is %s: one webhook_unconfigured for the batch, the messages are still stored', async (_label, token) => {
-        vi.stubEnv('WHATSAPP_ACCESS_TOKEN', token);
+        h.db.sendCreds.get(ORG)!.access_token = token;
         const body = delivery([change({ contacts: [contactOf(A), contactOf(B)], messages: [textMsg(A, 'wamid.t1', 'satu'), textMsg(B, 'wamid.t2', 'dua')] })]);
         expect(await deliver(body)).toBe(200);
         expect(h.db.events()).toEqual([
             {
                 kind: 'webhook_unconfigured',
                 org: ORG,
-                detail: 'WHATSAPP_ACCESS_TOKEN tidak diset atau tidak valid di server: pesan masuk tetap disimpan, tetapi balasan AI dan peringatan tidak terkirim',
+                detail: 'token akses aplikasi ini tidak terbaca dari Vault atau tidak valid: pesan masuk tetap disimpan, tetapi balasan AI dan peringatan tidak terkirim',
                 count: 1,
             },
         ]);
         expect(h.db.userRows()).toHaveLength(2);
+        // Still queued for the AI: the queue answers them with the operator note.
+        expect(h.db.ingests().map((a) => a.p_ai_eligible)).toEqual([true, true]);
     });
 
     it('19. an unknown young failed status is applied again once, 15 s later; sent and old ones are not', async () => {
@@ -809,13 +809,14 @@ describe('the queue drain and the AI', () => {
 });
 
 describe('the rest of the batch walk (C2_SPEC sections 6 and 7)', () => {
-    it('an unreadable default org answers 503 with webhook_error without an org, and is read once', async () => {
-        h.orgError = Object.assign(new Error('platform setting default_org_id could not be read (57014)'), { name: 'PlatformSettingReadError', code: '57014' });
+    it("an unreadable number answers 503 with webhook_error for the app's org, is read once, and nothing is stored", async () => {
+        h.db.fail({ target: 'rpc:wa_org_send_credentials', error: { code: '57014' }, status: 500 });
         const body = delivery([change({ contacts: [contactOf(A), contactOf(B)], messages: [textMsg(A, 'wamid.o-1', 'a'), textMsg(B, 'wamid.o-2', 'b')], statuses: [{ id: 'wamid.x', status: 'read' }] })]);
         expect(await deliver(body)).toBe(503);
-        expect(h.orgReads).toBe(1);
+        expect(h.db.rpcCalls('wa_org_send_credentials')).toHaveLength(1);
+        expect(h.orgReads).toBe(0);
         expect(h.db.ingests()).toEqual([]);
-        expect(h.db.events()).toEqual([{ kind: 'webhook_error', org: null, detail: 'database 57014 — org default tidak terbaca, periksa Supabase (3 dari 3 item)', count: 1 }]);
+        expect(h.db.events()).toEqual([{ kind: 'webhook_error', org: ORG, detail: expect.stringMatching(/^nomor WhatsApp tidak terbaca \(.*57014.*\); webhook menjawab 503, Meta mengirim ulang$/), count: 1 }]);
     });
 
     it('user_id_update: a database error answers 503; a 23505 is only logged (200, no alert)', async () => {
@@ -1140,10 +1141,8 @@ describe('pins the independent TS review asked for (TSR-4)', () => {
 
     it('(d) a user_id_update cut off by the time budget is deferred, not failed; with nothing done it is alerted as a slow database', async () => {
         h.db.seedChat({ phone_number: A, bsuid: 'ID.lama-lambat' });
-        vi.mocked(getDefaultOrgIdStrict).mockImplementationOnce(async () => {
-            vi.setSystemTime(Date.now() + 7_990);
-            return ORG;
-        });
+        // The number read before the walk takes the budget but 10 ms.
+        h.db.clockStep = (target) => (target === 'rpc:wa_org_send_credentials' ? 7_990 : 0);
         h.db.hang = (target) => target === 'whatsapp_chats.update';
         const move = { user_id_update: [{ user_id: { previous: 'ID.lama-lambat', current: 'ID.baru-lambat' } }] };
         expect(await deliver(delivery([{ field: 'user_id_update', value: move }]))).toBe(503);

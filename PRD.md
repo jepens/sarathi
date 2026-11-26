@@ -370,7 +370,7 @@ Provides a centralized, user-friendly interface for managing all application cre
 - `getOpenAIApiKey()` - Throws error if not configured
 - `getShippingApiKey()` - Returns null (optional)
 - `isAIConfigured()` - Check OpenAI key
-- WhatsApp credentials (since Fase 2 task 2.2b): `getOrgWhatsAppCreds(orgId)` in `lib/whatsapp/credentials.ts`, the only file that reads WHATSAPP_ACCESS_TOKEN, WHATSAPP_PHONE_NUMBER_ID, WHATSAPP_APP_SECRET and WHATSAPP_BUSINESS_ACCOUNT_ID (`getVerifyToken()` here still reads WHATSAPP_VERIFY_TOKEN)
+- WhatsApp credentials (since Fase 2 task 2.2d): `getOrgWhatsAppCreds(orgId)` in `lib/whatsapp/credentials.ts` reads each org's number and token from Supabase Vault (`wa_org_send_credentials`); no WHATSAPP_* credential is read from env, and the legacy URL `/api/webhook/whatsapp`, its verify token and `WebhookSettings.tsx` are gone (every Meta app has its own URL `/api/webhook/whatsapp/<key>`)
 
 **Server Actions** (`app/dashboard/settings/actions.ts`):
 - `updateWebhookSettings()` - Save WhatsApp credentials

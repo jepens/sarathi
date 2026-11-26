@@ -21,8 +21,9 @@ import {
 // row, never from the default org or the env. Shape checks run before any
 // database call; tenant isolation holds because the signature binds the app
 // and the router compares with the app's own number. The walk after the gate
-// is the bare URL's (contract.test.ts). Meta, the AI, Web Push and the queue
-// drain are stubbed. Fake ids, keys, secrets and tokens only.
+// is pinned by contract.test.ts and part1-pins.test.ts. Meta, the AI, Web
+// Push and the queue drain are stubbed. Fake ids, keys, secrets and tokens
+// only.
 
 const h = vi.hoisted(() => ({
     db: null as unknown as WaModel,
@@ -38,7 +39,6 @@ vi.mock('@/lib/settings/org-context', () => ({
         return 'aaaaaaaa-0000-4000-8000-00000000000a';
     }),
 }));
-vi.mock('@/lib/settings/app-settings', () => ({ checkVerifyToken: vi.fn(async () => true) }));
 vi.mock('@/lib/whatsapp/client', () => ({ sendWhatsAppMessage: vi.fn(), downloadWhatsAppMedia: vi.fn() }));
 vi.mock('@/lib/notifications/web-push', () => ({ sendPushToOrg: vi.fn() }));
 vi.mock('@/lib/ai/rag', () => ({ generateRAGResponse: vi.fn() }));
@@ -57,7 +57,6 @@ vi.mock('@/lib/utils/logger', async (importOriginal) => {
 
 import { createClient } from '@supabase/supabase-js';
 import { GET, POST } from '@/app/api/webhook/whatsapp/[key]/route';
-import { checkVerifyToken } from '@/lib/settings/app-settings';
 import { downloadWhatsAppMedia, sendWhatsAppMessage } from '@/lib/whatsapp/client';
 import { processQueue } from '@/lib/whatsapp/queue-db';
 import { settleBackground } from '@/lib/whatsapp/webhook/background';
@@ -134,10 +133,6 @@ beforeEach(() => {
     resetAfterIngestState();
     vi.mocked(sendWhatsAppMessage).mockReset().mockResolvedValue({ waMessageId: 'wamid.keluar-1', raw: {} });
     vi.mocked(downloadWhatsAppMedia).mockReset().mockResolvedValue({ bytes: new Uint8Array([1, 2, 3]), mime: 'image/jpeg', size: 3 });
-    // The env credentials are not set: nothing on this URL may need them.
-    vi.stubEnv('WHATSAPP_APP_SECRET', '');
-    vi.stubEnv('WHATSAPP_PHONE_NUMBER_ID', '');
-    vi.stubEnv('WHATSAPP_ACCESS_TOKEN', '');
     vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'http://localhost:54321');
     vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', 'service-role-key');
     vi.stubEnv('WHATSAPP_DEBOUNCE_SECONDS', '0');
@@ -158,7 +153,6 @@ describe('GET: the verification of a per-app URL', () => {
         expect(await res.text()).toBe(CHALLENGE);
         expect(res.headers.get('content-type')).toMatch(/^text\/plain/);
         expect(h.db.rpcCalls('wa_webhook_app')).toEqual([{ p_key: KEY_A }]);
-        expect(checkVerifyToken).not.toHaveBeenCalled();
         expect(h.orgReads).toBe(0);
     });
 
@@ -180,7 +174,6 @@ describe('GET: the verification of a per-app URL', () => {
         expect(res.status).toBe(403);
         expect(await res.text()).not.toContain(CHALLENGE);
         expect(h.db.calls.length > 0).toBe(readsDb);
-        expect(checkVerifyToken).not.toHaveBeenCalled();
     });
 
     it('the verify token and the key never reach a log line', async () => {

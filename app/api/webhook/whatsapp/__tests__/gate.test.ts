@@ -2,27 +2,43 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import crypto from 'node:crypto';
 import { makeFakeSupabase, type FakeCall, type FakeSupabase } from '@/lib/whatsapp/__tests__/fakeSupabase';
 
-// The webhook gate (Fase 2 task 2.2a, phase 0): the signature is checked with
+// The webhook gate (Fase 2 task 2.2a; since 2.2d on the per-app URL
+// /api/webhook/whatsapp/<key>, the app's secret and number answered from
+// Vault by the fake): the signature is checked with
 // the real verifier over the raw bytes before anything reads the payload; a
 // signed body that is not JSON, not an object or not a WhatsApp event is
-// acknowledged (200) without touching the database; events of another number
+// acknowledged (200) with only the app read for its secret (wa_webhook_app);
+// events of another number
 // of the WABA are dropped and alerted with a hash of the id (within the hour
 // for a number not reported in the last 7 days), or in process mode stored
 // without AI (shown like any inbound message, marked for the AI history, with
 // a note for the operators that keeps the chat unanswered; a Flow submission
 // or a contact card stored as a summary); a user_id_update applies whichever number reported
-// it; status updates are scoped to the org; no service-role key, no usable
-// number id or an unreadable default org never lead to a write under the
-// wrong org; env values are trimmed. Since 2.2a part 2 a message is stored by
+// it; status updates are scoped to the org; no service-role key, no number
+// row or an unreadable number never lead to a write under the wrong org.
+// Since 2.2a part 2 a message is stored by
 // one wa_ingest_inbound call and statuses by wa_apply_statuses (migration
 // 0072): the fake answers them as the database would, and what the
 // functions do inside is pinned by pgTAP 220. Fake ids, phones and secrets only.
 
 const SECRET = 'test-app-secret';
-const PNID = '100000000000001'; // the env number
+const PNID = '100000000000001'; // the app's own number
 const OTHER = '100000000000002'; // another number of the same WABA
 const ORG = 'aaaaaaaa-0000-4000-8000-00000000000a';
 const PHONE = '620000000000';
+const KEY = 'A'.repeat(32);
+/** wa_webhook_app's row of KEY (migration 0073). */
+const APP_ROW = { app_id: 'cccccccc-0000-4000-8000-00000000000c', org_id: ORG, status: 'active', app_secret: SECRET, verify_token_sha256: '0'.repeat(64) };
+/** wa_org_send_credentials' row of ORG. */
+const NUMBER_ROW = {
+    integration_id: 'eeeeeeee-0000-4000-8000-00000000000e',
+    app_id: APP_ROW.app_id,
+    phone_number_id: PNID,
+    waba_id: '200000000000001',
+    access_token: 'token-palsu',
+    status: 'active',
+    app_status: 'active',
+};
 
 const h = vi.hoisted(() => ({
     fake: null as unknown as FakeSupabase,
@@ -36,11 +52,15 @@ const h = vi.hoisted(() => ({
     opsSeen: true,
     /** The ops_events lookup answers with an error. */
     opsLookupError: false,
+    /** The Vault rows the two 0073 reads answer (null: no row). */
+    app: null as Record<string, unknown> | null,
+    number: null as Record<string, unknown> | null,
+    /** wa_org_send_credentials answers with this error, when set. */
+    numberError: null as unknown,
 }));
 
 vi.mock('@supabase/supabase-js', () => ({ createClient: vi.fn(() => h.fake.client) }));
 vi.mock('@/lib/settings/org-context', () => ({ getDefaultOrgIdStrict: h.defaultOrg }));
-vi.mock('@/lib/settings/app-settings', () => ({ checkVerifyToken: vi.fn() }));
 vi.mock('@/lib/whatsapp/client', () => ({ downloadWhatsAppMedia: vi.fn(), sendWhatsAppMessage: vi.fn() }));
 vi.mock('@/lib/notifications/web-push', () => ({ sendPushToOrg: vi.fn(async () => {}) }));
 vi.mock('@/lib/whatsapp/queue-db', () => ({
@@ -72,7 +92,9 @@ import { handleFlowReply } from '@/lib/whatsapp/flow-response';
 import { sendPushToOrg } from '@/lib/notifications/web-push';
 import { settleBackground } from '@/lib/whatsapp/webhook/background';
 import { resetPoison } from '@/lib/whatsapp/webhook/outcome';
-import { POST } from '@/app/api/webhook/whatsapp/route';
+import { POST as keyPost } from '@/app/api/webhook/whatsapp/[key]/route';
+
+const POST = (request: Request) => keyPost(request, { params: Promise.resolve({ key: KEY }) });
 
 function post(raw: string | Uint8Array, signature: 'sign' | 'none' | string = 'sign', secret = SECRET): Request {
     const bytes = typeof raw === 'string' ? Buffer.from(raw, 'utf8') : Buffer.from(raw);
@@ -82,7 +104,7 @@ function post(raw: string | Uint8Array, signature: 'sign' | 'none' | string = 's
     } else if (signature !== 'none') {
         headers['x-hub-signature-256'] = signature;
     }
-    return new Request('http://localhost/api/webhook/whatsapp', { method: 'POST', headers, body: bytes });
+    return new Request(`http://localhost/api/webhook/whatsapp/${KEY}`, { method: 'POST', headers, body: bytes });
 }
 
 let seq = 0;
@@ -181,6 +203,9 @@ beforeEach(() => {
     h.opsLookupError = false;
     h.ingestReplies = [];
     h.ingestFailure = null;
+    h.app = { ...APP_ROW };
+    h.number = { ...NUMBER_ROW };
+    h.numberError = null;
     resetPoison();
     h.fake = makeFakeSupabase({
         resolve: (c) => {
@@ -192,6 +217,11 @@ beforeEach(() => {
             return { data: null, error: null };
         },
         rpc: (name, args) => {
+            if (name === 'wa_webhook_app') return { data: h.app ? [h.app] : [], error: null };
+            if (name === 'wa_org_send_credentials') {
+                if (h.numberError) return { data: null, error: h.numberError, status: 500 };
+                return { data: h.number ? [h.number] : [], error: null };
+            }
             if (name === 'wa_ingest_inbound') return ingestReply(args as Record<string, unknown>);
             if (name === 'wa_apply_statuses') {
                 return { data: [{ applied: 1, stale: 0, unknown: 0, unknown_ids: [], bsuid_filled: 0, bsuid_conflicts: 0 }], error: null };
@@ -200,9 +230,6 @@ beforeEach(() => {
         },
     });
     h.defaultOrg.mockResolvedValue(ORG);
-    vi.stubEnv('WHATSAPP_APP_SECRET', SECRET);
-    vi.stubEnv('WHATSAPP_PHONE_NUMBER_ID', PNID);
-    vi.stubEnv('WHATSAPP_ACCESS_TOKEN', 'token-palsu');
     vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'http://localhost:54321');
     vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', 'service-role-key');
 });
@@ -221,8 +248,10 @@ describe('webhook gate: the signature comes first', () => {
         const signedThenChanged = post(raw.replace('halo', 'HALO'), `sha256=${crypto.createHmac('sha256', SECRET).update(raw).digest('hex')}`);
         expect((await POST(signedThenChanged)).status).toBe(403);
 
-        // Nothing read the payload, no org was resolved, nothing stored or queued.
+        // Nothing read the payload, no org was resolved, nothing stored or
+        // queued; the request without the header read nothing at all.
         expect(h.fake.calls).toEqual([]);
+        expect(h.fake.rpcCalls.map((c) => c.name)).toEqual(['wa_webhook_app', 'record_ops_event', 'wa_webhook_app', 'record_ops_event']);
         expect(h.defaultOrg).not.toHaveBeenCalled();
         expect(ingests()).toEqual([]);
         expect(h.logs.some((l) => String(l[0]).startsWith('Webhook received'))).toBe(false);
@@ -290,11 +319,12 @@ describe('webhook gate: the signature comes first', () => {
 });
 
 describe('webhook gate: signed bodies that are not WhatsApp events', () => {
-    it('acknowledges a body that is not JSON or not an object with 200, without the database', async () => {
+    it('acknowledges a body that is not JSON or not an object with 200; only the app (its secret) is read', async () => {
         for (const raw of ['bukan json', 'null', '"teks"', '42']) {
             expect((await POST(post(raw))).status).toBe(200);
         }
-        expect(createClient).not.toHaveBeenCalled();
+        expect(h.fake.calls).toEqual([]);
+        expect(h.fake.rpcCalls.map((c) => c.name)).toEqual(Array(4).fill('wa_webhook_app'));
     });
 
     it('acknowledges another object type with 200 (a 404 made Meta retry for days)', async () => {
@@ -724,8 +754,8 @@ describe('webhook gate: nothing is written under the wrong org', () => {
         expect(createClient).not.toHaveBeenCalled();
     });
 
-    it('answers 503 when no number is configured, so Meta retries instead of the event being dropped, and alerts', async () => {
-        vi.stubEnv('WHATSAPP_PHONE_NUMBER_ID', '');
+    it('answers 503 when the app has no number row, so Meta retries instead of the event being dropped, and alerts', async () => {
+        h.number = null;
         const res = await POST(post(textEvent().raw));
         expect(res.status).toBe(503);
         expect(ingests()).toEqual([]);
@@ -733,49 +763,24 @@ describe('webhook gate: nothing is written under the wrong org', () => {
         expect(opsEvents()).toEqual([
             {
                 p_kind: 'webhook_unconfigured',
-                p_org: null,
-                p_detail: 'WHATSAPP_PHONE_NUMBER_ID tidak diset di server; webhook menjawab 503, Meta mengirim ulang',
+                p_org: ORG,
+                p_detail: 'aplikasi tanpa nomor di Sarathi; webhook menjawab 503, Meta mengirim ulang',
                 p_count: 1,
             },
         ]);
     });
 
-    it('a WHATSAPP_PHONE_NUMBER_ID that is not a number id answers 503 and says so', async () => {
-        vi.stubEnv('WHATSAPP_PHONE_NUMBER_ID', 'nomor-utama');
-        expect((await POST(post(textEvent().raw))).status).toBe(503);
-        expect(ingests()).toEqual([]);
-        expect(opsEvents()[0].p_detail).toBe(
-            'WHATSAPP_PHONE_NUMBER_ID bukan ID nomor (harus angka saja); webhook menjawab 503, Meta mengirim ulang',
-        );
-    });
-
-    it('a default org that cannot be read answers 503 (Meta retries) and stores nothing', async () => {
-        h.defaultOrg.mockRejectedValue(new Error('platform setting default_org_id could not be read (57014)'));
+    it('a number that cannot be read answers 503 (Meta retries) and stores nothing; the default org is never read', async () => {
+        h.numberError = { code: '57014', message: 'token-palsu' };
         const res = await POST(post(textEvent().raw));
         expect(res.status).toBe(503);
-        expect(h.defaultOrg).toHaveBeenCalledTimes(1); // read once per delivery
+        expect(h.fake.rpcCalls.filter((c) => c.name === 'wa_org_send_credentials')).toHaveLength(1); // read once per delivery
+        expect(touched('platform_settings')).toEqual([]);
         expect(ingests()).toEqual([]);
         expect(touched('whatsapp_messages')).toEqual([]);
         expect(opsKinds()).toEqual(['webhook_error']);
-        expect(opsEvents()[0].p_org).toBeNull();
-    });
-});
-
-describe('webhook gate: env values are trimmed', () => {
-    it("a WHATSAPP_PHONE_NUMBER_ID with a trailing CR, LF, tab or space still routes the app's own number", async () => {
-        for (const tail of ['\r\n', '\n', '\t', ' ']) {
-            vi.stubEnv('WHATSAPP_PHONE_NUMBER_ID', `${PNID}${tail}`);
-            const { raw, wamid } = textEvent(PNID);
-            expect((await POST(post(raw))).status).toBe(200);
-            expect(ingests().at(-1)).toMatchObject({ p_org: ORG, p_from: PHONE, p_queue_text: 'halo, masih buka?', p_wamid: wamid });
-        }
-        expect(opsKinds()).toEqual([]);
-    });
-
-    it("an app secret with a trailing newline still verifies Meta's signature", async () => {
-        vi.stubEnv('WHATSAPP_APP_SECRET', `${SECRET}\n`);
-        expect((await POST(post(textEvent().raw))).status).toBe(200);
-        expect(aiQueued()).toHaveLength(1);
+        expect(opsEvents()[0].p_org).toBe(ORG);
+        expect(JSON.stringify(opsEvents())).not.toContain('token-palsu');
     });
 });
 
@@ -788,9 +793,12 @@ describe('webhook gate: alerts', () => {
         expect(opsEvents()).toEqual([{ p_kind: 'webhook_error', p_org: ORG, p_detail: 'Error (1 dari 1 item)', p_count: 1 }]);
     });
 
-    it('the 403 says when the app secret is not set on the server', async () => {
-        vi.stubEnv('WHATSAPP_APP_SECRET', '');
+    it('the 403 says when Vault could not read the app secret', async () => {
+        h.app = { ...APP_ROW, app_secret: null };
         expect((await POST(post(textEvent().raw))).status).toBe(403);
-        expect(opsEvents()[0].p_detail).toBe('WHATSAPP_APP_SECRET tidak diset di server');
+        expect(opsEvents()).toEqual([
+            { p_kind: 'webhook_signature_invalid', p_org: ORG, p_detail: 'app secret aplikasi ini tidak terbaca dari Vault', p_count: 1 },
+        ]);
+        expect(ingests()).toEqual([]);
     });
 });

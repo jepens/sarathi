@@ -504,6 +504,33 @@ Deviations from the original design:
 
 Next: the owner moves Sailendra's callback, then the 48 h soak, then PR-2 (2.2d) moves every send to Vault and deletes the legacy route and env.
 
+**As built (2026-11-26, task 2.2d PR-2; D32).** Every send now reads Vault, for every org. This PR has no migration.
+- `getOrgWhatsAppCreds(orgId, client?)` calls `vaultOrgCreds` on `client ?? serviceRoleClient()`. These cases give `WhatsAppNotConfiguredError`:
+  - an orgId that is not a UUID (no RPC is made);
+  - no number row;
+  - a paused number or a suspended app;
+  - an unusable token.
+
+  An RPC error (`RpcError`) or a missing service-role client is a read error. The callers already retry it, answer 503 or skip it. `assertCanSend` still runs.
+- Deleted:
+  - the legacy route (the bare URL now answers 404);
+  - `processWebhook` and its env alerts;
+  - `envCreds`, `envWebhookApp`, `resolveWhatsAppContext` and `envWhatsAppSendConfigured`;
+  - `checkVerifyToken`, `getVerifyToken` and `getWebhookUrl`;
+  - `WebhookSettings`.
+
+  `PLATFORM_SETTING_KEYS` is now `['default_org_id']`.
+- New `orgWhatsAppConnected(orgId)` reads the status column only, and a read error counts as false. It drives two things for every org: the Settings card "Dikelola tim Sarathi · Terhubung / Belum dihubungkan" and the onboarding step. No URL or verify token is shown or returned.
+- The env-shim guard now allows no reader, and it also covers `WHATSAPP_VERIFY_TOKEN`.
+
+Deviations from the plan:
+- `WebhookApp` stays, without `phoneNumberIdProblem`, because the router takes it. `walkBatch` lost its alert-text parameter.
+- `getDefaultOrgIdStrict` stays in `org-context.ts` with its tests, but no app code calls it now.
+- The onboarding API no longer returns `webhookVisible`, `webhookUrl` or `verifyToken`.
+- `scripts/test-webhook.js` and `scripts/test-whatsapp-local.mjs` now need a per-app URL or key. They still sign with the operator's own env.
+- The local-db e2e suite provisions its own app and number with `wa_provision_app` and removes them with `wa_offboard_org`. Its case t now revokes EXECUTE on `wa_org_send_credentials`. Its empty-token half is dropped: Vault cannot hold an empty token, and contract test 18b covers that case.
+- `verify_webhook_token` and the two dead `platform_settings` rows stay until PR-3 (`0074_wa_legacy_contract`).
+
 ---
 
 **wa_legacy_contract (2.2d)**

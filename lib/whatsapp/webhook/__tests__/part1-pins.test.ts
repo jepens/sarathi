@@ -4,6 +4,7 @@ import {
     OTHER_ORG,
     OTHER_PNID,
     PNID,
+    KEY,
     SECRET,
     WaModel,
     change,
@@ -22,14 +23,15 @@ import {
 // webhook: the HTTP answer, the alerts, what is written, what is sent. Each
 // title starts with the row's status: Kept, Changed (with the decision) or
 // Kept, extended. The same stateful model of the database as the contract
-// harness (wa-model.ts); Meta, the AI, Web Push and the default org are
-// stubbed. Fake ids, phones and texts only.
+// harness (wa-model.ts); Meta, the AI and Web Push are stubbed. Since 2.2d the
+// route is the per-app URL of ORG's app: its secret and number come from the
+// model's Vault rows, and the default org is never read. Fake ids, phones and
+// texts only.
 
 const h = vi.hoisted(() => ({
     db: null as unknown as WaModel,
     logs: [] as unknown[][],
     orgReads: 0,
-    orgError: null as unknown,
     outSeq: 0,
     /** A log line starting with this throws (a bug outside the per-item guards). */
     throwOnLog: null as string | null,
@@ -40,11 +42,9 @@ vi.mock('@/lib/supabase/server', () => ({ createClient: vi.fn() }));
 vi.mock('@/lib/settings/org-context', () => ({
     getDefaultOrgIdStrict: vi.fn(async () => {
         h.orgReads += 1;
-        if (h.orgError) throw h.orgError;
         return 'aaaaaaaa-0000-4000-8000-00000000000a';
     }),
 }));
-vi.mock('@/lib/settings/app-settings', () => ({ checkVerifyToken: vi.fn() }));
 vi.mock('@/lib/whatsapp/client', () => ({ sendWhatsAppMessage: vi.fn(), downloadWhatsAppMedia: vi.fn() }));
 vi.mock('@/lib/notifications/web-push', () => ({ sendPushToOrg: vi.fn() }));
 vi.mock('@/lib/ai/rag', () => ({ generateRAGResponse: vi.fn() }));
@@ -61,7 +61,7 @@ vi.mock('@/lib/utils/logger', async (importOriginal) => {
 });
 
 import { createClient } from '@supabase/supabase-js';
-import { POST } from '@/app/api/webhook/whatsapp/route';
+import { POST as keyPost } from '@/app/api/webhook/whatsapp/[key]/route';
 import { sendWhatsAppMessage, downloadWhatsAppMedia } from '@/lib/whatsapp/client';
 import { sendPushToOrg } from '@/lib/notifications/web-push';
 import { generateRAGResponse } from '@/lib/ai/rag';
@@ -82,13 +82,16 @@ import { inboundQuotaNotice } from '@/lib/quota/org-quota';
 import { resetOpsEventThrottle } from '@/lib/ops/events';
 import { otherNumberLimitNotice, otherNumberNotice, otherNumberOf, resetOtherNumberState } from '@/lib/whatsapp/other-number';
 
+// The per-app URL of ORG's app (Fase 2 task 2.2d: the only webhook URL).
+const POST = (request: Request) => keyPost(request, { params: Promise.resolve({ key: KEY }) });
+
 const A = '620000000001';
 const B = '620000000002';
 const C = '620000000003';
 const D = '620000000004';
 const E = '620000000005';
 const HOUR = 60 * 60 * 1000;
-const URL = 'http://localhost/api/webhook/whatsapp';
+const URL = `http://localhost/api/webhook/whatsapp/${KEY}`;
 const AI_REPLY = 'Balasan AI palsu';
 const OTHER = otherNumberOf(OTHER_PNID, '+62 800-0000-1234');
 
@@ -112,7 +115,7 @@ function readableAnswers(raw: unknown): boolean {
 }
 const sends = () => vi.mocked(sendWhatsAppMessage).mock.calls;
 // Every send is (credentials, to, text): the credentials of the number the
-// customer wrote to (the env number of the default org, Fase 2 task 2.2b).
+// customer wrote to (ORG's number from Vault, Fase 2 tasks 2.2b and 2.2d).
 const replies = () => sends().filter((c) => c[2] === AI_REPLY);
 const warnings = () => sends().filter((c) => c[2] === RATE_LIMIT_WARNING);
 const SENT_FROM = () => expect.objectContaining({ orgId: ORG, phoneNumberId: PNID, accessToken: 'token-palsu' });
@@ -151,7 +154,6 @@ beforeEach(() => {
     h.db = new WaModel();
     h.logs = [];
     h.orgReads = 0;
-    h.orgError = null;
     h.outSeq = 0;
     h.throwOnLog = null;
     resetOpsEventThrottle();
@@ -176,9 +178,6 @@ beforeEach(() => {
         if (error) return error.code === '23505' ? { status: 'duplicate' } : { status: 'gate_failed', error, httpStatus: status };
         return { status: 'handled' };
     });
-    vi.stubEnv('WHATSAPP_APP_SECRET', SECRET);
-    vi.stubEnv('WHATSAPP_PHONE_NUMBER_ID', PNID);
-    vi.stubEnv('WHATSAPP_ACCESS_TOKEN', 'token-palsu');
     vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'http://localhost:54321');
     vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', 'service-role-key');
     vi.stubEnv('WHATSAPP_DEBOUNCE_SECONDS', '0');
@@ -210,15 +209,19 @@ describe('part-1 pin matrix (synthesis section 7, as amended by D23 and C2_SPEC 
         expect(pulls).toBeLessThanOrEqual(1); // the stream's own start-up pull at most
         expect((await POST(streamedOfSize(MAX_WEBHOOK_BYTES + 1))).status).toBe(413);
         expect(createClient).not.toHaveBeenCalled();
-        // The limit is inclusive: exactly 3 MB is read, verified and answered.
+        // The limit is inclusive: exactly 3 MB is read, verified and answered
+        // (only the app is read, for its secret).
         expect((await POST(streamedOfSize(MAX_WEBHOOK_BYTES))).status).toBe(200);
-        expect(h.db.calls).toEqual([]);
+        expect(h.db.calls.map((c) => c.target)).toEqual(['rpc:wa_webhook_app']);
     });
 
-    it('P02 Kept: the HMAC over the raw bytes comes first: 403 before anything reads the payload, alerted only for a mismatch or an unset secret; invalid UTF-8 still verifies', async () => {
+    it('P02 Kept: the HMAC over the raw bytes comes first: 403 before anything reads the payload, alerted only for a mismatch or an unreadable secret; a missing or malformed header reads no database; invalid UTF-8 still verifies', async () => {
         const body = one(text(A, 'wamid.p02', 'halo, masih buka?'));
         const raw = JSON.stringify(body);
         expect((await POST(new Request(URL, { method: 'POST', body: raw }))).status).toBe(403); // no header: noise
+        const malformed = new Request(URL, { method: 'POST', headers: { 'x-hub-signature-256': 'sha256=bukan-hex' }, body: raw });
+        expect((await POST(malformed)).status).toBe(403); // malformed: noise too
+        expect(h.db.calls).toEqual([]);
         expect((await POST(signedPost(body, 'rahasia-lain'))).status).toBe(403);
         const signedThenChanged = new Request(URL, {
             method: 'POST',
@@ -226,17 +229,18 @@ describe('part-1 pin matrix (synthesis section 7, as amended by D23 and C2_SPEC 
             body: raw.replace('halo', 'HALO'),
         });
         expect((await POST(signedThenChanged)).status).toBe(403);
-        vi.stubEnv('WHATSAPP_APP_SECRET', '');
+        h.db.webhookApps.get(KEY)!.app_secret = null; // Vault could not decrypt it
         expect((await POST(signedPost(body))).status).toBe(403);
-        expect(h.db.events().map((e) => [e.kind, e.detail])).toEqual([
-            ['webhook_signature_invalid', 'tanda tangan tidak cocok'],
-            ['webhook_signature_invalid', 'tanda tangan tidak cocok'],
-            ['webhook_signature_invalid', 'WHATSAPP_APP_SECRET tidak diset di server'],
+        expect(h.db.events().map((e) => [e.kind, e.org, e.detail])).toEqual([
+            ['webhook_signature_invalid', ORG, 'tanda tangan tidak cocok'],
+            ['webhook_signature_invalid', ORG, 'tanda tangan tidak cocok'],
+            ['webhook_signature_invalid', ORG, 'app secret aplikasi ini tidak terbaca dari Vault'],
         ]);
-        expect(h.db.calls.filter((c) => c.target !== 'rpc:record_ops_event')).toEqual([]);
+        // Only the app was read (for its secret), never the number or the payload's tables.
+        expect(h.db.calls.filter((c) => c.target !== 'rpc:record_ops_event').map((c) => c.target)).toEqual(Array(3).fill('rpc:wa_webhook_app'));
         expect(h.orgReads).toBe(0);
         expect(h.logs.some((l) => String(l[0]).startsWith('Webhook received'))).toBe(false);
-        vi.stubEnv('WHATSAPP_APP_SECRET', SECRET);
+        h.db.webhookApps.get(KEY)!.app_secret = SECRET;
         const invalidUtf8 = Buffer.concat([
             Buffer.from('{"object":"whatsapp_business_account","entry":[],"catatan":"'),
             Buffer.from([0xff]),
@@ -245,11 +249,10 @@ describe('part-1 pin matrix (synthesis section 7, as amended by D23 and C2_SPEC 
         expect((await POST(signedPost(invalidUtf8))).status).toBe(200);
     });
 
-    it('P03 Kept: a signed body that is not JSON or not an object gets 200 without a client; a signed non-WABA event 200 without the database', async () => {
+    it('P03 Changed (2.2c: the secret is read from Vault first): a signed body that is not JSON or not an object, or a signed non-WABA event, gets 200 with only the app read', async () => {
         for (const raw of ['bukan json', 'null', '"teks"', '42']) expect((await POST(signedPost(raw))).status).toBe(200);
-        expect(createClient).not.toHaveBeenCalled();
         expect((await POST(signedPost({ object: 'page', entry: [] }))).status).toBe(200);
-        expect(h.db.calls).toEqual([]);
+        expect(h.db.calls.map((c) => c.target)).toEqual(Array(5).fill('rpc:wa_webhook_app'));
     });
 
     it('P04 Kept: without the service-role key the answer is 503 and createClient is never called (never the anon key)', async () => {
@@ -259,38 +262,36 @@ describe('part-1 pin matrix (synthesis section 7, as amended by D23 and C2_SPEC 
         expect(createClient).not.toHaveBeenCalled();
     });
 
-    it('P05 Kept: an unusable WHATSAPP_PHONE_NUMBER_ID answers 503 with one webhook_unconfigured, and nothing is routed; env values are trimmed', async () => {
+    it('P05 Changed (2.2d: the number comes from Vault): an app without a number row answers 503 with one webhook_unconfigured for its org, and nothing is routed', async () => {
         const body = one(text(A, 'wamid.p05'));
-        vi.stubEnv('WHATSAPP_PHONE_NUMBER_ID', '');
-        expect(await deliver(body)).toBe(503);
-        vi.stubEnv('WHATSAPP_PHONE_NUMBER_ID', 'nomor-utama');
+        const number = h.db.sendCreds.get(ORG)!;
+        h.db.sendCreds.delete(ORG);
         expect(await deliver(body)).toBe(503);
         expect(h.db.events()).toEqual([
-            { kind: 'webhook_unconfigured', org: null, detail: 'WHATSAPP_PHONE_NUMBER_ID tidak diset di server; webhook menjawab 503, Meta mengirim ulang', count: 1 },
-            { kind: 'webhook_unconfigured', org: null, detail: 'WHATSAPP_PHONE_NUMBER_ID bukan ID nomor (harus angka saja); webhook menjawab 503, Meta mengirim ulang', count: 1 },
+            { kind: 'webhook_unconfigured', org: ORG, detail: 'aplikasi tanpa nomor di Sarathi; webhook menjawab 503, Meta mengirim ulang', count: 1 },
         ]);
         expect(h.db.ingests()).toEqual([]);
         expect(h.orgReads).toBe(0);
         // The router refuses an empty number id itself: '' would make every event another number's (C1-EQ-2).
         await expect(routeChanges(h.db.client, { appSecret: SECRET, phoneNumberId: '' }, listChanges(body))).rejects.toThrow();
-        // A pasted CR LF or newline is trimmed: the app's own number is still routed, the signature still verifies.
-        vi.stubEnv('WHATSAPP_PHONE_NUMBER_ID', `${PNID}\r\n`);
-        vi.stubEnv('WHATSAPP_APP_SECRET', `${SECRET}\n`);
+        // With the number row back, Meta's resend is routed to the app's own number.
+        h.db.sendCreds.set(ORG, number);
         expect(await deliver(body)).toBe(200);
         expect(h.db.ingests()).toEqual([expect.objectContaining({ p_org: ORG, p_rate_scope: 'main', p_ai_eligible: true })]);
-        expect(kinds()).toHaveLength(2);
     });
 
-    it('P06 Changed (503 instead of 500, agreed 2.2a design): the default org is read strictly and once per delivery; unreadable, the answer is 503 with webhook_error without an org, and nothing is stored', async () => {
-        h.orgError = Object.assign(new Error('platform setting default_org_id could not be read (57014)'), { name: 'PlatformSettingReadError', code: '57014' });
+    it("P06 Changed (503 instead of 500, agreed 2.2a design; 2.2d: the org's number from Vault): the number is read once per delivery, before the walk; unreadable, the answer is 503 with webhook_error for the app's org, and nothing is stored", async () => {
+        h.db.fail({ target: 'rpc:wa_org_send_credentials', error: { code: '57014' }, status: 500 });
         const body = delivery([change({ contacts: [contactOf(A), contactOf(B)], messages: [text(A, 'wamid.p06-a'), text(B, 'wamid.p06-b')] })]);
         expect(await deliver(body)).toBe(503);
-        expect(h.orgReads).toBe(1);
-        expect(h.db.events()).toEqual([{ kind: 'webhook_error', org: null, detail: 'database 57014 — org default tidak terbaca, periksa Supabase (2 dari 2 item)', count: 1 }]);
+        expect(h.db.rpcCalls('wa_org_send_credentials')).toHaveLength(1);
+        expect(h.orgReads).toBe(0);
+        expect(h.db.events()).toEqual([
+            { kind: 'webhook_error', org: ORG, detail: expect.stringMatching(/^nomor WhatsApp tidak terbaca \(.*57014.*\); webhook menjawab 503, Meta mengirim ulang$/), count: 1 },
+        ]);
         expect(h.db.ingests()).toEqual([]);
         expect(h.db.chats).toEqual([]);
         // Readable again: the resend is stored under the org.
-        h.orgError = null;
         expect(await deliver(body)).toBe(200);
         expect(h.db.userRows().map((m) => m.org_id)).toEqual([ORG, ORG]);
     });
@@ -809,7 +810,7 @@ describe('part-1 pin matrix (synthesis section 7, as amended by D23 and C2_SPEC 
     it('P26 Kept (realtime contract v1, now 2 broadcasts per new message): a new text is written by the one database call, with no chat write or bump_unread from TypeScript; a duplicate writes nothing at all', async () => {
         expect(await deliver(one(text(A, 'wamid.p26')))).toBe(200);
         const targets = h.db.calls.map((c) => c.target);
-        expect(targets.filter((t) => !t.endsWith('.select') && t !== 'rpc:claim_queue_jobs')).toEqual(['rpc:wa_ingest_inbound']);
+        expect(targets.filter((t) => !t.endsWith('.select') && t !== 'rpc:claim_queue_jobs')).toEqual(['rpc:wa_webhook_app', 'rpc:wa_org_send_credentials', 'rpc:wa_ingest_inbound']);
         await settle();
         const commits = h.db.commits.length;
         const calls = h.db.calls.length;
@@ -817,22 +818,23 @@ describe('part-1 pin matrix (synthesis section 7, as amended by D23 and C2_SPEC 
         expect(await deliver(one(text(A, 'wamid.p26')))).toBe(200);
         await settle();
         expect(h.db.commits.length).toBe(commits);
-        expect(h.db.calls.slice(calls).map((c) => c.target)).toEqual(['whatsapp_messages.select', 'rpc:wa_ingest_inbound']);
+        expect(h.db.calls.slice(calls).map((c) => c.target)).toEqual(['rpc:wa_webhook_app', 'rpc:wa_org_send_credentials', 'whatsapp_messages.select', 'rpc:wa_ingest_inbound']);
         expect(pushes()).toHaveLength(1);
     });
 
-    it('P27 Kept: an event without metadata.phone_number_id is the main number (warned); the number id is compared as given, a numeric id matching; a field other than messages is acknowledged without reading the org', async () => {
+    it('P27 Changed (2.2c/2.2d: the per-app gate reads the app and its number from Vault before routing): an event without metadata.phone_number_id is the main number (warned); the number id is compared as given, a numeric id matching; a field other than messages is acknowledged with only the two Vault reads of the gate', async () => {
         expect(await deliver(delivery([change({ contacts: [contactOf(A)], messages: [text(A, 'wamid.p27-1')] }, null)]))).toBe(200);
         expect(h.db.ingests()[0]).toMatchObject({ p_rate_scope: 'main', p_ai_eligible: true });
         expect(h.logs.filter((l) => String(l[0]).includes('without metadata.phone_number_id'))).toHaveLength(1);
         const numeric = { field: 'messages', value: { metadata: { phone_number_id: Number(PNID) }, contacts: [contactOf(B)], messages: [text(B, 'wamid.p27-2')] } };
         expect(await deliver(delivery([numeric]))).toBe(200);
         expect(h.db.ingests()[1]).toMatchObject({ p_wamid: 'wamid.p27-2', p_rate_scope: 'main' });
+        await settle(); // the AI replies of the two messages above
         const reads = h.orgReads;
         const calls = h.db.calls.length;
         expect(await deliver(delivery([{ field: 'message_template_status_update', value: { event: 'APPROVED' } }]))).toBe(200);
         expect(h.orgReads).toBe(reads);
-        expect(h.db.calls.length).toBe(calls);
+        expect(h.db.calls.slice(calls).map((c) => c.target)).toEqual(['rpc:wa_webhook_app', 'rpc:wa_org_send_credentials']);
         expect(kinds()).toEqual([]);
     });
 });

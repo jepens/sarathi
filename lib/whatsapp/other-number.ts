@@ -1,17 +1,17 @@
 import { createHash } from 'crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-// Events of the WABA's other numbers (Fase 2 task 2.2a, phase 0). The app is
-// subscribed to the whole WABA, so the events of numbers other than
-// WHATSAPP_PHONE_NUMBER_ID reach the webhook too. They are not this org's
-// conversations: dropped by default, or with WHATSAPP_OTHER_NUMBER_EVENTS=
-// process kept in the default org's inbox without AI ("store-only") while the
-// team finds out what such a number is used for. A stored one shows in the
-// inbox like any customer message (unread, "Belum dibalas", notifications;
-// it stamps last_inbound_at, so the chat's 24-hour marker follows it although
-// Meta's window is per business number), is marked in metadata so the AI
-// history leaves it out (queue-db.ts), and the chat gets a note for the
-// operators once a day that says so.
+// Events of the WABA's other numbers (Fase 2 task 2.2a). The app is
+// subscribed to the whole WABA, so the events of numbers other than the
+// org's own number (whatsapp_integrations) reach the webhook too. They are
+// not this org's conversations: dropped by default, or with
+// WHATSAPP_OTHER_NUMBER_EVENTS=process kept in the app's org inbox without
+// AI ("store-only") while the team finds out what such a number is used
+// for. A stored one shows in the inbox like any customer message (unread,
+// "Belum dibalas", notifications; it stamps last_inbound_at, so the chat's
+// 24-hour marker follows it although Meta's window is per business number),
+// is marked in metadata so the AI history leaves it out (queue-db.ts), and
+// the chat gets a note for the operators once a day that says so.
 
 export interface OtherNumber {
     /** 'h' + 10 hex of the sha256 of its phone_number_id; never the id itself. */
@@ -74,7 +74,7 @@ async function lookUpNew(client: SupabaseClient, other: OtherNumber, now: number
 /**
  * Whether a webhook_unrouted event named this number in the last 7 days.
  * 'new' (none did: a number new to the WABA, or the app's own number when
- * WHATSAPP_PHONE_NUMBER_ID is wrong) and 'unchecked' (the lookup failed) are
+ * its phone_number_id in Vault is wrong) and 'unchecked' (the lookup failed) are
  * alerted within the hour (webhook_unrouted_new); a 'known' number only
  * daily. A failed lookup is alerted rather than taken for known: this event's
  * own webhook_unrouted row would make every later lookup find the number.
